@@ -7,7 +7,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   role: { 
     type: String, 
-    enum: ['SuperAdmin', 'Admin', 'Manager', 'Staff'], 
+    enum: ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'], 
     default: 'Staff' 
   },
   status: { 
@@ -16,7 +16,25 @@ const userSchema = new mongoose.Schema({
     default: 'Active' 
   },
   phone: String,
-  institution: { type: String, required: true },
+  institution: { 
+    type: String, 
+    required: function() { 
+      return this.role === 'Admin' || this.role === 'Manager' || this.role === 'Staff'; 
+    } 
+  },
+  region: {
+    type: String,
+    required: function() { return this.role === 'RegionalAdmin'; }
+  },
+  partnerId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'IndustryPartner',
+    required: function() { return this.role === 'IndustryPartner'; }
+  },
+  profilePicture: { type: String, default: '' },
+  passwordChangeRequired: { type: Boolean, default: true },
+  resetPasswordToken: { type: String },
+  resetPasswordExpires: { type: Date }
 }, { timestamps: true });
 
 // Hash password before saving

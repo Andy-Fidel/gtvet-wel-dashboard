@@ -22,7 +22,7 @@ export function ActionRequiredWidget() {
   useEffect(() => {
     const fetchAlerts = async () => {
       try {
-        const res = await authFetch('http://localhost:5001/api/dashboard/action-alerts')
+        const res = await authFetch('/api/dashboard/action-alerts')
         if (res.ok) {
           const data = await res.json()
           setAlerts(data)
@@ -48,12 +48,12 @@ export function ActionRequiredWidget() {
 
   if (alerts.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center p-8 text-center bg-gray-50/50 rounded-[1.5rem] border border-dashed border-gray-200">
-        <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-4 shadow-sm">
-          <Activity className="w-6 h-6" />
+      <div className="flex flex-col items-center justify-center p-8 text-center bg-gray-50/50 rounded-[1.5rem] border border-dashed border-gray-200 h-full min-h-[250px]">
+        <div className="w-16 h-16 bg-gradient-to-br from-emerald-100 to-teal-100 text-emerald-600 rounded-2xl flex items-center justify-center mb-4 shadow-sm transform -rotate-3">
+          <Activity className="w-8 h-8 transform rotate-3" />
         </div>
-        <h4 className="font-black text-gray-900">All Caught Up!</h4>
-        <p className="text-sm font-bold text-gray-400 mt-1">No pending actions required.</p>
+        <h4 className="text-lg font-black text-gray-900">All Caught Up!</h4>
+        <p className="text-sm font-medium text-gray-500 mt-1 max-w-[200px]">No pending actions required at the moment.</p>
       </div>
     )
   }
@@ -78,28 +78,40 @@ export function ActionRequiredWidget() {
 
   return (
     <div className="space-y-4">
-      {alerts.map((alert, index) => (
-        <div 
-          key={`${alert.learnerId}-${index}`}
-          onClick={() => navigate(alert.actionUrl)}
-          className={`group flex items-start gap-4 p-4 rounded-[1.5rem] border cursor-pointer hover:shadow-lg transition-all duration-300 ${getBgForType(alert.type)}`}
-        >
-          <div className="p-3 bg-white/60 backdrop-blur-sm rounded-xl shrink-0 shadow-sm group-hover:bg-white transition-colors">
-            {getIconForType(alert.type)}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-black uppercase tracking-wider opacity-80">{alert.type}</span>
-              <span className="text-[10px] font-bold px-2 py-0.5 bg-white/50 rounded-full">{alert.trackingId}</span>
+      {alerts.map((alert, index) => {
+        // More urgent actions get a pulsing dot
+        const isUrgent = alert.type === 'Needs Assessment' || alert.type === 'Needs Visit';
+
+        return (
+          <div 
+            key={`${alert.learnerId}-${index}`}
+            onClick={() => navigate(`/learners/${alert.learnerId}`)}
+            className={`group flex items-start gap-4 p-4 rounded-[1.5rem] border cursor-pointer hover:shadow-lg transition-all duration-300 relative overflow-hidden ${getBgForType(alert.type)}`}
+          >
+            {isUrgent && (
+               <div className="absolute top-4 right-4 flex h-3 w-3">
+                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                 <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+               </div>
+            )}
+            
+            <div className="p-3 bg-white/60 backdrop-blur-sm rounded-xl shrink-0 shadow-sm group-hover:bg-white transition-colors">
+              {getIconForType(alert.type)}
             </div>
-            <h4 className="font-black text-base truncate">{alert.learnerName}</h4>
-            <p className="text-xs font-bold opacity-75 mt-0.5 line-clamp-1">{alert.message}</p>
+            <div className="flex-1 min-w-0 pr-6">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-black uppercase tracking-widest opacity-80">{alert.type}</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 bg-white/60 rounded-full">{alert.trackingId}</span>
+              </div>
+              <h4 className="font-black text-base truncate text-gray-900">{alert.learnerName}</h4>
+              <p className="text-xs font-bold opacity-75 mt-0.5 line-clamp-1">{alert.message}</p>
+            </div>
+            <div className="shrink-0 flex items-center justify-center auto rounded-full bg-white/0 group-hover:bg-white/50 transition-colors opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0 self-center">
+              <ChevronRight className="w-5 h-5 opacity-70" />
+            </div>
           </div>
-          <div className="shrink-0 flex items-center justify-center p-2 rounded-full bg-white/0 group-hover:bg-white/50 transition-colors opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0">
-            <ChevronRight className="w-5 h-5 opacity-70" />
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

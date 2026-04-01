@@ -85,34 +85,34 @@ function Calendar({
         table: "w-full border-collapse",
         weekdays: cn("flex", defaultClassNames.weekdays),
         weekday: cn(
-          "text-white/40 flex-1 select-none rounded-md text-[0.8rem] font-medium",
+          "text-gray-400 flex-1 select-none rounded-md text-[0.8rem] font-medium",
           defaultClassNames.weekday
         ),
         week: cn("mt-2 flex w-full", defaultClassNames.week),
         week_number_header: cn(
-          "w-[--cell-size] select-none text-white/20",
+          "w-[--cell-size] select-none text-gray-300",
           defaultClassNames.week_number_header
         ),
         week_number: cn(
-          "text-white/40 select-none text-[0.8rem]",
+          "text-gray-400 select-none text-[0.8rem]",
           defaultClassNames.week_number
         ),
         day: cn(
-          "group/day relative aspect-square h-full w-full select-none p-0 text-center text-white [&:first-child[data-selected=true]_button]:rounded-l-md [&:last-child[data-selected=true]_button]:rounded-r-md",
+          "group/day relative aspect-square h-full w-full select-none p-0 text-center text-gray-900 [&:first-child[data-selected=true]_button]:rounded-l-md [&:last-child[data-selected=true]_button]:rounded-r-md",
           defaultClassNames.day
         ),
         range_start: cn(
-          "bg-white/20 rounded-l-md",
+          "bg-indigo-50 rounded-l-md",
           defaultClassNames.range_start
         ),
         range_middle: cn("rounded-none", defaultClassNames.range_middle),
-        range_end: cn("bg-white/20 rounded-r-md", defaultClassNames.range_end),
+        range_end: cn("bg-indigo-50 rounded-r-md", defaultClassNames.range_end),
         today: cn(
-          "bg-white/10 text-white rounded-md data-[selected=true]:rounded-none",
+          "bg-indigo-50 text-indigo-700 rounded-md data-[selected=true]:rounded-none",
           defaultClassNames.today
         ),
         outside: cn(
-          "text-white/20 aria-selected:text-white/40",
+          "text-gray-300 aria-selected:text-gray-400",
           defaultClassNames.outside
         ),
         disabled: cn(

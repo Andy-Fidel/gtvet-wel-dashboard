@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod"
+import type { Learner } from '@/types/models'
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { Button } from "@/components/ui/button"
@@ -10,7 +11,6 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form"
-
 import {
   Select,
   SelectContent,
@@ -18,8 +18,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useState, useEffect } from "react"
-import { Loader2, CalendarDays, ArrowUpRight, CheckCircle2, AlertCircle, Hash } from "lucide-react"
+import { Textarea } from "@/components/ui/textarea"
+import { useState, useEffect, useCallback } from "react"
+import { Loader2, CalendarDays, MapPin, MapPinOff } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
@@ -42,61 +43,80 @@ type MonitoringVisitFormValues = z.infer<typeof formSchema>
 
 interface MonitoringVisitFormProps {
     onSuccess: (data: unknown) => void;
-    initialData?: any;
+    initialData?: Partial<MonitoringVisitFormValues> & { 
+        _id?: string;
+        learner?: string | { _id: string; name: string; trackingId: string };
+    };
 }
 
 export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitFormProps) {
   const [loading, setLoading] = useState(false)
-  const [learners, setLearners] = useState<any[]>([])
+  const [learners, setLearners] = useState<Learner[]>([])
   const { authFetch } = useAuth()
 
+  // GPS capture state
+  const [gpsStatus, setGpsStatus] = useState<'acquiring' | 'captured' | 'denied' | 'unavailable'>('acquiring')
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
+
+  const captureLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGpsStatus('unavailable');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+        setGpsStatus('captured');
+      },
+      () => setGpsStatus('denied'),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  }, []);
+
+  useEffect(() => { captureLocation(); }, [captureLocation]);
+
   useEffect(() => {
-    authFetch('http://localhost:5001/api/learners')
+    authFetch('/api/learners')
         .then(res => res.json())
         .then(data => setLearners(data))
         .catch(err => console.error("Error fetching learners:", err))
   }, [authFetch])
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const form = useForm<MonitoringVisitFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: (initialData ? {
+    defaultValues: initialData ? {
         ...initialData,
         visitDate: safeDateString(initialData.visitDate),
-        learner: initialData.learner?._id || initialData.learner,
+        learner: (typeof initialData.learner === 'object' && initialData.learner)
+            ? (initialData.learner as { _id: string })._id
+            : (initialData.learner as string) || "",
     } : {
       learner: "",
       visitType: 'Routine',
       visitDate: new Date(),
       attendanceStatus: 'Present',
       performanceRating: 3,
-    }) as MonitoringVisitFormValues,
+    },
   })
 
-  // Watch the selected learner ID to find the full learner object
   const selectedLearnerId = form.watch("learner")
   const selectedLearner = learners.find(l => l._id === selectedLearnerId)
+  const normalizeSliderValue = (value: number) => (Number.isFinite(value) ? value : 1)
 
   async function onSubmit(values: MonitoringVisitFormValues) {
     setLoading(true)
     try {
-        const url = initialData?._id 
-            ? `http://localhost:5001/api/monitoring-visits/${initialData._id}`
-            : 'http://localhost:5001/api/monitoring-visits';
-        
-        const method = initialData?._id ? 'PUT' : 'POST';
-
+        const url = initialData?._id ? `/api/monitoring-visits/${initialData._id}` : '/api/monitoring-visits';
+        const payload = {
+            ...values,
+            ...(gpsCoords && !initialData?._id ? { submittedLocation: gpsCoords } : {}),
+        };
         const response = await authFetch(url, {
-            method,
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(values),
+            method: initialData?._id ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
         })
-
-        if (!response.ok) {
-            throw new Error('Failed to save visit')
-        }
-
+        if (!response.ok) throw new Error('Failed to save visit')
         const data = await response.json()
         onSuccess(data)
     } catch (error) {
@@ -107,245 +127,149 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
   }
 
   return (
-    <div className="bg-[#121212]/30 backdrop-blur-2xl p-6 rounded-[2.5rem] border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.3)]">
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
         
-        {/* Learner Selection */}
-        <FormField
-          control={form.control}
-          name="learner"
-          render={({ field }) => (
+        {/* Learner */}
+        <FormField control={form.control} name="learner" render={({ field }) => (
             <FormItem>
-              <FormLabel className="text-white ml-2">Learner / Trainee</FormLabel>
+              <FormLabel className="text-sm font-semibold text-white">Learner / Trainee</FormLabel>
               <Select onValueChange={field.onChange} defaultValue={field.value} disabled={!!initialData?.learner}>
-                <FormControl>
-                  <SelectTrigger className="h-12 rounded-full border-white/20 bg-white/5 text-white placeholder:text-white/40 focus:ring-blue-500/50 hover:bg-white/10 transition-colors pl-6">
-                    <SelectValue placeholder="Select a learner" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent className="bg-[#1E1E1E]/95 backdrop-blur-xl border-white/10 text-white rounded-2xl">
+                <FormControl><SelectTrigger><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
+                <SelectContent>
                     {learners.map((learner) => (
-                        <SelectItem key={learner._id} value={learner._id} className="hover:bg-white/10 focus:bg-white/10 cursor-pointer rounded-xl my-1 transition-colors">
-                            {learner.name}
-                        </SelectItem>
+                        <SelectItem key={learner._id} value={learner._id}>{learner.name}</SelectItem>
                     ))}
                 </SelectContent>
               </Select>
               <FormMessage />
             </FormItem>
-          )}
-        />
+        )} />
         
-        {/* Tracking ID Display (Read-only) */}
         {selectedLearner && (
-            <div className="flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/10 rounded-2xl">
-                <Hash className="w-5 h-5 text-blue-400" />
-                <div>
-                    <p className="text-xs font-bold text-white/50 uppercase tracking-wider">Tracking ID</p>
-                    <p className="text-sm font-black text-white">{selectedLearner.trackingId || 'N/A'}</p>
-                </div>
+            <div className="px-4 py-3 bg-[#F5F5FA] rounded-xl">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tracking ID</p>
+                <p className="text-sm font-bold text-gray-900">{selectedLearner.trackingId || 'N/A'}</p>
             </div>
         )}
 
-        {/* Date and Type Row */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-             <FormField
-                control={form.control}
-                name="visitDate"
-                render={({ field }) => (
-                    <FormItem className="flex flex-col">
-                    <FormLabel className="text-white ml-2">Visit Date</FormLabel>
-                    <Popover>
-                        <PopoverTrigger asChild>
-                        <FormControl>
-                            <Button
-                            variant={"outline"}
-                            className={cn(
-                                "pl-6 h-12 rounded-full border-white/30 bg-white/10 text-white hover:bg-white/20 text-left font-normal",
-                                !field.value && "text-white/40"
-                            )}
-                            >
-                            <div className="flex items-center">
-                              <CalendarDays className="mr-3 h-5 w-5 text-white/40" />
-                              {field.value ? (
-                                  format(field.value, "PPP")
-                              ) : (
-                                  <span>Pick a date</span>
-                              )}
-                            </div>
-                            </Button>
-                        </FormControl>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0 bg-black/80 backdrop-blur-xl border-white/20 rounded-[2rem] shadow-2xl overflow-hidden" align="start">
-                        <Calendar
-                            mode="single"
-                            selected={field.value}
-                            onSelect={field.onChange}
-                            disabled={(date: Date) =>
-                            date > new Date() || date < new Date("1900-01-01")
-                            }
-                            initialFocus
-                            className="text-white"
-                        />
-                        </PopoverContent>
-                    </Popover>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
-            <FormField
-                control={form.control}
-                name="visitType"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-white ml-2">Visit Type</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                        <FormControl>
-                        <SelectTrigger className="h-12 rounded-full border-white/20 bg-white/5 text-white placeholder:text-white/40 focus:ring-blue-500/50 hover:bg-white/10 transition-colors pl-6">
-                            <SelectValue placeholder="Select type" />
-                        </SelectTrigger>
-                        </FormControl>
-                        <SelectContent className="bg-[#1E1E1E]/95 backdrop-blur-xl border-white/10 text-white rounded-2xl">
-                            <SelectItem value="Routine" className="rounded-xl">Routine</SelectItem>
-                            <SelectItem value="Emergency" className="rounded-xl">Emergency</SelectItem>
-                            <SelectItem value="Follow-up" className="rounded-xl">Follow-up</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
-        </div>
-
-        {/* Status and Rating Row */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-             <FormField
-                control={form.control}
-                name="attendanceStatus"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-white ml-2">Attendance Status</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                        <FormControl>
-                        <SelectTrigger className="h-12 rounded-full border-white/20 bg-white/5 text-white placeholder:text-white/40 focus:ring-blue-500/50 hover:bg-white/10 transition-colors pl-6">
-                            <SelectValue placeholder="Select status" />
-                        </SelectTrigger>
-                        </FormControl>
-                        <SelectContent className="bg-[#1E1E1E]/95 backdrop-blur-xl border-white/10 text-white rounded-2xl">
-                            <SelectItem value="Present" className="rounded-xl text-emerald-400">Present</SelectItem>
-                            <SelectItem value="Absent" className="rounded-xl text-red-400">Absent</SelectItem>
-                            <SelectItem value="Excused" className="rounded-xl text-amber-400">Excused</SelectItem>
-                            <SelectItem value="Late" className="rounded-xl text-blue-400">Late</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
-
-            <FormField
-                control={form.control}
-                name="performanceRating"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-white ml-2">Performance Rating (1-5)</FormLabel>
-                    <FormControl>
-                        <div className="relative flex items-center bg-white/5 border border-white/20 rounded-full h-12 px-2 focus-within:ring-2 focus-within:ring-blue-500/50 transition-all">
-                           <input 
-                              type="range" 
-                              min="1" 
-                              max="5" 
-                              step="1"
-                              value={field.value}
-                              onChange={e => field.onChange(Number(e.target.value))}
-                              className="w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-blue-500 mx-4"
-                           />
-                           <span className="w-8 h-8 rounded-full bg-blue-500/20 text-blue-300 flex items-center justify-center font-black text-sm shrink-0">
-                               {field.value}
-                           </span>
-                        </div>
-                    </FormControl>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
-        </div>
-
-        <FormField
-            control={form.control}
-            name="issuesIdentified"
-            render={({ field }) => (
-                <FormItem>
-                <FormLabel className="text-white ml-2">Issues / Challenges Identified</FormLabel>
-                <FormControl>
-                    <div className="relative">
-                      <AlertCircle className="absolute left-6 top-4 h-5 w-5 text-white/40" />
-                      <textarea 
-                        className="w-full min-h-[100px] bg-white/5 border border-white/20 rounded-2xl p-4 pl-14 text-white placeholder:text-white/40 focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all outline-none resize-y" 
-                        placeholder="Describe any issues observed during the visit..." 
-                        {...field} 
-                      />
-                    </div>
-                </FormControl>
-                <FormMessage />
-                </FormItem>
+        {/* GPS Status Indicator */}
+        {!initialData?._id && (
+          <div className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold ${
+            gpsStatus === 'captured' ? 'bg-emerald-50 text-emerald-700' :
+            gpsStatus === 'acquiring' ? 'bg-blue-50 text-blue-700' :
+            'bg-amber-50 text-amber-700'
+          }`}>
+            {gpsStatus === 'captured' && <><MapPin className="h-3.5 w-3.5" /> Location captured ({gpsCoords?.accuracy?.toFixed(0)}m accuracy)</>}
+            {gpsStatus === 'acquiring' && <><MapPin className="h-3.5 w-3.5 animate-pulse" /> Acquiring location...</>}
+            {gpsStatus === 'denied' && <><MapPinOff className="h-3.5 w-3.5" /> Location denied — visit will be flagged</>}
+            {gpsStatus === 'unavailable' && <><MapPinOff className="h-3.5 w-3.5" /> GPS unavailable</>}
+            {(gpsStatus === 'denied' || gpsStatus === 'unavailable') && (
+              <button type="button" onClick={captureLocation} className="ml-auto underline text-xs">Retry</button>
             )}
-        />
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <FormField
-                control={form.control}
-                name="actionTaken"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-white ml-2">Immediate Action Taken</FormLabel>
-                    <FormControl>
-                        <div className="relative">
-                        <CheckCircle2 className="absolute left-6 top-4 h-5 w-5 text-white/40" />
-                        <textarea 
-                            className="w-full min-h-[100px] bg-white/5 border border-white/20 rounded-2xl p-4 pl-14 text-white placeholder:text-white/40 focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all outline-none resize-y" 
-                            placeholder="Actions immediately taken..." 
-                            {...field} 
-                        />
-                        </div>
-                    </FormControl>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
-            <FormField
-                control={form.control}
-                name="nextSteps"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-white ml-2">Agreed Next Steps</FormLabel>
-                    <FormControl>
-                        <div className="relative">
-                        <ArrowUpRight className="absolute left-6 top-4 h-5 w-5 text-white/40" />
-                        <textarea 
-                            className="w-full min-h-[100px] bg-white/5 border border-white/20 rounded-2xl p-4 pl-14 text-white placeholder:text-white/40 focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all outline-none resize-y" 
-                            placeholder="Steps for continuous improvement..." 
-                            {...field} 
-                        />
-                        </div>
-                    </FormControl>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
+          </div>
+        )}
+
+        {/* Date and Type */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+             <FormField control={form.control} name="visitDate" render={({ field }) => (
+                <FormItem className="flex flex-col">
+                  <FormLabel className="text-sm font-semibold text-white">Visit Date</FormLabel>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <FormControl>
+                        <Button variant="outline" className={cn("h-12 rounded-xl border-transparent bg-[#F5F5FA] text-gray-900 hover:bg-gray-100 text-left font-normal justify-start px-4", !field.value && "text-gray-400")}>
+                          <CalendarDays className="mr-2 h-4 w-4 text-gray-400" />
+                          {field.value ? format(field.value, "PPP") : <span>Pick a date</span>}
+                        </Button>
+                      </FormControl>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0 bg-white rounded-xl shadow-lg border-gray-100" align="start">
+                      <Calendar mode="single" selected={field.value} onSelect={field.onChange} disabled={(date: Date) => date > new Date() || date < new Date("1900-01-01")} initialFocus />
+                    </PopoverContent>
+                  </Popover>
+                  <FormMessage />
+                </FormItem>
+             )} />
+            <FormField control={form.control} name="visitType" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Visit Type</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                        <SelectItem value="Routine">Routine</SelectItem>
+                        <SelectItem value="Emergency">Emergency</SelectItem>
+                        <SelectItem value="Follow-up">Follow-up</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+            )} />
         </div>
 
-        <Button 
-            type="submit" 
-            className="w-full h-14 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-lg transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)] border border-blue-500/50" 
-            disabled={loading}
-        >
-          {loading && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
+        {/* Status and Rating */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+             <FormField control={form.control} name="attendanceStatus" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Attendance Status</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                        <SelectItem value="Present">Present</SelectItem>
+                        <SelectItem value="Absent">Absent</SelectItem>
+                        <SelectItem value="Excused">Excused</SelectItem>
+                        <SelectItem value="Late">Late</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+             )} />
+
+            <FormField control={form.control} name="performanceRating" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Performance Rating (1-5)</FormLabel>
+                  <FormControl>
+                    <div className="flex items-center bg-[#F5F5FA] rounded-xl h-12 px-3">
+                       <input type="range" min="1" max="5" step="1" value={normalizeSliderValue(field.value)} onChange={e => field.onChange(Number(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-indigo-500 mx-2" />
+                       <span className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm shrink-0">{field.value}</span>
+                    </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+            )} />
+        </div>
+
+        {/* Textareas */}
+        <FormField control={form.control} name="issuesIdentified" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-sm font-semibold text-white">Issues / Challenges Identified</FormLabel>
+              <FormControl><Textarea placeholder="Describe any issues observed during the visit..." {...field} /></FormControl>
+              <FormMessage />
+            </FormItem>
+        )} />
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <FormField control={form.control} name="actionTaken" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Immediate Action Taken</FormLabel>
+                  <FormControl><Textarea placeholder="Actions immediately taken..." {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+            )} />
+            <FormField control={form.control} name="nextSteps" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Agreed Next Steps</FormLabel>
+                  <FormControl><Textarea placeholder="Steps for continuous improvement..." {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+            )} />
+        </div>
+
+        <Button type="submit" className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm" disabled={loading}>
+          {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {initialData?._id ? "Update Visit Record" : "Save Visit Record"}
         </Button>
       </form>
     </Form>
-    </div>
   )
 }

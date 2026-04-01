@@ -17,9 +17,9 @@ export function PlacementProgressWidget() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (user?.role === 'SuperAdmin') return;
+    if (user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') return;
 
-    authFetch('http://localhost:5001/api/dashboard/stats')
+    authFetch('/api/dashboard/stats')
       .then(res => res.json())
       .then(data => {
         setStats(data);
@@ -31,7 +31,7 @@ export function PlacementProgressWidget() {
       });
   }, [authFetch, user?.role]);
 
-  if (user?.role === 'SuperAdmin' || loading || !stats) return null;
+  if (user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin' || user?.role === 'IndustryPartner' || loading || !stats) return null;
 
   const percentage = stats.totalLearners > 0 
     ? Math.round((stats.placed / stats.totalLearners) * 100) 

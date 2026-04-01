@@ -9,18 +9,19 @@ const institutionSchema = new mongoose.Schema({
   category: { 
     type: String, 
     enum: ['A', 'B', 'C'], 
-    required: true 
+    default: 'B'
   },
   status: { 
     type: String, 
-    enum: ['Day', 'Boarding'], 
     required: true 
   },
   gender: { 
     type: String, 
     enum: ['Boys', 'Girls', 'Mixed'], 
     required: true 
-  }
+  },
+  programs: [{ type: String }],
 }, { timestamps: true });
 
 export const Institution = mongoose.model('Institution', institutionSchema);
+

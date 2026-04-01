@@ -53,7 +53,7 @@ export function Search() {
       if (query.length >= 2) {
         setLoading(true)
         try {
-          const response = await authFetch(`http://localhost:5001/api/search?q=${encodeURIComponent(query)}`)
+          const response = await authFetch(`/api/search?q=${encodeURIComponent(query)}`)
           if (response.ok) {
             const data = await response.json()
             setResults(data)
@@ -92,7 +92,7 @@ export function Search() {
   }
 
   return (
-    <div className="relative w-96" ref={searchRef}>
+    <div className="relative w-full max-w-[200px] sm:max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg" ref={searchRef}>
       <div className="relative">
         <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
         <Input

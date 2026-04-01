@@ -29,7 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { MonthlyReportForm } from "./MonthlyReportForm"
+import { MonthlyReportForm, type MonthlyReportInitialData } from "./MonthlyReportForm"
 import { DataTable } from "@/components/ui/data-table"
 import { useAuth } from "@/context/AuthContext"
 import { toast } from "sonner"
@@ -136,7 +136,7 @@ export default function MonthlyReports() {
     const [data, setData] = useState<MonthlyReport[]>([])
     const [loading, setLoading] = useState(true)
     const [open, setOpen] = useState(false)
-    const [editingReport, setEditingReport] = useState<MonthlyReport | null>(null)
+    const [editingReport, setEditingReport] = useState<MonthlyReportInitialData | null>(null)
     const [refreshKey, setRefreshKey] = useState(0)
     const { authFetch, user } = useAuth()
 
@@ -144,7 +144,7 @@ export default function MonthlyReports() {
         const queryParams = new URLSearchParams(window.location.search);
         const learnerId = queryParams.get("learnerId");
         if (learnerId) {
-            setEditingReport({ learner: learnerId } as any);
+            setEditingReport({ learner: learnerId });
             setOpen(true);
         }
     }, [])
@@ -152,7 +152,7 @@ export default function MonthlyReports() {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const res = await authFetch('http://localhost:5001/api/monthly-reports')
+                const res = await authFetch('/api/monthly-reports')
                 if (!res.ok) throw new Error("Failed to fetch")
                 const data = await res.json()
                 setData(data)
@@ -181,7 +181,7 @@ export default function MonthlyReports() {
     const handleDelete = async (id: string) => {
         if (confirm("Are you sure you want to delete this report?")) {
             try {
-                const res = await authFetch(`http://localhost:5001/api/monthly-reports/${id}`, { method: 'DELETE' })
+                const res = await authFetch(`/api/monthly-reports/${id}`, { method: 'DELETE' })
                 if (!res.ok) throw new Error("Failed to delete")
                 setRefreshKey(prev => prev + 1)
                 toast.success("Report deleted successfully")
@@ -193,11 +193,11 @@ export default function MonthlyReports() {
     }
 
     return (
-        <div className="h-full flex-1 flex-col space-y-8 p-8 flex">
-             <div className="flex items-center justify-between space-y-2">
+        <div className="h-full flex-1 flex-col space-y-4 md:space-y-8 pt-16 px-0 pb-4 sm:p-4 md:p-8 flex">
+             <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-2 px-4 sm:px-0">
                 <div>
-                <h2 className="text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
-                   <FileText className="h-8 w-8 text-[#FFB800]" />
+                <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+                   <FileText className="h-6 w-6 md:h-8 md:w-8 text-[#FFB800]" />
                    Monthly Reports
                 </h2>
                 <p className="text-muted-foreground">
@@ -206,7 +206,7 @@ export default function MonthlyReports() {
                 </div>
                 <div className="flex items-center space-x-2">
                     {user?.role !== 'SuperAdmin' && (
-                        <Button onClick={() => { setEditingReport(null); setOpen(true); }} className="bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-8 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
+                        <Button onClick={() => { setEditingReport(null); setOpen(true); }} className="w-full sm:w-auto bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-8 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
                             <Plus className="mr-3 h-5 w-5" /> Add Report
                         </Button>
                     )}
@@ -226,14 +226,14 @@ export default function MonthlyReports() {
                                         </div>
                                     </div>
                                 </DialogHeader>
-                                <MonthlyReportForm onSuccess={handleSuccess} initialData={editingReport} />
+                                <MonthlyReportForm onSuccess={handleSuccess} initialData={editingReport || undefined} />
                             </div>
                         </DialogContent>
                     </Dialog>
                 </div>
             </div>
 
-            <div className="rounded-[2.5rem] border border-gray-100 bg-white shadow-xl overflow-hidden p-2">
+            <div className="rounded-none sm:rounded-2xl md:rounded-[2.5rem] border-y sm:border border-gray-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-0 sm:p-2">
                 {loading ? (
                     <div className="p-8 space-y-4">
                         <Skeleton className="h-12 w-full rounded-2xl" />
@@ -242,6 +242,7 @@ export default function MonthlyReports() {
                     </div>
                 ) : (
                     <DataTable 
+                        exportTitle="Monthly Progress Reports"
                         data={data} 
                         columns={columns} 
                         meta={{ 

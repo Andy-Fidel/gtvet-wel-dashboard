@@ -1,4 +1,6 @@
+/* eslint-disable react-refresh/only-export-components */
 "use client"
+
 
 import * as React from "react"
 import * as LabelPrimitive from "@radix-ui/react-label"
@@ -80,7 +82,7 @@ const FormItem = React.forwardRef<
 
   return (
     <FormItemContext.Provider value={{ id }}>
-      <div ref={ref} className={cn("space-y-2", className)} {...props} />
+      <div ref={ref} className={cn("space-y-1.5", className)} {...props} />
     </FormItemContext.Provider>
   )
 })
@@ -135,7 +137,7 @@ const FormDescription = React.forwardRef<
     <p
       ref={ref}
       id={formDescriptionId}
-      className={cn("text-[0.8rem] text-white/70", className)}
+      className={cn("text-[0.8rem] text-gray-500", className)}
       {...props}
     />
   )

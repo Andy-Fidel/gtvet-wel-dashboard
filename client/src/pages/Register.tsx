@@ -3,7 +3,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { Loader2, Mail, Lock, Building2, User, Phone } from 'lucide-react';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
-import workplaceBg from '@/assets/Workplace.png';
+import workplaceBg from '@/assets/Workplace.webp';
 
 export default function Register() {
   const { register } = useAuth();
@@ -54,7 +54,7 @@ export default function Register() {
           <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-lg mb-4">
             <img src={gtvetsLogo} alt="GTVETS Logo" className="w-16 h-16 object-contain" />
           </div>
-          <h1 className="text-3xl font-black text-white tracking-tighter uppercase">GTVETS</h1>
+          <h1 className="text-2xl md:text-3xl font-black text-white tracking-tighter uppercase">GTVETS</h1>
           <span className="text-xs font-bold text-[#FFB800] tracking-[0.3em] uppercase mt-1">WEL Tracker</span>
         </div>
 

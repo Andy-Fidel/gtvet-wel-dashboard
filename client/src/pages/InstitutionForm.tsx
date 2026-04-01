@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useState } from "react"
-import { Loader2, Building2, Hash, MapPin, Map, Layers, School, Users } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { toast } from "sonner"
 
@@ -39,7 +39,7 @@ type InstitutionFormValues = z.infer<typeof formSchema>
 
 interface InstitutionFormProps {
     onSuccess: (data: unknown) => void;
-    initialData?: any;
+    initialData?: Partial<InstitutionFormValues> & { _id?: string };
 }
 
 export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps) {
@@ -63,23 +63,16 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
   async function onSubmit(values: InstitutionFormValues) {
     setLoading(true)
     try {
-        const url = initialData?._id 
-            ? `http://localhost:5001/api/institutions/${initialData._id}`
-            : 'http://localhost:5001/api/institutions';
-        
+        const url = initialData?._id ? `/api/institutions/${initialData._id}` : '/api/institutions';
         const response = await authFetch(url, {
             method: initialData?._id ? 'PUT' : 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(values),
         })
-
         if (!response.ok) {
             const errorData = await response.json();
             throw new Error(errorData.message || 'Failed to save institution')
         }
-
         const data = await response.json()
         onSuccess(data)
     } catch (error) {
@@ -92,194 +85,114 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-            <FormField
-            control={form.control}
-            name="name"
-            render={({ field }) => (
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+        <div className="grid grid-cols-2 gap-5">
+            <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Institution Name</FormLabel>
-                <FormControl>
-                    <div className="relative">
-                    <Building2 className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                    <Input placeholder="Ghana Tech Institute" className="pl-14" {...field} />
-                    </div>
-                </FormControl>
-                <FormMessage />
+                  <FormLabel className="text-sm font-semibold text-white">Institution Name</FormLabel>
+                  <FormControl><Input placeholder="Ghana Tech Institute" {...field} /></FormControl>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
-            <FormField
-            control={form.control}
-            name="code"
-            render={({ field }) => (
+            )} />
+            <FormField control={form.control} name="code" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Institution Code</FormLabel>
-                <FormControl>
-                    <div className="relative">
-                    <Hash className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                    <Input placeholder="GTI-001" className="pl-14 uppercase" {...field} />
-                    </div>
-                </FormControl>
-                <FormMessage />
+                  <FormLabel className="text-sm font-semibold text-white">Institution Code</FormLabel>
+                  <FormControl><Input placeholder="GTI-001" className="uppercase" {...field} /></FormControl>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
+            )} />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-            <FormField
-            control={form.control}
-            name="district"
-            render={({ field }) => (
+        <div className="grid grid-cols-2 gap-5">
+            <FormField control={form.control} name="district" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">District</FormLabel>
-                <FormControl>
-                    <div className="relative">
-                    <MapPin className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                    <Input placeholder="Accra Metro" className="pl-14" {...field} />
-                    </div>
-                </FormControl>
-                <FormMessage />
+                  <FormLabel className="text-sm font-semibold text-white">District</FormLabel>
+                  <FormControl><Input placeholder="Accra Metro" {...field} /></FormControl>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
-            <FormField
-            control={form.control}
-            name="region"
-            render={({ field }) => (
+            )} />
+            <FormField control={form.control} name="region" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Region</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                        <div className="relative">
-                            <MapPin className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40 z-10" />
-                            <SelectTrigger className="pl-14">
-                                <SelectValue placeholder="Select region" />
-                            </SelectTrigger>
-                        </div>
-                    </FormControl>
-                    <SelectContent className="bg-black/80 backdrop-blur-xl border-white/20 rounded-[1.5rem] shadow-2xl overflow-hidden max-h-[300px]">
-                        <SelectItem value="Ahafo" className="text-white focus:bg-white/10 focus:text-white">Ahafo</SelectItem>
-                        <SelectItem value="Ashanti" className="text-white focus:bg-white/10 focus:text-white">Ashanti</SelectItem>
-                        <SelectItem value="Bono" className="text-white focus:bg-white/10 focus:text-white">Bono</SelectItem>
-                        <SelectItem value="Bono East" className="text-white focus:bg-white/10 focus:text-white">Bono East</SelectItem>
-                        <SelectItem value="Central" className="text-white focus:bg-white/10 focus:text-white">Central</SelectItem>
-                        <SelectItem value="Eastern" className="text-white focus:bg-white/10 focus:text-white">Eastern</SelectItem>
-                        <SelectItem value="Greater Accra" className="text-white focus:bg-white/10 focus:text-white">Greater Accra</SelectItem>
-                        <SelectItem value="North East" className="text-white focus:bg-white/10 focus:text-white">North East</SelectItem>
-                        <SelectItem value="Northern" className="text-white focus:bg-white/10 focus:text-white">Northern</SelectItem>
-                        <SelectItem value="Oti" className="text-white focus:bg-white/10 focus:text-white">Oti</SelectItem>
-                        <SelectItem value="Savannah" className="text-white focus:bg-white/10 focus:text-white">Savannah</SelectItem>
-                        <SelectItem value="Upper East" className="text-white focus:bg-white/10 focus:text-white">Upper East</SelectItem>
-                        <SelectItem value="Upper West" className="text-white focus:bg-white/10 focus:text-white">Upper West</SelectItem>
-                        <SelectItem value="Volta" className="text-white focus:bg-white/10 focus:text-white">Volta</SelectItem>
-                        <SelectItem value="Western" className="text-white focus:bg-white/10 focus:text-white">Western</SelectItem>
-                        <SelectItem value="Western North" className="text-white focus:bg-white/10 focus:text-white">Western North</SelectItem>
+                  <FormLabel className="text-sm font-semibold text-white">Region</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select region" /></SelectTrigger></FormControl>
+                    <SelectContent className="max-h-[300px]">
+                        <SelectItem value="Ahafo">Ahafo</SelectItem>
+                        <SelectItem value="Ashanti">Ashanti</SelectItem>
+                        <SelectItem value="Bono">Bono</SelectItem>
+                        <SelectItem value="Bono East">Bono East</SelectItem>
+                        <SelectItem value="Central">Central</SelectItem>
+                        <SelectItem value="Eastern">Eastern</SelectItem>
+                        <SelectItem value="Greater Accra">Greater Accra</SelectItem>
+                        <SelectItem value="North East">North East</SelectItem>
+                        <SelectItem value="Northern">Northern</SelectItem>
+                        <SelectItem value="Oti">Oti</SelectItem>
+                        <SelectItem value="Savannah">Savannah</SelectItem>
+                        <SelectItem value="Upper East">Upper East</SelectItem>
+                        <SelectItem value="Upper West">Upper West</SelectItem>
+                        <SelectItem value="Volta">Volta</SelectItem>
+                        <SelectItem value="Western">Western</SelectItem>
+                        <SelectItem value="Western North">Western North</SelectItem>
                     </SelectContent>
-                </Select>
-                <FormMessage />
+                  </Select>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
+            )} />
         </div>
 
-        <FormField
-            control={form.control}
-            name="location"
-            render={({ field }) => (
-                <FormItem>
-                <FormLabel className="text-white ml-2">Specific Location</FormLabel>
-                <FormControl>
-                    <div className="relative">
-                    <Map className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                    <Input placeholder="East Legon" className="pl-14" {...field} />
-                    </div>
-                </FormControl>
-                <FormMessage />
-                </FormItem>
-            )}
-            />
+        <FormField control={form.control} name="location" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-sm font-semibold text-white">Specific Location</FormLabel>
+              <FormControl><Input placeholder="East Legon" {...field} /></FormControl>
+              <FormMessage />
+            </FormItem>
+        )} />
 
-        <div className="grid grid-cols-3 gap-4">
-            <FormField
-            control={form.control}
-            name="category"
-            render={({ field }) => (
+        <div className="grid grid-cols-3 gap-5">
+            <FormField control={form.control} name="category" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Category</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                        <div className="relative">
-                            <Layers className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40 z-10" />
-                            <SelectTrigger className="pl-14">
-                                <SelectValue placeholder="Cat" />
-                            </SelectTrigger>
-                        </div>
-                    </FormControl>
-                    <SelectContent className="bg-black/80 backdrop-blur-xl border-white/20 rounded-[1.5rem] shadow-2xl overflow-hidden">
-                    <SelectItem value="A" className="text-white focus:bg-white/10 focus:text-white">Category A</SelectItem>
-                    <SelectItem value="B" className="text-white focus:bg-white/10 focus:text-white">Category B</SelectItem>
-                    <SelectItem value="C" className="text-white focus:bg-white/10 focus:text-white">Category C</SelectItem>
+                  <FormLabel className="text-sm font-semibold text-white">Category</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Category" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="A">Category A</SelectItem>
+                      <SelectItem value="B">Category B</SelectItem>
+                      <SelectItem value="C">Category C</SelectItem>
                     </SelectContent>
-                </Select>
-                <FormMessage />
+                  </Select>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
-            <FormField
-            control={form.control}
-            name="status"
-            render={({ field }) => (
+            )} />
+            <FormField control={form.control} name="status" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Status</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                        <div className="relative">
-                            <School className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40 z-10" />
-                            <SelectTrigger className="pl-14">
-                                <SelectValue placeholder="Status" />
-                            </SelectTrigger>
-                        </div>
-                    </FormControl>
-                    <SelectContent className="bg-black/80 backdrop-blur-xl border-white/20 rounded-[1.5rem] shadow-2xl overflow-hidden">
-                    <SelectItem value="Day" className="text-white focus:bg-white/10 focus:text-white">Day</SelectItem>
-                    <SelectItem value="Boarding" className="text-white focus:bg-white/10 focus:text-white">Boarding</SelectItem>
+                  <FormLabel className="text-sm font-semibold text-white">Status</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="Day">Day</SelectItem>
+                      <SelectItem value="Boarding">Boarding</SelectItem>
                     </SelectContent>
-                </Select>
-                <FormMessage />
+                  </Select>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
-            <FormField
-            control={form.control}
-            name="gender"
-            render={({ field }) => (
+            )} />
+            <FormField control={form.control} name="gender" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Gender</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                        <div className="relative">
-                            <Users className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40 z-10" />
-                            <SelectTrigger className="pl-14">
-                                <SelectValue placeholder="Gender" />
-                            </SelectTrigger>
-                        </div>
-                    </FormControl>
-                    <SelectContent className="bg-black/80 backdrop-blur-xl border-white/20 rounded-[1.5rem] shadow-2xl overflow-hidden">
-                    <SelectItem value="Boys" className="text-white focus:bg-white/10 focus:text-white">Boys</SelectItem>
-                    <SelectItem value="Girls" className="text-white focus:bg-white/10 focus:text-white">Girls</SelectItem>
-                    <SelectItem value="Mixed" className="text-white focus:bg-white/10 focus:text-white">Mixed</SelectItem>
+                  <FormLabel className="text-sm font-semibold text-white">Gender</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Gender" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="Boys">Boys</SelectItem>
+                      <SelectItem value="Girls">Girls</SelectItem>
+                      <SelectItem value="Mixed">Mixed</SelectItem>
                     </SelectContent>
-                </Select>
-                <FormMessage />
+                  </Select>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
+            )} />
         </div>
 
-        <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 rounded-2xl shadow-lg mt-4 transition-all">
+        <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm mt-2">
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {initialData?._id ? "Update Institution" : "Register Institution"}
         </Button>

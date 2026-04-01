@@ -19,18 +19,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useState } from "react"
-import { Loader2, User, Mail, Phone, GraduationCap, Hash } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Loader2 } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 
 
 const formSchema = z.object({
-  name: z.string().min(2, {
-    message: "Name must be at least 2 characters.",
-  }),
+  lastName: z.string().min(2, { message: "Last name is required" }),
+  firstName: z.string().min(2, { message: "First name is required" }),
+  middleName: z.string().optional(),
   gender: z.enum(["Male", "Female", "Other"]),
   phone: z.string().min(10, { message: "Phone number is too short" }),
-  email: z.string().email(),
+  guardianContact: z.string().optional(),
   indexNumber: z.string().min(2, "Index Number is required"),
   program: z.string().min(2, "Program is required"),
   year: z.string().min(2, "Year is required"),
@@ -46,15 +46,30 @@ interface LearnerFormProps {
 
 export function LearnerForm({ onSuccess, initialData }: LearnerFormProps) {
   const [loading, setLoading] = useState(false)
+  const [programs, setPrograms] = useState<string[]>([])
   const { authFetch } = useAuth()
+
+  useEffect(() => {
+    authFetch('/api/my-institution')
+      .then(res => {
+        if (!res.ok) return null
+        return res.json()
+      })
+      .then(data => {
+        if (data?.programs) setPrograms(data.programs)
+      })
+      .catch(() => {})
+  }, [authFetch])
 
   const form = useForm<LearnerFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: initialData || {
-      name: "",
+      lastName: "",
+      firstName: "",
+      middleName: "",
       gender: "Male",
       phone: "",
-      email: "",
+      guardianContact: "",
       indexNumber: "",
       program: "",
       year: "",
@@ -65,24 +80,13 @@ export function LearnerForm({ onSuccess, initialData }: LearnerFormProps) {
   async function onSubmit(values: LearnerFormValues) {
     setLoading(true)
     try {
-        const url = initialData?._id 
-            ? `http://localhost:5001/api/learners/${initialData._id}`
-            : 'http://localhost:5001/api/learners';
-        
-        const method = initialData?._id ? 'PUT' : 'POST';
-
+        const url = initialData?._id ? `/api/learners/${initialData._id}` : '/api/learners';
         const response = await authFetch(url, {
-            method,
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            method: initialData?._id ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(values),
         })
-
-        if (!response.ok) {
-            throw new Error('Failed to save learner')
-        }
-
+        if (!response.ok) throw new Error('Failed to save learner')
         const data = await response.json()
         onSuccess(data)
     } catch (error) {
@@ -94,144 +98,110 @@ export function LearnerForm({ onSuccess, initialData }: LearnerFormProps) {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-        <FormField
-          control={form.control}
-          name="name"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel className="text-white ml-2">Full Name</FormLabel>
-              <FormControl>
-                <div className="relative">
-                  <User className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                  <Input placeholder="John Doe" className="pl-14" {...field} />
-                </div>
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <div className="grid grid-cols-2 gap-6">
-            <FormField
-            control={form.control}
-            name="email"
-            render={({ field }) => (
-                <FormItem>
-                <FormLabel className="text-white ml-2">Email</FormLabel>
-                <FormControl>
-                    <div className="relative">
-                      <Mail className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                      <Input placeholder="john@example.com" className="pl-14" {...field} />
-                    </div>
-                </FormControl>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+        {/* Name Fields */}
+        <div className="grid grid-cols-3 gap-4">
+          <FormField control={form.control} name="lastName" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-white">Last Name</FormLabel>
+                <FormControl><Input placeholder="Doe" {...field} /></FormControl>
                 <FormMessage />
-                </FormItem>
-            )}
-            />
-            <FormField
-            control={form.control}
-            name="phone"
-            render={({ field }) => (
-                <FormItem>
-                <FormLabel className="text-white ml-2">Phone</FormLabel>
-                <FormControl>
-                    <div className="relative">
-                      <Phone className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                      <Input placeholder="024..." className="pl-14" {...field} />
-                    </div>
-                </FormControl>
+              </FormItem>
+          )} />
+          <FormField control={form.control} name="middleName" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-white">Middle Name</FormLabel>
+                <FormControl><Input placeholder="(Optional)" {...field} /></FormControl>
                 <FormMessage />
+              </FormItem>
+          )} />
+          <FormField control={form.control} name="firstName" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-white">First Name</FormLabel>
+                <FormControl><Input placeholder="John" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+          )} />
+        </div>
+
+        {/* Phone & Guardian */}
+        <div className="grid grid-cols-2 gap-5">
+            <FormField control={form.control} name="phone" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Phone</FormLabel>
+                  <FormControl><Input placeholder="024..." {...field} /></FormControl>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
+            )} />
+            <FormField control={form.control} name="guardianContact" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Guardian/Parent Contact</FormLabel>
+                  <FormControl><Input placeholder="024..." {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+            )} />
         </div>
         
-        <div className="grid grid-cols-2 gap-4">
-            <FormField
-            control={form.control}
-            name="gender"
-            render={({ field }) => (
+        {/* Gender & Year */}
+        <div className="grid grid-cols-2 gap-5">
+            <FormField control={form.control} name="gender" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Gender</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                    <SelectTrigger>
-                        <SelectValue placeholder="Select gender" />
-                    </SelectTrigger>
-                    </FormControl>
-                    <SelectContent className="bg-black/80 backdrop-blur-xl border-white/20 rounded-[1.5rem] shadow-2xl overflow-hidden">
-                    <SelectItem value="Male" className="text-white focus:bg-white/10 focus:text-white">Male</SelectItem>
-                    <SelectItem value="Female" className="text-white focus:bg-white/10 focus:text-white">Female</SelectItem>
-                    <SelectItem value="Other" className="text-white focus:bg-white/10 focus:text-white">Other</SelectItem>
+                  <FormLabel className="text-sm font-semibold text-white">Gender</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select gender" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="Male">Male</SelectItem>
+                      <SelectItem value="Female">Female</SelectItem>
+                      <SelectItem value="Other">Other</SelectItem>
                     </SelectContent>
-                </Select>
-                <FormMessage />
+                  </Select>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
-             <FormField
-            control={form.control}
-            name="year"
-            render={({ field }) => (
+            )} />
+            <FormField control={form.control} name="year" render={({ field }) => (
                 <FormItem>
-                <FormLabel className="text-white ml-2">Year</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                    <SelectTrigger>
-                        <SelectValue placeholder="Select year" />
-                    </SelectTrigger>
-                    </FormControl>
-                    <SelectContent className="bg-black/80 backdrop-blur-xl border-white/20 rounded-[1.5rem] shadow-2xl overflow-hidden">
-                    <SelectItem value="Year 1" className="text-white focus:bg-white/10 focus:text-white">Year 1</SelectItem>
-                    <SelectItem value="Year 2" className="text-white focus:bg-white/10 focus:text-white">Year 2</SelectItem>
-                    <SelectItem value="Year 3" className="text-white focus:bg-white/10 focus:text-white">Year 3</SelectItem>
+                  <FormLabel className="text-sm font-semibold text-white">Year</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select year" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="Year 1">Year 1</SelectItem>
+                      <SelectItem value="Year 2">Year 2</SelectItem>
+                      <SelectItem value="Year 3">Year 3</SelectItem>
                     </SelectContent>
-                </Select>
-                <FormMessage />
+                  </Select>
+                  <FormMessage />
                 </FormItem>
-            )}
-            />
+            )} />
         </div>
 
-        <div className="grid grid-cols-2 gap-6">
-             <FormField
-                control={form.control}
-                name="indexNumber"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-white ml-2">Index Number</FormLabel>
-                    <FormControl>
-                        <div className="relative">
-                          <Hash className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                          <Input placeholder="GTVET/2026/001" className="pl-14" {...field} />
-                        </div>
-                    </FormControl>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
-            <FormField
-                control={form.control}
-                name="program"
-                render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-white ml-2">Program</FormLabel>
-                    <FormControl>
-                        <div className="relative">
-                          <GraduationCap className="absolute left-6 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
-                          <Input placeholder="Fashion Design..." className="pl-14" {...field} />
-                        </div>
-                    </FormControl>
-                    <FormMessage />
-                    </FormItem>
-                )}
-            />
+        {/* Index Number & Program */}
+        <div className="grid grid-cols-2 gap-5">
+            <FormField control={form.control} name="indexNumber" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Index Number</FormLabel>
+                  <FormControl><Input placeholder="GTVET/2026/001" className="uppercase" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+            )} />
+            <FormField control={form.control} name="program" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Program</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select program" /></SelectTrigger></FormControl>
+                    <SelectContent className="max-h-60">
+                      {programs.map(prog => (
+                          <SelectItem key={prog} value={prog} className="text-xs">{prog}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+            )} />
         </div>
 
-
-        <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-14 rounded-2xl shadow-xl shadow-[#FFB800]/20 mt-6">
+        <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm mt-2">
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Register Learner
+            {initialData?._id ? 'Update Learner' : 'Register Learner'}
         </Button>
       </form>
     </Form>

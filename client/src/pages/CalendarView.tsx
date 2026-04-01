@@ -18,7 +18,8 @@ import {
   Video, 
   GraduationCap, 
   FileText,
-  Clock
+  Clock,
+  BookOpen
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,7 +29,7 @@ interface CalendarEvent {
   id: string
   title: string
   start: string
-  type: 'completion' | 'visit' | 'report'
+  type: 'completion' | 'visit' | 'report' | 'academic'
   description?: string
   color: string
 }
@@ -39,7 +40,7 @@ export default function CalendarView() {
   const { authFetch } = useAuth()
 
   useEffect(() => {
-    authFetch('http://localhost:5001/api/calendar/events')
+    authFetch('/api/calendar/events')
       .then(res => res.json())
       .then(data => {
         setEvents(data)
@@ -75,7 +76,7 @@ export default function CalendarView() {
     <div className="flex-1 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-black text-gray-900 tracking-tight">Calendar</h2>
+          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Calendar</h2>
           <p className="text-gray-500 font-bold mt-1 uppercase tracking-wider text-xs">
             Tracking completions, visits and deadlines
           </p>
@@ -134,6 +135,7 @@ export default function CalendarView() {
                           {event.type === 'visit' && <Video className="h-2.5 w-2.5 md:h-3 md:w-3 shrink-0" />}
                           {event.type === 'completion' && <GraduationCap className="h-2.5 w-2.5 md:h-3 md:w-3 shrink-0" />}
                           {event.type === 'report' && <FileText className="h-2.5 w-2.5 md:h-3 md:w-3 shrink-0" />}
+                          {event.type === 'academic' && <BookOpen className="h-2.5 w-2.5 md:h-3 md:w-3 shrink-0" />}
                           <span className="truncate font-black uppercase tracking-tight">{event.title}</span>
                         </div>
                       ))}
@@ -204,7 +206,16 @@ export default function CalendarView() {
                   </div>
                   <div>
                     <div className="text-white text-sm font-black">Report Deadlines</div>
-                    <div className="text-gray-500 text-[10px] font-bold uppercase tracking-widest">Monthly GTVET submission</div>
+                    <div className="text-gray-500 text-[10px] font-bold uppercase tracking-widest">Semester submissions</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 group">
+                  <div className="h-10 w-10 rounded-2xl bg-[#8B5CF6]/20 flex items-center justify-center text-[#8B5CF6] group-hover:scale-110 transition-transform">
+                    <BookOpen className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="text-white text-sm font-black">Academic Events</div>
+                    <div className="text-gray-500 text-[10px] font-bold uppercase tracking-widest">HQ semester calendar</div>
                   </div>
                 </div>
              </div>

@@ -18,10 +18,14 @@ export type Learner = {
   trackingId: string
   indexNumber: string
   name: string
+  lastName: string
+  firstName: string
+  middleName?: string
+  guardianContact?: string
   program: string
   region: string
+  year: string
   status: "Pending" | "Placed" | "Completed" | "Dropped"
-  email: string
 }
 
 export const columns: ColumnDef<Learner>[] = [
@@ -53,9 +57,10 @@ export const columns: ColumnDef<Learner>[] = [
     header: "Program",
   },
   {
-      accessorKey: "region",
-      header: "Region",
+    accessorKey: "year",
+    header: "Year",
   },
+
   {
     accessorKey: "status",
     header: "Status",
@@ -89,19 +94,19 @@ export const columns: ColumnDef<Learner>[] = [
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-             <DropdownMenuItem asChild className="cursor-pointer">
+          <DropdownMenuContent align="end" className="bg-[#1E1E1E]/95 backdrop-blur-xl border-white/10 text-white rounded-2xl p-2 min-w-[160px] shadow-2xl">
+            <DropdownMenuLabel className="font-bold text-white/60 uppercase tracking-wider text-xs">Actions</DropdownMenuLabel>
+             <DropdownMenuItem asChild className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">
                 <Link to={`/learners/${learner._id}`}>View Profile</Link>
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => navigator.clipboard.writeText(learner._id)}>
+            <DropdownMenuItem onClick={() => navigator.clipboard.writeText(learner._id)} className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">
               Copy ID
             </DropdownMenuItem>
             {!isSuperAdmin && (
               <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => meta?.onEdit(learner)}>Edit Details</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => meta?.onDelete(learner._id)} className="text-red-600">Delete Learner</DropdownMenuItem>
+                <DropdownMenuSeparator className="bg-white/10" />
+                <DropdownMenuItem onClick={() => meta?.onEdit(learner)} className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">Edit Details</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => meta?.onDelete(learner._id)} className="text-red-400 cursor-pointer rounded-xl focus:bg-red-500/10 focus:text-red-400 transition-colors">Delete Learner</DropdownMenuItem>
               </>
             )}
           </DropdownMenuContent>

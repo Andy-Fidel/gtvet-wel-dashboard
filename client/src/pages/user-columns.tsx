@@ -16,10 +16,13 @@ export type User = {
     _id: string
     name: string
     email: string
-    role: 'Admin' | 'Manager' | 'Staff'
+    role: 'SuperAdmin' | 'RegionalAdmin' | 'Admin' | 'Manager' | 'Staff' | 'IndustryPartner'
     status: 'Active' | 'Inactive'
+    passwordChangeRequired?: boolean
     phone?: string
     institution?: string
+    region?: string
+    partnerId?: { _id: string, name: string }
     createdAt: string
 }
 
@@ -43,6 +46,20 @@ export const columns: ColumnDef<User>[] = [
     header: "Email",
   },
   {
+    accessorKey: "institution",
+    header: "Scope (Inst / Region)",
+    cell: ({ row }) => {
+        const inst = row.original.institution
+        const role = row.original.role
+        const region = row.original.region
+        const partner = row.original.partnerId
+        
+        if (role === 'RegionalAdmin') return `Region: ${region || 'N/A'}`
+        if (role === 'IndustryPartner') return `Partner: ${partner?.name || 'N/A'}`
+        return inst || "N/A"
+    }
+  },
+  {
     accessorKey: "role",
     header: "Role",
     cell: ({ row }) => {
@@ -50,6 +67,7 @@ export const columns: ColumnDef<User>[] = [
         let color = "bg-slate-500 hover:bg-slate-600"
         if (role === 'Admin') color = "bg-purple-500 hover:bg-purple-600"
         if (role === 'Manager') color = "bg-blue-500 hover:bg-blue-600"
+        if (role === 'IndustryPartner') color = "bg-orange-500 hover:bg-orange-600"
         
         return <Badge className={`${color} text-white border-0`}>{role}</Badge>
     }

@@ -13,11 +13,10 @@ const competencyAssessmentSchema = new mongoose.Schema({
   },
   trackingId: {
     type: String,
-    required: true
   },
   assessmentType: {
     type: String,
-    enum: ['Oral', 'Practical'],
+    enum: ['Practical', 'Theoretical', 'Combined', 'On-the-job', 'Oral'],
     required: true
   },
   technicalSkills: {

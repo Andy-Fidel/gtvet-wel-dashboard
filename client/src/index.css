@@ -79,6 +79,24 @@
   }
 }
 
+@layer components {
+  .glass-panel {
+    @apply bg-white border border-gray-100 shadow-lg shadow-gray-200/30 dark:bg-gray-900 dark:border-gray-800 dark:shadow-none;
+  }
+  
+  .glass-card {
+    @apply bg-white border border-gray-100 shadow-md rounded-[2rem] hover:shadow-lg transition-shadow duration-150 ease-out dark:bg-gray-900 dark:border-gray-800;
+  }
+
+  .mesh-bg {
+    @apply fixed inset-0 z-[-1] bg-[#F8F9FA] dark:bg-gray-950 overflow-hidden;
+  }
+  
+  .mesh-blob {
+    @apply absolute rounded-full opacity-30 dark:opacity-10;
+  }
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -188,3 +206,4 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.552 0.016 285.938);
 }
+

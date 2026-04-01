@@ -42,7 +42,7 @@ export function LifecycleProgressBar({ currentStage }: LifecycleProgressBarProps
               >
                 {isCompleted ? <Check className="w-5 h-5 font-bold" /> : <span className="text-sm font-bold">{index + 1}</span>}
               </div>
-              <span className={`text-xs font-bold uppercase tracking-wider
+              <span className={`text-[9px] sm:text-xs font-bold uppercase tracking-tight sm:tracking-wider text-center mt-1 sm:mt-0
                 ${isCompleted ? 'text-emerald-700' : ''}
                 ${isCurrent ? 'text-gray-900' : ''}
                 ${isPending ? 'text-gray-400' : ''}

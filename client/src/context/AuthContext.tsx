@@ -1,13 +1,20 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 
 interface User {
   _id: string;
   name: string;
   email: string;
-  role: 'SuperAdmin' | 'Admin' | 'Manager' | 'Staff';
+  role: 'SuperAdmin' | 'RegionalAdmin' | 'Admin' | 'Manager' | 'Staff' | 'IndustryPartner';
   status: string;
   institution: string;
   phone?: string;
+  region?: string;
+  profilePicture?: string;
+  partnerId?: {
+    _id: string;
+    name: string;
+  };
 }
 
 interface AuthContextType {
@@ -15,10 +22,12 @@ interface AuthContextType {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  passwordChangeRequired: boolean;
+  login: (email: string, password: string) => Promise<{ passwordChangeRequired: boolean }>;
   register: (data: RegisterData) => Promise<void>;
   logout: () => void;
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
+  changePassword: (newPassword: string) => Promise<void>;
 }
 
 interface RegisterData {
@@ -31,40 +40,47 @@ interface RegisterData {
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
-
-const API_BASE = 'http://localhost:5001/api';
+import { API_BASE } from '@/config';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!!token);
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState<boolean>(
+    localStorage.getItem('passwordChangeRequired') === 'true'
+  );
 
   // Load user from token on mount
   useEffect(() => {
-    if (token) {
-      fetch(`${API_BASE}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
+    if (!token) return;
+
+    let isMounted = true;
+    fetch(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('Invalid token');
+        return res.json();
       })
-        .then(res => {
-          if (!res.ok) throw new Error('Invalid token');
-          return res.json();
-        })
-        .then(userData => {
-          setUser(userData);
-          setIsLoading(false);
-        })
-        .catch(() => {
-          localStorage.removeItem('token');
-          setToken(null);
-          setUser(null);
-          setIsLoading(false);
-        });
-    } else {
-      setIsLoading(false);
-    }
+      .then(userData => {
+        if (isMounted) {
+            setUser(userData);
+            setIsLoading(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+            localStorage.removeItem('token');
+            setToken(null);
+            setUser(null);
+            setIsLoading(false);
+        }
+      });
+      
+    return () => { isMounted = false; };
   }, [token]);
 
-  const login = async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -80,9 +96,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('token', data.token);
     setToken(data.token);
     setUser(data.user);
-  };
 
-  const register = async (registerData: RegisterData) => {
+    // Handle password change requirement
+    if (data.passwordChangeRequired) {
+      localStorage.setItem('passwordChangeRequired', 'true');
+      setPasswordChangeRequired(true);
+    } else {
+      localStorage.removeItem('passwordChangeRequired');
+      setPasswordChangeRequired(false);
+    }
+
+    return { passwordChangeRequired: data.passwordChangeRequired || false };
+  }, []);
+
+  const register = useCallback(async (registerData: RegisterData) => {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -98,15 +125,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('token', data.token);
     setToken(data.token);
     setUser(data.user);
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem('token');
+    localStorage.removeItem('passwordChangeRequired');
     setToken(null);
     setUser(null);
-  };
+    setPasswordChangeRequired(false);
+  }, []);
 
-  const authFetch = async (url: string, options: RequestInit = {}) => {
+  const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     return fetch(url, {
       ...options,
       headers: {
@@ -115,18 +144,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...options.headers,
       },
     });
-  };
+  }, [token]);
+
+  const changePassword = useCallback(async (newPassword: string) => {
+    const res = await authFetch(`${API_BASE}/auth/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newPassword }),
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.message || 'Failed to change password');
+    }
+
+    localStorage.removeItem('passwordChangeRequired');
+    setPasswordChangeRequired(false);
+  }, [authFetch]);
+
+
 
   return (
     <AuthContext.Provider value={{
       user,
       token,
-      isAuthenticated: !!user,
+      isAuthenticated: !!user && !passwordChangeRequired,
       isLoading,
+      passwordChangeRequired,
       login,
       register,
       logout,
       authFetch,
+      changePassword,
     }}>
       {children}
     </AuthContext.Provider>
