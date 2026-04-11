@@ -6,6 +6,7 @@ const learnerSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   middleName: { type: String, default: '' },
   gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+  dateOfBirth: { type: Date },
   phone: String,
   guardianContact: String,
   indexNumber: { type: String, required: true },
@@ -13,14 +14,36 @@ const learnerSchema = new mongoose.Schema({
   institution: { type: String, required: true },
   program: { type: String, required: true },
   year: { type: String, required: true },
+  intakeAcademicYear: { type: String, default: '' },
+  academicStatus: {
+    type: String,
+    enum: ['Active', 'Graduating', 'Graduated', 'Dropped'],
+    default: 'Active',
+  },
+  graduationAcademicYear: { type: String, default: '' },
+  graduatedAt: { type: Date },
   region: { type: String, required: true },
   status: { 
     type: String, 
     enum: ['Pending', 'Placed', 'Completed', 'Dropped'], 
     default: 'Pending' 
   },
+  owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   placement: { type: mongoose.Schema.Types.ObjectId, ref: 'Placement' },
   profilePicture: { type: String, default: '' },
+  progressionHistory: [{
+    academicYear: { type: String, default: '' },
+    action: {
+      type: String,
+      enum: ['Intake', 'Promoted', 'Graduated', 'Dropped', 'StatusAdjusted'],
+      required: true,
+    },
+    fromYear: { type: String, default: '' },
+    toYear: { type: String, default: '' },
+    note: { type: String, default: '' },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    changedAt: { type: Date, default: Date.now },
+  }],
 }, { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } });
 
 // Virtual "name" field for backward compatibility
@@ -32,6 +55,7 @@ learnerSchema.virtual('name').get(function() {
 
 // Add indexes for efficient aggregation & querying
 learnerSchema.index({ institution: 1 });
+learnerSchema.index({ owner: 1 });
 learnerSchema.index({ status: 1 });
 learnerSchema.index({ gender: 1 });
 learnerSchema.index({ program: 1 });

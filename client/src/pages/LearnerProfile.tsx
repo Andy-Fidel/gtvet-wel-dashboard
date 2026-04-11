@@ -1,10 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react"
-import { DocumentUpload } from "@/components/DocumentUpload"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { DocumentList } from "@/components/DocumentList"
 import { useParams, useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, MapPin, Phone, Mail, Award, Clock, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Paperclip, Camera, Loader2, Edit2, Activity, ClipboardCheck } from "lucide-react"
+import { ArrowLeft, MapPin, Phone, Mail, Award, Clock, FileSignature, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Paperclip, Camera, Loader2, Edit2, Activity, ClipboardCheck, AlertTriangle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { format } from "date-fns"
@@ -24,6 +23,11 @@ import { UnifiedPlacementForm } from "./UnifiedPlacementForm"
 import { MonitoringVisitForm } from "./MonitoringVisitForm"
 import { CompetencyAssessmentForm } from "./CompetencyAssessmentForm"
 import { LearnerForm } from "./learners/LearnerForm"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { toast } from "sonner"
+import { downloadPlacementAgreementPdf } from "@/lib/placementAgreementPdf"
 
 interface ProfileData {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -38,6 +42,33 @@ interface ProfileData {
   assessments: any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   evaluations: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  activePlacementManagement?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  evidenceTimeline?: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  placementHistory?: any[];
+  guardianConsent?: {
+    requiresConsent: boolean
+    hasDateOfBirth: boolean
+    age: number | null
+    status: "Signed" | "Pending"
+    signedAt?: string | null
+    signedByName?: string
+    relationshipToLearner?: string
+    contactNumber?: string
+    industryName?: string
+    startDate?: string | null
+    endDate?: string | null
+    placementId?: string | null
+  };
+  linkedGuardians?: Array<{
+    _id: string
+    name: string
+    email: string
+    phone?: string
+    status: string
+  }>;
 }
 
 interface ProgressData {
@@ -53,7 +84,7 @@ interface ProgressData {
 export default function LearnerProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { authFetch, token } = useAuth()
+  const { authFetch, token, user } = useAuth()
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [data, setData] = useState<ProfileData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -61,14 +92,31 @@ export default function LearnerProfile() {
   const [placementOpen, setPlacementOpen] = useState(false)
   const [visitOpen, setVisitOpen] = useState(false)
   const [assessmentOpen, setAssessmentOpen] = useState(false)
+  const [supportOpen, setSupportOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [learnerAgreementOpen, setLearnerAgreementOpen] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [ownerCandidates, setOwnerCandidates] = useState<Array<{ _id: string; name: string; role: string; institution?: string }>>([])
+  const [learnerOwnerDraft, setLearnerOwnerDraft] = useState("")
+  const [placementOwnerDrafts, setPlacementOwnerDrafts] = useState<Record<string, string>>({})
+  const [savingLearnerOwner, setSavingLearnerOwner] = useState(false)
+  const [savingPlacementOwners, setSavingPlacementOwners] = useState<Record<string, boolean>>({})
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [documents, setDocuments] = useState<any[]>([])
   const [docsLoading, setDocsLoading] = useState(true)
   const [profilePicUploading, setProfilePicUploading] = useState(false)
   const [progress, setProgress] = useState<ProgressData | null>(null)
   const [progressLoading, setProgressLoading] = useState(true)
+  const [supportDraft, setSupportDraft] = useState({
+    subject: "",
+    category: "Workflow",
+    priority: "High",
+    description: "",
+  })
+  const [learnerAgreementDraft, setLearnerAgreementDraft] = useState({
+    learnerName: "",
+    signatureName: "",
+  })
 
   const handleProfilePicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -82,10 +130,13 @@ export default function LearnerProfile() {
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       })
-      if (!res.ok) throw new Error('Upload failed')
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || 'Upload failed')
       setRefreshKey(prev => prev + 1)
-    } catch {
-      console.error('Profile pic upload failed')
+      toast.success('Profile picture updated')
+    } catch (error) {
+      console.error('Profile pic upload failed', error)
+      toast.error(error instanceof Error ? error.message : 'Profile picture upload failed')
     } finally {
       setProfilePicUploading(false)
       if (avatarInputRef.current) avatarInputRef.current.value = ''
@@ -142,9 +193,68 @@ export default function LearnerProfile() {
     fetchProgress()
   }, [fetchProfile, fetchDocuments, fetchProgress, refreshKey])
 
+  useEffect(() => {
+    authFetch('/api/ownership/users')
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Failed to fetch ownership candidates')
+        return res.json()
+      })
+      .then(setOwnerCandidates)
+      .catch((error) => {
+        console.error('Error fetching ownership candidates:', error)
+      })
+  }, [authFetch])
+
+  useEffect(() => {
+    if (!data?.learner) return
+    setLearnerOwnerDraft(data.learner.owner?._id || "__unassigned")
+    setPlacementOwnerDrafts(
+      Object.fromEntries(
+        (data.placements || []).map((placement: any) => [placement._id, placement.owner?._id || "__unassigned"])
+      )
+    )
+  }, [data])
+
   const handleFormSuccess = () => {
     setRefreshKey(prev => prev + 1)
   }
+
+  const learnerEditInitialData = useMemo(() => {
+    const learner = data?.learner
+    if (!learner) return null
+
+    return {
+      _id: learner._id,
+      lastName: learner.lastName || '',
+      firstName: learner.firstName || '',
+      middleName: learner.middleName || '',
+      gender: learner.gender || 'Male',
+      dateOfBirth: learner.dateOfBirth || '',
+      phone: learner.phone || '',
+      guardianContact: learner.guardianContact || '',
+      indexNumber: learner.indexNumber || '',
+      program: learner.program || '',
+      year: learner.year || '',
+      intakeAcademicYear: learner.intakeAcademicYear || '',
+      academicStatus: learner.academicStatus || 'Active',
+      status: learner.status || 'Pending',
+    }
+  }, [
+    data?.learner?._id,
+    data?.learner?.lastName,
+    data?.learner?.firstName,
+    data?.learner?.middleName,
+    data?.learner?.gender,
+    data?.learner?.dateOfBirth,
+    data?.learner?.phone,
+    data?.learner?.guardianContact,
+    data?.learner?.indexNumber,
+    data?.learner?.program,
+    data?.learner?.year,
+    data?.learner?.intakeAcademicYear,
+    data?.learner?.academicStatus,
+    data?.learner?.status,
+  ])
 
   if (loading) {
     return (
@@ -164,7 +274,145 @@ export default function LearnerProfile() {
     )
   }
 
-  const { learner, placements, visits, semesterReports, assessments, evaluations } = data
+  const { learner, placements, visits, semesterReports, assessments, evaluations, activePlacementManagement } = data
+  const placementHistory = data.placementHistory || []
+  const evidenceTimeline = data.evidenceTimeline || []
+  const linkedGuardians = data.linkedGuardians || []
+  const guardianConsent = data.guardianConsent
+  const readiness = (data as ProfileData & { readiness?: { isReadyForPlacement: boolean; missingFields: string[]; missingDocuments: string[] } }).readiness
+  const canManageOwnership = ['Admin', 'Manager', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '')
+  const canManageGuardians = ['Admin', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '')
+  const activePlacement = placements.find((placement) => placement.status === 'Active') || null
+  const canInitiatePlacement = !activePlacement && ['Active', 'Graduating'].includes(learner.academicStatus || 'Active')
+  const activeAgreementSummary = activePlacement?.agreementSummary || null
+
+  const formatMissingField = (field: string) => {
+    if (field === 'phone') return 'phone number'
+    return field
+  }
+
+  const createSupportBlocker = async () => {
+    try {
+      const activePlacementId = placements.find((placement) => placement.status === 'Active')?._id
+      const res = await authFetch('/api/support-tickets', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...supportDraft,
+          learnerId: learner._id,
+          placementId: activePlacementId,
+        }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || 'Failed to create blocker ticket')
+      toast.success('Support blocker created')
+      setSupportOpen(false)
+      setSupportDraft({ subject: "", category: "Workflow", priority: "High", description: "" })
+      handleFormSuccess()
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : 'Failed to create blocker ticket')
+    }
+  }
+
+  const openLearnerAgreement = () => {
+    setLearnerAgreementDraft({
+      learnerName: learner.name || '',
+      signatureName: learner.name || '',
+    })
+    setLearnerAgreementOpen(true)
+  }
+
+  const signLearnerAgreement = async () => {
+    if (!activePlacement) return
+    try {
+      const res = await authFetch(`/api/placements/${activePlacement._id}/learner-agreement-sign`, {
+        method: 'POST',
+        body: JSON.stringify(learnerAgreementDraft),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || 'Failed to sign learner agreement')
+      toast.success('Learner agreement recorded')
+      setLearnerAgreementOpen(false)
+      handleFormSuccess()
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : 'Failed to sign learner agreement')
+    }
+  }
+
+  const downloadActivePlacementAgreement = () => {
+    if (!activePlacement) {
+      toast.error('No active placement available for export')
+      return
+    }
+
+    downloadPlacementAgreementPdf({
+      learnerName: learner.name || `${learner.firstName || ''} ${learner.lastName || ''}`.trim(),
+      learnerTrackingId: learner.trackingId,
+      program: learner.program,
+      studyYear: learner.year,
+      institution: learner.institution,
+      companyName: activePlacement.companyName,
+      location: activePlacement.location,
+      startDate: activePlacement.startDate,
+      endDate: activePlacement.endDate,
+      supervisorName: activePlacement.supervisorName,
+      supervisorPhone: activePlacement.supervisorPhone,
+      supervisorEmail: activePlacement.supervisorEmail,
+      employerAcknowledgement: {
+        signed: Boolean(activeAgreementSummary?.employerSigned),
+        signerName: activeAgreementSummary?.employerSignerName,
+        businessName: activeAgreementSummary?.employerBusinessName || activePlacement.companyName,
+        signatureName: activeAgreementSummary?.employerSignatureName,
+        signedAt: activeAgreementSummary?.employerSignedAt,
+      },
+      learnerAgreement: {
+        signed: Boolean(activeAgreementSummary?.learnerSigned),
+        learnerName: activeAgreementSummary?.learnerSignerName || learner.name,
+        signatureName: activeAgreementSummary?.learnerSignatureName,
+        signedAt: activeAgreementSummary?.learnerSignedAt,
+      },
+    })
+  }
+
+  const saveLearnerOwner = async () => {
+    if (!id) return
+    setSavingLearnerOwner(true)
+    try {
+      const res = await authFetch(`/api/learners/${id}/owner`, {
+        method: 'PUT',
+        body: JSON.stringify({ ownerId: learnerOwnerDraft === "__unassigned" ? null : learnerOwnerDraft }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || 'Failed to update learner owner')
+      toast.success('Learner owner updated')
+      handleFormSuccess()
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : 'Failed to update learner owner')
+    } finally {
+      setSavingLearnerOwner(false)
+    }
+  }
+
+  const savePlacementOwner = async (placementId: string) => {
+    setSavingPlacementOwners((current) => ({ ...current, [placementId]: true }))
+    try {
+      const res = await authFetch(`/api/placements/${placementId}/owner`, {
+        method: 'PUT',
+        body: JSON.stringify({ ownerId: placementOwnerDrafts[placementId] === "__unassigned" ? null : placementOwnerDrafts[placementId] }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || 'Failed to update placement owner')
+      toast.success('Placement owner updated')
+      handleFormSuccess()
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : 'Failed to update placement owner')
+    } finally {
+      setSavingPlacementOwners((current) => ({ ...current, [placementId]: false }))
+    }
+  }
 
   const getStatusColor = (status: string) => {
     if (status === 'Placed' || status === 'Completed') return "bg-green-500"
@@ -175,7 +423,7 @@ export default function LearnerProfile() {
 
   // Calculate Lifecycle Stage
   let currentStage: LifecycleStage = 'Pending'
-  if (learner.status === 'Placed') {
+  if (activePlacement || learner.status === 'Placed') {
       currentStage = 'Placed'
       if (visits.length > 0 || semesterReports.length > 0) {
           currentStage = 'Monitored'
@@ -236,6 +484,11 @@ export default function LearnerProfile() {
             <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
               {learner.name}
               <Badge className={`${getStatusColor(learner.status)} border-0 text-white`}>{learner.status}</Badge>
+              {learner.dateOfBirth ? (
+                <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">
+                  DOB: {format(new Date(learner.dateOfBirth), 'PP')}
+                </Badge>
+              ) : null}
             </h2>
             <div className="flex items-center gap-4 text-muted-foreground mt-1 text-sm font-medium">
               <span className="flex items-center gap-1"><Bookmark className="h-4 w-4" /> {learner.program} ({learner.year})</span>
@@ -249,8 +502,12 @@ export default function LearnerProfile() {
             <Button onClick={() => setEditOpen(true)} variant="outline" className="rounded-xl border-gray-200 text-gray-700 bg-white hover:bg-gray-50">
                 <Edit2 className="mr-2 h-4 w-4" /> Edit Profile
             </Button>
-            {currentStage === 'Pending' && (
-                <Button onClick={() => setPlacementOpen(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md">
+            {canInitiatePlacement && (
+                <Button
+                    onClick={() => setPlacementOpen(true)}
+                    disabled={!readiness?.isReadyForPlacement}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md disabled:opacity-60"
+                >
                     <Plus className="mr-2 h-4 w-4" /> Initiate Placement
                 </Button>
             )}
@@ -277,6 +534,216 @@ export default function LearnerProfile() {
             )}
         </div>
       </div>
+
+      {canInitiatePlacement && readiness && !readiness.isReadyForPlacement && (
+        <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5">
+          <h3 className="font-black text-amber-900">Placement readiness incomplete</h3>
+          <p className="text-sm text-amber-800 mt-1">
+            Complete intake details before this learner can be placed.
+          </p>
+          <p className="text-sm font-semibold text-amber-900 mt-3">
+            Missing: {readiness.missingFields.map(formatMissingField).join(", ")}
+          </p>
+        </div>
+      )}
+
+      <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <h3 className="font-black text-lg text-gray-900">Operational Ownership</h3>
+            <p className="text-sm text-gray-500">Assign a staff owner to the learner record and each placement workflow.</p>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-3">
+            <p className="text-xs font-black uppercase tracking-wider text-gray-400">Learner Owner</p>
+            <p className="text-sm font-bold text-gray-900">{learner.owner?.name || 'Unassigned'}</p>
+            {canManageOwnership ? (
+              <div className="flex flex-col md:flex-row gap-2">
+                <Select value={learnerOwnerDraft} onValueChange={setLearnerOwnerDraft}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="Select learner owner" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__unassigned">Unassigned</SelectItem>
+                    {ownerCandidates.map((candidate) => (
+                      <SelectItem key={candidate._id} value={candidate._id}>
+                        {candidate.name} ({candidate.role})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button className="rounded-xl" disabled={savingLearnerOwner} onClick={saveLearnerOwner}>
+                  {savingLearnerOwner ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-3">
+            <p className="text-xs font-black uppercase tracking-wider text-gray-400">Placement Owners</p>
+            {placements.length === 0 ? (
+              <p className="text-sm text-gray-500">No placement records yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {placements.map((placement: any) => (
+                  <div key={placement._id} className="rounded-2xl border border-gray-100 bg-white p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-bold text-gray-900">{placement.companyName}</p>
+                        <p className="text-xs text-gray-500">{placement.owner?.name || 'Unassigned'}</p>
+                      </div>
+                      {canManageOwnership ? (
+                        <div className="flex flex-col md:flex-row gap-2">
+                          <Select
+                            value={placementOwnerDrafts[placement._id] || "__unassigned"}
+                            onValueChange={(value) => setPlacementOwnerDrafts((current) => ({ ...current, [placement._id]: value }))}
+                          >
+                            <SelectTrigger className="min-w-[220px] bg-white">
+                              <SelectValue placeholder="Select placement owner" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__unassigned">Unassigned</SelectItem>
+                              {ownerCandidates.map((candidate) => (
+                                <SelectItem key={candidate._id} value={candidate._id}>
+                                  {candidate.name} ({candidate.role})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            variant="outline"
+                            className="rounded-xl"
+                            disabled={savingPlacementOwners[placement._id]}
+                            onClick={() => savePlacementOwner(placement._id)}
+                          >
+                            {savingPlacementOwners[placement._id] ? 'Saving…' : 'Save'}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {activePlacementManagement && (
+        <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
+            <div>
+              <h3 className="font-black text-lg text-gray-900">Active Placement Management</h3>
+              <p className="text-sm text-gray-500">Track due dates, cadence, completion, and active blockers for this learner.</p>
+            </div>
+            <Button onClick={() => setSupportOpen(true)} variant="outline" className="rounded-xl border-red-200 text-red-700 bg-red-50 hover:bg-red-100">
+              <AlertTriangle className="mr-2 h-4 w-4" />
+              Report Blocker
+            </Button>
+          </div>
+
+          <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Placement Agreement</p>
+                <p className="text-sm font-bold text-gray-900 mt-2">
+                  Employer acknowledgement: {activeAgreementSummary?.employerSigned ? 'Signed' : 'Pending'} · Learner agreement: {activeAgreementSummary?.learnerSigned ? 'Signed' : 'Pending'}
+                </p>
+                <p className="text-xs text-gray-600 mt-1">
+                  Use this to capture the learner agreement for the current WEL arrangement.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button variant="outline" className="rounded-xl" onClick={downloadActivePlacementAgreement}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Export Agreement PDF
+                </Button>
+                <Button className="rounded-xl bg-amber-500 hover:bg-amber-600 text-white" onClick={openLearnerAgreement}>
+                  <FileSignature className="mr-2 h-4 w-4" />
+                  {activeAgreementSummary?.learnerSigned ? 'Update Learner Signature' : 'Sign Learner Agreement'}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+              <p className="text-xs font-black uppercase tracking-wider text-gray-400">Attendance</p>
+              <p className="text-sm font-bold text-gray-900 mt-2">
+                {activePlacementManagement.attendance?.overdue ? 'Overdue' : 'On track'}
+              </p>
+              <p className="text-xs text-gray-600 mt-1">Due: {activePlacementManagement.attendance?.dueAt ? new Date(activePlacementManagement.attendance.dueAt).toLocaleDateString() : 'N/A'}</p>
+              <p className="text-xs text-gray-600 mt-1">Pending sign-off: {activePlacementManagement.attendance?.pendingSignOffCount || 0}</p>
+            </div>
+
+            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+              <p className="text-xs font-black uppercase tracking-wider text-gray-400">Monitoring Visits</p>
+              <p className="text-sm font-bold text-gray-900 mt-2">
+                {activePlacementManagement.monitoring?.overdue ? 'Visit overdue' : 'Cadence healthy'}
+              </p>
+              <p className="text-xs text-gray-600 mt-1">Next due: {activePlacementManagement.monitoring?.dueAt ? new Date(activePlacementManagement.monitoring.dueAt).toLocaleDateString() : 'N/A'}</p>
+              <p className="text-xs text-gray-600 mt-1">Visits logged: {activePlacementManagement.monitoring?.visitCount || 0}</p>
+            </div>
+
+            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+              <p className="text-xs font-black uppercase tracking-wider text-gray-400">Assessments</p>
+              <p className="text-sm font-bold text-gray-900 mt-2">
+                {activePlacementManagement.assessments?.complete ? 'Assessment started' : 'Assessment pending'}
+              </p>
+              <p className="text-xs text-gray-600 mt-1">{activePlacementManagement.assessments?.summary || 'No assessment yet'}</p>
+              <p className="text-xs text-gray-600 mt-1">Due: {activePlacementManagement.assessments?.dueAt ? new Date(activePlacementManagement.assessments.dueAt).toLocaleDateString() : 'N/A'}</p>
+            </div>
+
+            <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+              <p className="text-xs font-black uppercase tracking-wider text-gray-400">Employer Evaluation</p>
+              <p className="text-sm font-bold text-gray-900 mt-2">
+                {activePlacementManagement.evaluations?.complete ? 'Completed' : 'Awaiting employer'}
+              </p>
+              <p className="text-xs text-gray-600 mt-1">Due: {activePlacementManagement.evaluations?.dueAt ? new Date(activePlacementManagement.evaluations.dueAt).toLocaleDateString() : 'N/A'}</p>
+              {activePlacementManagement.evaluations?.overdue ? <p className="text-xs font-semibold text-red-600 mt-1">Evaluation overdue</p> : null}
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-red-100 bg-red-50/50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-red-700">Support Blockers & Escalations</p>
+                <p className="text-xs text-red-600 mt-1">
+                  {activePlacementManagement.blockers?.totalOpen || 0} open blocker(s), {activePlacementManagement.blockers?.escalated || 0} escalated
+                </p>
+              </div>
+              {(activePlacementManagement.blockers?.totalOpen || 0) > 0 ? (
+                <Badge className="bg-red-100 text-red-700 border-red-200">Attention required</Badge>
+              ) : (
+                <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">No blockers</Badge>
+              )}
+            </div>
+
+            {(activePlacementManagement.blockers?.items || []).length > 0 ? (
+              <div className="mt-4 space-y-3">
+                {activePlacementManagement.blockers.items.map((ticket: any) => (
+                  <div key={ticket._id} className="rounded-2xl border border-red-100 bg-white p-4">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                      <div>
+                        <p className="font-bold text-gray-900">{ticket.subject}</p>
+                        <p className="text-xs text-gray-500 mt-1">{ticket.category} · {ticket.priority} · {ticket.status}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {ticket.assignedTo ? <Badge variant="outline">Assigned: {ticket.assignedTo.name}</Badge> : null}
+                        {ticket.escalatedTo ? <Badge className="bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200">Escalated: {ticket.escalatedTo.name}</Badge> : null}
+                        {ticket.slaStatus?.hasBreach ? <Badge className="bg-red-100 text-red-700 border-red-200">SLA Breach</Badge> : null}
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-2">{ticket.description}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* Lifecycle Progress Bar */}
       <div className="bg-white rounded-[2rem] p-6 px-10 shadow-xl border border-gray-100">
@@ -344,10 +811,52 @@ export default function LearnerProfile() {
             {progressLoading ? (
               <Skeleton className="h-96 w-full rounded-2xl" />
             ) : progress ? (
-              <ProgressTimeline
-                completedMilestones={progress.completedMilestones}
-                pendingMilestones={progress.pendingMilestones}
-              />
+              <div className="space-y-6">
+                <ProgressTimeline
+                  completedMilestones={progress.completedMilestones}
+                  pendingMilestones={progress.pendingMilestones}
+                />
+                <div className="bg-gray-50 rounded-2xl p-5 border border-gray-100">
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                      <h4 className="font-black text-gray-900">Operational Evidence Timeline</h4>
+                      <p className="text-sm text-gray-500">Placement, support, incident, and evaluation attachments in chronological order.</p>
+                    </div>
+                    <Badge variant="outline">{evidenceTimeline.length} files</Badge>
+                  </div>
+                  {evidenceTimeline.length === 0 ? (
+                    <p className="text-center text-gray-500 py-6">No operational evidence has been attached yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {evidenceTimeline.slice(0, 10).map((item: any) => (
+                        <div key={item._id} className="rounded-2xl bg-white border border-gray-100 p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-bold text-gray-900">{item.fileName}</p>
+                              <Badge className="bg-violet-100 text-violet-700 border-violet-200">{item.sourceType}</Badge>
+                              <Badge variant="outline">{item.category}</Badge>
+                            </div>
+                            <p className="text-sm text-gray-600 mt-1">{item.sourceLabel}</p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              Uploaded by {item.uploadedBy?.name || "Unknown"} on {format(new Date(item.createdAt), "PPp")}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="rounded-xl"
+                              onClick={() => window.open(item.url, "_blank", "noopener,noreferrer")}
+                            >
+                              View File
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             ) : (
               <p className="text-center text-gray-500 py-8">Unable to load timeline</p>
             )}
@@ -374,6 +883,17 @@ export default function LearnerProfile() {
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFB800]/5 rounded-bl-[100px] -z-10" />
                 <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><UserCircle2 className="h-5 w-5 text-gray-400"/> Biodata</h3>
                 <div className="space-y-4">
+                    <div className="rounded-2xl border border-sky-100 bg-sky-50/60 p-4">
+                        <p className="text-xs text-sky-600 font-bold uppercase tracking-wider">Date of Birth</p>
+                        <p className="text-sm font-semibold text-gray-900 mt-1">{learner.dateOfBirth ? format(new Date(learner.dateOfBirth), 'PP') : 'N/A'}</p>
+                        {learner.dateOfBirth ? (
+                          <p className="text-xs text-gray-500 mt-1">
+                            {guardianConsent?.requiresConsent ? 'Under 18 consent workflow applies.' : 'No under-18 consent required based on current age.'}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-amber-700 mt-1">Add date of birth to enable under-18 consent checks.</p>
+                        )}
+                    </div>
                     <div className="flex items-center gap-3">
                         <div className="p-2 bg-gray-50 rounded-xl"><Mail className="h-4 w-4 text-gray-500"/></div>
                         <div>
@@ -410,13 +930,87 @@ export default function LearnerProfile() {
                         </div>
                     </div>
                 </div>
+
+                <div className="mt-6 rounded-2xl border border-teal-100 bg-teal-50/60 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <p className="text-xs text-teal-600 font-bold uppercase tracking-wider">Guardian Portal Accounts</p>
+                            <p className="text-sm text-gray-600 mt-1">
+                                {linkedGuardians.length === 0
+                                    ? 'No guardian portal account is linked to this learner yet.'
+                                    : `${linkedGuardians.length} guardian account${linkedGuardians.length === 1 ? '' : 's'} linked to this learner.`}
+                            </p>
+                        </div>
+                        {canManageGuardians ? (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                className="rounded-xl border-teal-200 bg-white text-teal-700 hover:bg-teal-50"
+                                onClick={() => navigate(`/users?role=Guardian&create=guardian&learnerId=${learner._id}`)}
+                            >
+                                <Plus className="mr-1 h-3 w-3" /> Add Guardian
+                            </Button>
+                        ) : null}
+                    </div>
+
+                    {linkedGuardians.length > 0 ? (
+                        <div className="mt-4 space-y-3">
+                            {linkedGuardians.map((guardian) => (
+                                <div key={guardian._id} className="rounded-2xl border border-teal-100 bg-white p-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p className="font-semibold text-gray-900">{guardian.name}</p>
+                                            <p className="text-xs text-gray-500 mt-1">{guardian.email}</p>
+                                            {guardian.phone ? <p className="text-xs text-gray-500 mt-1">{guardian.phone}</p> : null}
+                                        </div>
+                                        <Badge className={guardian.status === 'Active' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-gray-100 text-gray-700 border-gray-200'}>
+                                            {guardian.status}
+                                        </Badge>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
+                </div>
+
+                {guardianConsent?.requiresConsent ? (
+                  <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-wider text-amber-700">Under-18 Consent</p>
+                        <p className="mt-2 text-sm text-gray-700">
+                          Status: <span className="font-semibold">{guardianConsent.status}</span>
+                          {typeof guardianConsent.age === 'number' ? ` · Age ${guardianConsent.age}` : ''}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-600">
+                          Industry: {guardianConsent.industryName || 'Not assigned'} · Start: {guardianConsent.startDate ? format(new Date(guardianConsent.startDate), 'PP') : 'TBD'} · End: {guardianConsent.endDate ? format(new Date(guardianConsent.endDate), 'PP') : 'TBD'}
+                        </p>
+                        {guardianConsent.status === 'Signed' ? (
+                          <p className="mt-2 text-xs text-emerald-700">
+                            Signed by {guardianConsent.signedByName} ({guardianConsent.relationshipToLearner}) on {guardianConsent.signedAt ? format(new Date(guardianConsent.signedAt), 'PP') : 'N/A'}.
+                          </p>
+                        ) : (
+                          <p className="mt-2 text-xs text-amber-800">Waiting for parent or guardian consent in the guardian portal.</p>
+                        )}
+                      </div>
+                      <Badge className={guardianConsent.status === 'Signed' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-700 border-amber-200'}>
+                        {guardianConsent.status}
+                      </Badge>
+                    </div>
+                  </div>
+                ) : null}
             </div>
 
-            {/* Placements Card */}
+            {/* Placement History Card */}
             <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
                 <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold text-lg flex items-center gap-2"><MapPin className="h-5 w-5 text-indigo-400"/> Placements</h3>
-                    {currentStage === 'Pending' && (
+                    <div>
+                      <h3 className="font-bold text-lg flex items-center gap-2"><MapPin className="h-5 w-5 text-indigo-400"/> Placement History</h3>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {placementHistory.length} recorded WEL cycle{placementHistory.length === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    {canInitiatePlacement && (
                         <Button size="sm" onClick={() => setPlacementOpen(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-xl h-8 px-3">
                             <Plus className="mr-1 h-3 w-3" /> Add
                         </Button>
@@ -425,8 +1019,8 @@ export default function LearnerProfile() {
                 {placements.length === 0 ? (
                     <div className="text-center py-6">
                         <MapPin className="h-10 w-10 text-gray-200 mx-auto mb-2" />
-                        <p className="text-sm text-gray-400 font-medium">No placements yet</p>
-                        {currentStage === 'Pending' && (
+                        <p className="text-sm text-gray-400 font-medium">No placement history yet</p>
+                        {canInitiatePlacement && (
                             <Button variant="ghost" size="sm" onClick={() => setPlacementOpen(true)} className="mt-2 text-indigo-600 hover:text-indigo-700 text-xs font-bold">
                                 Initiate first placement →
                             </Button>
@@ -434,14 +1028,27 @@ export default function LearnerProfile() {
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        {placements.map((p, i) => (
-                            <div key={i} className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100/50">
-                                <h4 className="font-bold text-indigo-900">{p.companyName}</h4>
+                        {placementHistory.map((p: any) => (
+                            <div key={p.placementId} className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100/50">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <h4 className="font-bold text-indigo-900">{p.companyName}</h4>
+                                    <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-500 mt-1">
+                                      Cycle {p.cycleNumber}{p.academicYear ? ` · ${p.academicYear}` : ''}
+                                    </p>
+                                  </div>
+                                  <Badge className={`${p.status === 'Active' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : p.status === 'Completed' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-red-100 text-red-700 border-red-200'}`}>
+                                    {p.status}
+                                  </Badge>
+                                </div>
                                 <p className="text-xs text-indigo-600/70 mt-1 flex items-center gap-1">
                                     <Clock className="h-3 w-3" /> 
                                     {p.startDate ? format(new Date(p.startDate), 'MMM yyyy') : 'TBD'} - {p.endDate ? format(new Date(p.endDate), 'MMM yyyy') : 'TBD'}
                                 </p>
                                 <p className="text-xs text-gray-600 mt-2">{p.location}</p>
+                                {p.sector ? <p className="text-xs text-gray-500 mt-1">Sector: {p.sector}</p> : null}
+                                {p.partnerName ? <p className="text-xs text-gray-500 mt-1">Partner: {p.partnerName}</p> : null}
+                                {p.supervisorName ? <p className="text-xs text-gray-500 mt-1">Supervisor: {p.supervisorName}</p> : null}
                             </div>
                         ))}
                     </div>
@@ -619,21 +1226,12 @@ export default function LearnerProfile() {
 
         {/* Documents Section - Horizontal Card Layout */}
         <div className="bg-white rounded-[2rem] p-3 md:p-6 shadow-xl border border-gray-100 mt-6 lg:mt-0 lg:col-span-2">
-            <div className="flex flex-col lg:flex-row gap-6 p-4 md:p-8 border border-gray-50 rounded-[2.5rem] bg-violet-50/30">
-                <div className="flex-1">
-                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-                        <Paperclip className="h-5 w-5 text-violet-500"/> Documents
-                        <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-lg">{documents.length}</span>
-                    </h3>
-                    <DocumentList documents={documents} onDelete={fetchDocuments} loading={docsLoading} />
-                </div>
-                
-                <div className="lg:w-80 shrink-0">
-                    <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-violet-100 h-full flex flex-col">
-                        <p className="text-xs font-black text-gray-400 uppercase tracking-wider mb-4">Upload Document</p>
-                        <DocumentUpload learnerId={id} onUploadSuccess={fetchDocuments} />
-                    </div>
-                </div>
+            <div className="p-4 md:p-8 border border-gray-50 rounded-[2.5rem] bg-violet-50/30">
+                <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                    <Paperclip className="h-5 w-5 text-violet-500"/> Documents
+                    <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-lg">{documents.length}</span>
+                </h3>
+                <DocumentList documents={documents} onDelete={fetchDocuments} loading={docsLoading} />
             </div>
         </div>
 
@@ -678,26 +1276,106 @@ export default function LearnerProfile() {
         <DialogContent className="sm:max-w-[700px] overflow-y-auto max-h-[90vh] rounded-[2rem] border-0 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
-              <DialogTitle className="text-2xl font-black">Edit {learner.name}</DialogTitle>
-              <DialogDescription className="font-bold text-gray-400">Update learner information.</DialogDescription>
+              <DialogTitle className="text-2xl font-black">Update Learner Profile</DialogTitle>
+              <DialogDescription className="font-bold text-gray-400">Keep biodata, guardian details, and academic information accurate for placements, consent, and progress tracking.</DialogDescription>
             </DialogHeader>
-            <div className="bg-gray-900 p-8 rounded-[2rem] shadow-inner">
+            <div className="mb-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Learner</p>
+                <p className="mt-2 text-sm font-bold text-slate-900">{learner.name}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Tracking ID</p>
+                <p className="mt-2 text-sm font-bold text-slate-900 font-mono">{learner.trackingId}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Current Status</p>
+                <p className="mt-2 text-sm font-bold text-slate-900">{learner.academicStatus || 'Active'} · {learner.status || 'Pending'}</p>
+              </div>
+            </div>
+            <div className="bg-white p-8 rounded-[2rem] shadow-inner border border-slate-200">
               <LearnerForm
                 onSuccess={() => { setEditOpen(false); handleFormSuccess(); }}
-                initialData={{
-                  _id: learner._id,
-                  lastName: learner.lastName || '',
-                  firstName: learner.firstName || '',
-                  middleName: learner.middleName || '',
-                  gender: learner.gender || 'Male',
-                  phone: learner.phone || '',
-                  guardianContact: learner.guardianContact || '',
-                  indexNumber: learner.indexNumber || '',
-                  program: learner.program || '',
-                  year: learner.year || '',
-                  status: learner.status || 'Pending',
-                }}
+                mode="profile-edit"
+                initialData={learnerEditInitialData || undefined}
               />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={supportOpen} onOpenChange={setSupportOpen}>
+        <DialogContent className="sm:max-w-[700px] overflow-y-auto max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle>Report Placement Blocker</DialogTitle>
+            <DialogDescription>Create a support ticket linked to this learner and active placement.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Input
+              placeholder="Subject"
+              value={supportDraft.subject}
+              onChange={(e) => setSupportDraft((current) => ({ ...current, subject: e.target.value }))}
+            />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Select value={supportDraft.category} onValueChange={(value) => setSupportDraft((current) => ({ ...current, category: value }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Technical">Technical</SelectItem>
+                  <SelectItem value="Access">Access</SelectItem>
+                  <SelectItem value="Data">Data</SelectItem>
+                  <SelectItem value="Workflow">Workflow</SelectItem>
+                  <SelectItem value="Training">Training</SelectItem>
+                  <SelectItem value="Other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={supportDraft.priority} onValueChange={(value) => setSupportDraft((current) => ({ ...current, priority: value }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Low">Low</SelectItem>
+                  <SelectItem value="Medium">Medium</SelectItem>
+                  <SelectItem value="High">High</SelectItem>
+                  <SelectItem value="Urgent">Urgent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Textarea
+              placeholder="Describe the blocker, expected outcome, and impact on the placement."
+              value={supportDraft.description}
+              onChange={(e) => setSupportDraft((current) => ({ ...current, description: e.target.value }))}
+            />
+            <Button onClick={createSupportBlocker} className="w-full rounded-xl bg-red-600 hover:bg-red-700 text-white">
+              <AlertTriangle className="mr-2 h-4 w-4" />
+              Create Blocker Ticket
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={learnerAgreementOpen} onOpenChange={setLearnerAgreementOpen}>
+        <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh] rounded-[2rem] border-0 shadow-2xl p-0">
+          <div className="p-8">
+            <DialogHeader className="mb-6">
+              <DialogTitle className="text-2xl font-black">Learner Agreement</DialogTitle>
+              <DialogDescription className="font-bold text-gray-400">Record the learner agreement for the current WEL placement.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-5">
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-5">
+                <p className="text-sm text-gray-700">
+                  By signing, the learner agrees to follow lawful directions, comply with workplace safety and behaviour rules, attend on time, report absence and incidents promptly, dress appropriately, and acknowledges that the WEL arrangement is unpaid and requires prior occupational health and safety preparation.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Input placeholder="Learner full name" value={learnerAgreementDraft.learnerName} onChange={(e) => setLearnerAgreementDraft((current) => ({ ...current, learnerName: e.target.value }))} />
+                <Input placeholder="Type learner name as signature" value={learnerAgreementDraft.signatureName} onChange={(e) => setLearnerAgreementDraft((current) => ({ ...current, signatureName: e.target.value }))} />
+              </div>
+              <Button className="w-full rounded-xl bg-amber-500 hover:bg-amber-600 text-white" onClick={signLearnerAgreement}>
+                <FileSignature className="mr-2 h-4 w-4" />
+                Sign Learner Agreement
+              </Button>
             </div>
           </div>
         </DialogContent>

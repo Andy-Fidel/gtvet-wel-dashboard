@@ -1,4 +1,4 @@
-import { Bell, LogOut, User } from "lucide-react"
+import { Bell, LogOut, RefreshCw, User, WifiOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -19,8 +19,9 @@ import { formatDistanceToNow } from "date-fns"
 export function Navbar() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
+  const { user, logout, offlineQueueCount, isSyncingOfflineQueue } = useAuth()
   const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications()
+  const isGuardian = user?.role === "Guardian"
   
   const getPageTitle = (pathname: string) => {
     switch(pathname) {
@@ -30,11 +31,14 @@ export function Navbar() {
       case '/attendance-logs': return 'Attendance & Hours';
       case '/support-center': return 'Help & Support';
       case '/activity-log': return 'Activity & Audit Log';
+      case '/offline-sync': return 'Offline Sync';
       case '/monitoring-visits': return 'Monitoring Visits';
       case '/semester-reports': return 'Semester Reports';
       case '/users': return 'User Management';
       case '/system-overview': return 'System Overview';
       case '/academic-calendar': return 'Academic Calendar';
+      case '/guardian-dashboard': return 'Guardian Portal';
+      case '/settings': return 'Settings';
       default: return 'Dashboard';
     }
   }
@@ -64,20 +68,36 @@ export function Navbar() {
           <div className="w-2 h-2 bg-white rounded-full" />
           <span className="hidden md:inline">Live</span>
         </div>
+        {offlineQueueCount > 0 && (
+          <button
+            type="button"
+            onClick={() => navigate('/offline-sync')}
+            className="hidden sm:flex items-center gap-2 bg-amber-100 px-3 py-2 rounded-xl text-amber-800 text-[10px] md:text-xs font-black uppercase tracking-wider shadow-sm hover:bg-amber-200 transition-colors"
+          >
+            {isSyncingOfflineQueue ? (
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <WifiOff className="h-3.5 w-3.5" />
+            )}
+            <span>{isSyncingOfflineQueue ? `Syncing ${offlineQueueCount}` : `${offlineQueueCount} Offline`}</span>
+          </button>
+        )}
         <h2 className="text-lg md:text-xl font-black text-gray-900 tracking-tight truncate max-w-[150px] md:max-w-none">
           {getPageTitle(location.pathname)}
         </h2>
       </div>
 
-      <div className="hidden lg:block flex-1 max-w-md mx-8">
+      <div className={`hidden lg:block flex-1 max-w-md mx-8 ${isGuardian ? "invisible pointer-events-none" : ""}`}>
         <Search />
       </div>
 
       <div className="flex items-center gap-2 md:gap-8">
         <div className="flex items-center gap-1 sm:gap-2 md:gap-4 flex-1 justify-end">
-          <div className="lg:hidden w-[150px] sm:w-auto">
-            <Search />
-          </div>
+          {!isGuardian ? (
+            <div className="lg:hidden w-[150px] sm:w-auto">
+              <Search />
+            </div>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="relative h-10 w-10 md:h-12 md:w-12 rounded-2xl bg-gray-50 text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-all cursor-pointer">

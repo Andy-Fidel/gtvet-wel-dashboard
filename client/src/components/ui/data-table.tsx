@@ -39,6 +39,10 @@ interface DataTableProps<TData, TValue> {
   exportTitle?: string
 }
 
+type ExportableColumnMeta<TData> = {
+  exportValue?: (row: TData) => string | number | boolean | null | undefined
+}
+
 export function DataTable<TData, TValue>({
   columns,
   data,
@@ -75,6 +79,24 @@ export function DataTable<TData, TValue>({
     meta,
   })
 
+  const getExportCellValue = (row: ReturnType<typeof table.getCoreRowModel>["rows"][number], col: ReturnType<typeof table.getVisibleLeafColumns>[number]) => {
+    const columnMeta = col.columnDef.meta as ExportableColumnMeta<TData> | undefined
+    if (columnMeta?.exportValue) {
+      return columnMeta.exportValue(row.original)
+    }
+
+    const val = row.getValue(col.id)
+    if (val !== undefined) return val
+
+    const accessorKey = (col.columnDef as { accessorKey?: string }).accessorKey
+    if (typeof accessorKey === "string") {
+      const original = row.original as Record<string, unknown>
+      return original?.[accessorKey]
+    }
+
+    return ""
+  }
+
   const downloadCSV = () => {
     if (!data.length) return;
     
@@ -83,7 +105,7 @@ export function DataTable<TData, TValue>({
     
     const rowsExport = table.getCoreRowModel().rows.map(row => {
       return visibleColumns.map(col => {
-        const val = row.getValue(col.id);
+        const val = getExportCellValue(row, col);
         const str = val === null || val === undefined ? '' : typeof val === 'object' ? JSON.stringify(val) : String(val);
         return str.includes(",") || str.includes('\n') || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
       }).join(",");
@@ -134,7 +156,7 @@ export function DataTable<TData, TValue>({
     
     const rowsExport = table.getCoreRowModel().rows.map(row => {
       return visibleColumns.map(col => {
-        const val = row.getValue(col.id);
+        const val = getExportCellValue(row, col);
         if (val === null || val === undefined) return '';
         if (typeof val === 'object') return JSON.stringify(val);
         return String(val);

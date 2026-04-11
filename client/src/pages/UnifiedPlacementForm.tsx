@@ -16,7 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
-import { Loader2, Search, Building2, Terminal } from "lucide-react"
+import { Loader2, Search, Building2, Terminal, ShieldAlert } from "lucide-react"
 import type { IndustryPartner, Learner } from '@/types/models'
 
 const formSchema = z.object({
@@ -28,6 +28,7 @@ const formSchema = z.object({
   sector: z.string().optional(),
   location: z.string().optional(),
   supervisorName: z.string().optional(),
+  supervisorPhone: z.string().optional(),
   supervisorEmail: z.string().email("Invalid email").optional().or(z.literal('')),
   
   // Shared fields
@@ -83,6 +84,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         sector: "",
         location: "",
         supervisorName: "",
+        supervisorPhone: "",
         supervisorEmail: ""
     },
   })
@@ -96,7 +98,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
            authFetch('/api/industry-partners'),
            preSelectedLearnerId 
              ? authFetch(`/api/learners/${preSelectedLearnerId}`) // Fetch just the one if pre-selected
-             : authFetch('/api/learners?status=Pending')
+             : authFetch('/api/learners?availableForPlacement=true')
         ]);
         
         const pData: IndustryPartner[] = await partnersRes.json();
@@ -134,9 +136,25 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
       return groups;
   }, [learners, searchQuery]);
 
+  const selectedLearnerIds = form.watch("learners")
+
+  const formatMissingField = (field: string) => {
+      if (field === 'requiredDocuments') return 'required documents'
+      if (field === 'phone') return 'phone number'
+      return field
+  }
+
   async function onSubmit(data: FormValues) {
     if (data.learners.length === 0) {
         toast.error("Please select at least one learner.");
+        return;
+    }
+
+    const blockedLearners = learners.filter((learner) =>
+      data.learners.includes(learner._id) && !learner.readiness?.isReadyForPlacement
+    );
+    if (blockedLearners.length > 0) {
+        toast.error(`Complete intake readiness first: ${blockedLearners.map((learner) => learner.name).join(", ")}`);
         return;
     }
 
@@ -182,6 +200,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 sector: data.sector,
                 location: data.location,
                 supervisorName: data.supervisorName,
+                supervisorPhone: data.supervisorPhone,
                 supervisorEmail: data.supervisorEmail,
                 startDate: data.startDate,
                 endDate: data.endDate
@@ -218,6 +237,33 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        {selectedLearnerIds.length > 0 && (() => {
+            const blockedLearners = learners.filter((learner) =>
+                selectedLearnerIds.includes(learner._id) && !learner.readiness?.isReadyForPlacement
+            )
+
+            if (blockedLearners.length === 0) return null
+
+            return (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    <div className="flex items-center gap-2 font-bold">
+                        <ShieldAlert className="h-4 w-4" />
+                        Placement blocked until intake readiness is complete
+                    </div>
+                    <div className="mt-2 space-y-1">
+                        {blockedLearners.map((learner) => (
+                            <p key={learner._id}>
+                                {learner.name}: {(learner.readiness?.missingFields || []).map(formatMissingField).join(", ")}
+                            </p>
+                        ))}
+                    </div>
+                </div>
+            )
+        })()}
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          Eligible learners are current students without an active placement. Previous WEL cycles stay attached to the learner profile as placement history.
+        </div>
         
         {/* Placement Type Toggle */}
         <div className="flex bg-gray-100 p-1 rounded-2xl w-full max-w-md mx-auto">
@@ -305,13 +351,22 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                         </FormItem>
                     )} />
                 </div>
-                <FormField control={form.control} name="supervisorEmail" render={({ field }) => (
-                    <FormItem>
-                    <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Email (Optional)</FormLabel>
-                    <FormControl><Input placeholder="supervisor@company.com" type="email" className="bg-white" {...field} /></FormControl>
-                    <FormMessage />
-                    </FormItem>
-                )} />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField control={form.control} name="supervisorPhone" render={({ field }) => (
+                        <FormItem>
+                        <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Phone</FormLabel>
+                        <FormControl><Input placeholder="+233..." className="bg-white" {...field} /></FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )} />
+                    <FormField control={form.control} name="supervisorEmail" render={({ field }) => (
+                        <FormItem>
+                        <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Email</FormLabel>
+                        <FormControl><Input placeholder="supervisor@company.com" type="email" className="bg-white" {...field} /></FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )} />
+                </div>
             </div>
         )}
 
@@ -336,7 +391,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                             <div className="relative">
                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                                 <Input 
-                                    placeholder="Search pending learners by name or tracking ID..." 
+                                    placeholder="Search eligible learners by name or tracking ID..." 
                                     value={searchQuery}
                                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
                                     className="h-10 pl-9 bg-gray-50 border-transparent"
@@ -344,7 +399,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                             </div>
                         
                             {Object.keys(learnersByProgram).length === 0 && (
-                                <div className="text-center text-sm text-gray-500 py-8">No pending learners found.</div>
+                                <div className="text-center text-sm text-gray-500 py-8">No eligible learners found.</div>
                             )}
                             {Object.entries(learnersByProgram).map(([program, programLearners]) => (
                                 <div key={program}>
@@ -361,6 +416,11 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                                                 <div className="leading-tight">
                                                     <label htmlFor={learner._id} className="font-semibold cursor-pointer text-sm">{learner.firstName} {learner.lastName}</label>
                                                     <p className="text-xs opacity-70 mt-0.5 font-mono">{learner.trackingId}</p>
+                                                    {!learner.readiness?.isReadyForPlacement && (
+                                                        <p className="text-xs text-amber-700 font-semibold mt-1">
+                                                            Missing: {(learner.readiness?.missingFields || []).map(formatMissingField).join(", ")}
+                                                        </p>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}

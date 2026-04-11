@@ -22,6 +22,17 @@ import { Download, Plus, AlignLeft, Building2, Users as UsersIcon } from "lucide
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { PlacementMessagesDialog } from "@/components/PlacementMessagesDialog"
+import { DocumentList } from "@/components/DocumentList"
+import { Handshake, Search as SearchIcon, Loader2, X } from "lucide-react"
+import { Input } from "@/components/ui/input"
+
+type DelegateUser = {
+  _id: string;
+  name: string;
+  role: string;
+  institution: string;
+};
 
 export type PlacementRequestData = {
   _id: string;
@@ -47,7 +58,21 @@ export default function Placements() {
     const [editingPlacement, setEditingPlacement] = useState<Placement | null>(null)
     const [refreshKey, setRefreshKey] = useState(0)
     const [sorting, setSorting] = useState<SortingState>([])
+    const [messagesOpen, setMessagesOpen] = useState(false)
+    const [activePlacementId, setActivePlacementId] = useState<string | null>(null)
+    const [evidenceOpen, setEvidenceOpen] = useState(false)
+    const [evidenceLoading, setEvidenceLoading] = useState(false)
+    const [evidencePlacement, setEvidencePlacement] = useState<Placement | null>(null)
+    const [evidenceDocuments, setEvidenceDocuments] = useState<any[]>([])
     const { authFetch, user } = useAuth()
+
+    // Delegate assignment state
+    const [delegateOpen, setDelegateOpen] = useState(false)
+    const [delegatePlacement, setDelegatePlacement] = useState<Placement | null>(null)
+    const [delegateCandidates, setDelegateCandidates] = useState<DelegateUser[]>([])
+    const [delegateSearch, setDelegateSearch] = useState('')
+    const [delegateLoading, setDelegateLoading] = useState(false)
+    const [delegateSaving, setDelegateSaving] = useState(false)
     
     useEffect(() => {
         const fetchData = async () => {
@@ -101,6 +126,121 @@ export default function Placements() {
                 console.error("Error deleting placement:", error)
                 toast.error("Failed to delete placement")
             }
+        }
+    }
+
+    const handleOpenMessages = (placement: Placement) => {
+        setActivePlacementId(placement._id)
+        setMessagesOpen(true)
+    }
+
+    const handleMessageCreated = (placementId: string, createdAt: string) => {
+        setData((current) =>
+            current.map((placement) =>
+                placement._id === placementId
+                    ? {
+                        ...placement,
+                        messageCount: (placement.messageCount || 0) + 1,
+                        lastMessageAt: createdAt,
+                        unreadMessageCount: 0,
+                    }
+                    : placement
+            )
+        )
+    }
+
+    const handleConversationRead = (placementId: string) => {
+        setData((current) =>
+            current.map((placement) =>
+                placement._id === placementId
+                    ? { ...placement, unreadMessageCount: 0 }
+                    : placement
+            )
+        )
+    }
+
+    const handleOpenEvidence = async (placement: Placement) => {
+        setEvidencePlacement(placement)
+        setEvidenceOpen(true)
+        setEvidenceLoading(true)
+        try {
+            const res = await authFetch(`/api/placements/${placement._id}/evidence`)
+            if (!res.ok) throw new Error("Failed to fetch placement evidence")
+            const payload = await res.json()
+            setEvidenceDocuments(payload.evidence || [])
+        } catch (error) {
+            console.error("Error fetching placement evidence:", error)
+            toast.error("Failed to load placement evidence")
+            setEvidenceDocuments([])
+        } finally {
+            setEvidenceLoading(false)
+        }
+    }
+
+    const handleAssignDelegate = async (placement: Placement) => {
+        setDelegatePlacement(placement)
+        setDelegateOpen(true)
+        setDelegateSearch('')
+        setDelegateCandidates([])
+
+        if (!placement.placementRegion) {
+            toast.warning("Please set the placement region on this placement first (edit the placement and add the region).")
+            return
+        }
+
+        setDelegateLoading(true)
+        try {
+            const res = await authFetch(`/api/users/by-region/${encodeURIComponent(placement.placementRegion)}`)
+            if (!res.ok) throw new Error("Failed to fetch users")
+            const users = await res.json()
+            setDelegateCandidates(users)
+        } catch {
+            toast.error("Failed to load users in the placement region")
+        } finally {
+            setDelegateLoading(false)
+        }
+    }
+
+    const handleSelectDelegate = async (delegateId: string) => {
+        if (!delegatePlacement) return
+        setDelegateSaving(true)
+        try {
+            const res = await authFetch(`/api/placements/${delegatePlacement._id}/delegate`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delegateId }),
+            })
+            if (!res.ok) {
+                const err = await res.json()
+                throw new Error(err.message || 'Failed to assign delegate')
+            }
+            toast.success("Delegate assigned successfully")
+            setDelegateOpen(false)
+            setRefreshKey(prev => prev + 1)
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to assign delegate")
+        } finally {
+            setDelegateSaving(false)
+        }
+    }
+
+    const handleRemoveDelegate = async () => {
+        if (!delegatePlacement) return
+        setDelegateSaving(true)
+        try {
+            const res = await authFetch(`/api/placements/${delegatePlacement._id}/delegate`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delegateId: null }),
+            })
+            if (!res.ok) throw new Error('Failed to remove delegate')
+            toast.success("Delegate removed")
+            setDelegateOpen(false)
+            setRefreshKey(prev => prev + 1)
+        } catch {
+            toast.error("Failed to remove delegate")
+        } finally {
+            setDelegateSaving(false)
         }
     }
 
@@ -161,7 +301,7 @@ export default function Placements() {
 
             {/* Edit Dialog */}
             <Dialog open={editOpen} onOpenChange={setEditOpen}>
-                <DialogContent className="sm:max-w-[600px] overflow-y-auto max-h-[90vh]">
+                <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[600px] overflow-y-auto max-h-[90vh]">
                     <DialogHeader>
                     <DialogTitle>Edit Placement</DialogTitle>
                     <DialogDescription>Update the placement details for this learner.</DialogDescription>
@@ -172,7 +312,7 @@ export default function Placements() {
 
             {/* New Unified Placement Dialog */}
             <Dialog open={newOpen} onOpenChange={setNewOpen}>
-                <DialogContent className="sm:max-w-[700px] bg-white border-none rounded-[2rem] shadow-2xl overflow-hidden p-0 max-h-[90vh] overflow-y-auto">
+                <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[700px] bg-white border-none rounded-[2rem] shadow-2xl overflow-hidden p-0 max-h-[90vh] overflow-y-auto">
                     <div className="p-8">
                         <DialogHeader className="mb-6">
                             <DialogTitle className="text-2xl font-black">Initiate Placement Workflow</DialogTitle>
@@ -181,6 +321,34 @@ export default function Placements() {
                             </DialogDescription>
                         </DialogHeader>
                         <UnifiedPlacementForm onSuccess={handleNewSuccess} />
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            <PlacementMessagesDialog
+                open={messagesOpen}
+                onOpenChange={setMessagesOpen}
+                placementId={activePlacementId}
+                authFetch={authFetch}
+                currentUserId={user?._id}
+                onMessageCreated={handleMessageCreated}
+                onConversationRead={handleConversationRead}
+            />
+
+            <Dialog open={evidenceOpen} onOpenChange={setEvidenceOpen}>
+                <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[900px] bg-white border-none rounded-[2rem] shadow-2xl overflow-hidden p-0 max-h-[90vh] overflow-y-auto">
+                    <div className="p-8">
+                        <DialogHeader className="mb-6">
+                            <DialogTitle className="text-2xl font-black">Placement Evidence</DialogTitle>
+                            <DialogDescription className="font-medium text-gray-500">
+                                {evidencePlacement
+                                  ? `${evidencePlacement.companyName} · ${evidencePlacement.learner?.name || "Learner"}`
+                                  : "Placement evidence and operational attachments"}
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="rounded-[2rem] border border-violet-100 bg-violet-50/40 p-6">
+                            <DocumentList documents={evidenceDocuments} onDelete={() => evidencePlacement && handleOpenEvidence(evidencePlacement)} loading={evidenceLoading} />
+                        </div>
                     </div>
                 </DialogContent>
             </Dialog>
@@ -196,7 +364,54 @@ export default function Placements() {
                         </TabsTrigger>
                     </TabsList>
 
-                    <TabsContent value="all" className="mt-0 outline-none">
+                    <TabsContent value="all" className="mt-0 outline-none space-y-4">
+                        {/* Health Summary Strip */}
+                        {!loading && data.length > 0 && (() => {
+                            const scored = data.filter(p => p.healthScore);
+                            if (scored.length === 0) return null;
+                            const avgScore = Math.round(scored.reduce((s, p) => s + (p.healthScore?.score || 0), 0) / scored.length);
+                            const gradeCount = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+                            scored.forEach(p => {
+                                const g = p.healthScore?.grade || 'F';
+                                if (g in gradeCount) gradeCount[g as keyof typeof gradeCount]++;
+                            });
+                            const criticalCount = gradeCount.D + gradeCount.F;
+                            const avgGrade = avgScore >= 80 ? 'A' : avgScore >= 60 ? 'B' : avgScore >= 40 ? 'C' : avgScore >= 20 ? 'D' : 'F';
+                            const avgColor = avgGrade === 'A' ? 'text-emerald-600' : avgGrade === 'B' ? 'text-blue-600' : avgGrade === 'C' ? 'text-amber-600' : 'text-red-600';
+                            return (
+                                <div className="rounded-2xl bg-white border border-gray-100 shadow-sm px-6 py-4">
+                                    <div className="flex flex-wrap items-center gap-6 lg:gap-10">
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2.5 bg-emerald-50 rounded-xl">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></svg>
+                                            </div>
+                                            <div>
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Avg Health</p>
+                                                <p className={`text-xl font-black ${avgColor}`}>{avgScore}<span className="text-sm opacity-70 ml-0.5">/{100}</span></p>
+                                            </div>
+                                        </div>
+                                        <div className="h-10 w-px bg-gray-100 hidden lg:block" />
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            {([['A', 'bg-emerald-100 text-emerald-700'], ['B', 'bg-blue-100 text-blue-700'], ['C', 'bg-amber-100 text-amber-700'], ['D', 'bg-orange-100 text-orange-700'], ['F', 'bg-red-100 text-red-700']] as const).map(([grade, cls]) => (
+                                                <span key={grade} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-black ${cls}`}>
+                                                    {grade}: {gradeCount[grade]}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        {criticalCount > 0 && (
+                                            <>
+                                                <div className="h-10 w-px bg-gray-100 hidden lg:block" />
+                                                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-red-50 border border-red-100">
+                                                    <span className="text-xs font-black text-red-600">{criticalCount} critical</span>
+                                                    <span className="text-[10px] font-bold text-red-400">need attention</span>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
                         <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden w-full relative z-0">
                             {loading ? (
                                 <div className="p-4 space-y-4">
@@ -213,6 +428,9 @@ export default function Placements() {
                                         meta={{ 
                                             onEdit: handleEdit, 
                                             onDelete: handleDelete,
+                                            onOpenMessages: handleOpenMessages,
+                                            onOpenEvidence: handleOpenEvidence,
+                                            onAssignDelegate: handleAssignDelegate,
                                             role: user?.role
                                         }} 
                                         sorting={sorting}
@@ -285,6 +503,96 @@ export default function Placements() {
                     </TabsContent>
                 </Tabs>
             </div>
+
+            {/* Delegate Assignment Dialog */}
+            <Dialog open={delegateOpen} onOpenChange={setDelegateOpen}>
+                <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[500px] overflow-y-auto max-h-[90vh]">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Handshake className="h-5 w-5 text-amber-600" />
+                            Assign Cross-Region Delegate
+                        </DialogTitle>
+                        <DialogDescription>
+                            {delegatePlacement ? (
+                                <>
+                                    Assign a liaison officer in <strong>{delegatePlacement.placementRegion || 'the placement region'}</strong> to
+                                    conduct monitoring visits for <strong>{delegatePlacement.learner?.name}</strong> at <strong>{delegatePlacement.companyName}</strong>.
+                                </>
+                            ) : 'Select a delegate to conduct monitoring visits.'}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {delegatePlacement?.delegate && (
+                        <div className="rounded-xl bg-amber-50 border border-amber-200 p-4">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-xs font-black uppercase tracking-wider text-amber-500 mb-1">Current Delegate</p>
+                                    <p className="font-bold text-amber-900">{delegatePlacement.delegate.name}</p>
+                                    <p className="text-xs text-amber-700">{delegatePlacement.delegate.institution} · {delegatePlacement.delegate.role}</p>
+                                </div>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-red-600 border-red-200 hover:bg-red-50"
+                                    onClick={handleRemoveDelegate}
+                                    disabled={delegateSaving}
+                                >
+                                    <X className="h-3.5 w-3.5 mr-1" /> Remove
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+
+                    {!delegatePlacement?.placementRegion ? (
+                        <div className="rounded-xl bg-red-50 border border-red-200 p-4 text-sm text-red-800">
+                            <strong>Placement region not set.</strong> Please edit this placement and set the placement region before assigning a delegate.
+                        </div>
+                    ) : (
+                        <>
+                            <div className="relative">
+                                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                                <Input
+                                    placeholder="Search officers by name or institution..."
+                                    value={delegateSearch}
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDelegateSearch(e.target.value)}
+                                    className="pl-9"
+                                />
+                            </div>
+
+                            <div className="max-h-[300px] overflow-y-auto space-y-1">
+                                {delegateLoading ? (
+                                    <div className="flex items-center justify-center p-8">
+                                        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+                                    </div>
+                                ) : delegateCandidates.length === 0 ? (
+                                    <div className="text-center text-sm text-gray-500 py-8">No officers found in this region.</div>
+                                ) : (
+                                    delegateCandidates
+                                        .filter(u => {
+                                            const q = delegateSearch.toLowerCase()
+                                            return !q || u.name.toLowerCase().includes(q) || u.institution.toLowerCase().includes(q)
+                                        })
+                                        .map(u => (
+                                            <button
+                                                key={u._id}
+                                                type="button"
+                                                onClick={() => handleSelectDelegate(u._id)}
+                                                disabled={delegateSaving}
+                                                className="w-full text-left flex items-center justify-between p-3 rounded-xl hover:bg-indigo-50 transition-colors border border-transparent hover:border-indigo-200"
+                                            >
+                                                <div>
+                                                    <p className="font-bold text-sm text-gray-900">{u.name}</p>
+                                                    <p className="text-xs text-gray-500">{u.institution} · {u.role}</p>
+                                                </div>
+                                                <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200 text-[10px]">Select</Badge>
+                                            </button>
+                                        ))
+                                )}
+                            </div>
+                        </>
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

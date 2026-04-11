@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import { format } from "date-fns"
 import { toast } from "sonner"
 import { ClipboardCheck, Clock3, Plus, CheckCircle2, AlertTriangle, Pencil, Trash2, FileClock } from "lucide-react"
@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { AttendanceLogForm } from "./AttendanceLogForm"
+import { clearOfflineConflictBridge, getOfflineConflictBridge } from "@/lib/offlineConflictBridge"
 
 type AttendanceStatus = "Pending" | "SignedOff" | "Rejected"
 type AttendanceEntryType = "Daily" | "Weekly"
@@ -26,6 +27,7 @@ interface AttendanceLog {
   tasksCompleted: string
   notes?: string
   status: AttendanceStatus
+  submittedSource: "Institution" | "Partner"
   supervisorComment?: string
   signedOffAt?: string
   learner: {
@@ -41,6 +43,7 @@ interface AttendanceLog {
     supervisorEmail?: string
   }
   submittedBy?: {
+    _id?: string
     name: string
     role: string
   }
@@ -57,6 +60,7 @@ export default function AttendanceLogs() {
   const { authFetch, user } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [logs, setLogs] = useState<AttendanceLog[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
@@ -93,6 +97,14 @@ export default function AttendanceLogs() {
     fetchLogs()
   }, [authFetch, learnerId, refreshKey, statusFilter, typeFilter])
 
+  useEffect(() => {
+    if (searchParams.get("offlineReview") !== "1") return
+    const bridge = getOfflineConflictBridge()
+    if (!bridge || bridge.type !== "attendance-log") return
+    setEditingLog(bridge.payload as unknown as AttendanceLog)
+    setOpen(true)
+  }, [searchParams])
+
   const filteredLogs = useMemo(() => {
     const query = searchQuery.toLowerCase()
     return logs.filter((log) => {
@@ -120,11 +132,22 @@ export default function AttendanceLogs() {
 
   const activeLearnerName = filteredLogs[0]?.learner.name
 
-  const handleSuccess = () => {
+  const handleSuccess = (result?: { offlineQueued?: boolean }) => {
+    const wasEditing = Boolean(editingLog)
     setOpen(false)
     setEditingLog(null)
+    clearOfflineConflictBridge()
+    if (searchParams.get("offlineReview")) {
+      const next = new URLSearchParams(searchParams)
+      next.delete("offlineReview")
+      setSearchParams(next, { replace: true })
+    }
+    if (result?.offlineQueued) {
+      toast.success(wasEditing ? "Attendance update saved offline. It will sync automatically." : "Attendance log saved offline. It will sync automatically.")
+      return
+    }
     setRefreshKey((prev) => prev + 1)
-    toast.success(editingLog ? "Attendance log updated" : "Attendance log saved")
+    toast.success(wasEditing ? "Attendance log updated" : "Attendance log saved")
   }
 
   const handleEdit = (log: AttendanceLog) => {
@@ -180,14 +203,24 @@ export default function AttendanceLogs() {
 
   return (
     <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(next) => {
+        setOpen(next)
+        if (!next && searchParams.get("offlineReview")) {
+          clearOfflineConflictBridge()
+          const nextParams = new URLSearchParams(searchParams)
+          nextParams.delete("offlineReview")
+          setSearchParams(nextParams, { replace: true })
+        }
+      }}>
         <DialogContent className="sm:max-w-[760px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="pt-6 px-6 pb-0">
             <DialogTitle className="text-gray-900">
               {editingLog ? "Edit Attendance Log" : "New Attendance Log"}
             </DialogTitle>
             <DialogDescription className="text-gray-500">
-              Record daily or weekly placement hours and send them for supervisor review.
+              {isIndustryPartner
+                ? "Record daily or weekly placement hours as the industry supervisor."
+                : "Record daily or weekly placement hours and send them for supervisor review."}
             </DialogDescription>
           </DialogHeader>
           <div className="px-6 pb-6">
@@ -209,7 +242,7 @@ export default function AttendanceLogs() {
           <p className="text-muted-foreground mt-1 font-medium">
             {learnerId && activeLearnerName
               ? `Viewing placement hours for ${activeLearnerName}.`
-              : "Track daily or weekly hours and manage supervisor sign-off."}
+              : "Track daily or weekly hours, see who recorded them, and manage supervisor sign-off."}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -218,11 +251,14 @@ export default function AttendanceLogs() {
               View All Logs
             </Button>
           )}
-          {!isIndustryPartner && (
-            <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold" onClick={() => { setEditingLog(null); setOpen(true) }}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Hours
-            </Button>
+          <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold" onClick={() => { setEditingLog(null); setOpen(true) }}>
+            <Plus className="mr-2 h-4 w-4" />
+            {isIndustryPartner ? "Record Hours" : "Add Hours"}
+          </Button>
+          {!isIndustryPartner ? (
+            <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200">Institution entry still enabled during transition</Badge>
+          ) : (
+            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Partner-originated hours supported</Badge>
           )}
         </div>
       </div>
@@ -333,6 +369,7 @@ export default function AttendanceLogs() {
                   <TableHead>Company</TableHead>
                   <TableHead>Hours</TableHead>
                   <TableHead>Type</TableHead>
+                  <TableHead>Source</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Supervisor</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -340,8 +377,8 @@ export default function AttendanceLogs() {
               </TableHeader>
               <TableBody>
                 {filteredLogs.map((log) => {
-                  const canEdit = !isIndustryPartner && log.status !== "SignedOff"
-                  const canSignOff = isIndustryPartner && log.status !== "SignedOff"
+                  const canEdit = log.status !== "SignedOff" && (!isIndustryPartner || log.submittedBy?._id === user?._id)
+                  const canSignOff = isIndustryPartner && log.status !== "SignedOff" && log.submittedSource !== "Partner"
                   return (
                     <TableRow key={log._id}>
                       <TableCell>
@@ -362,6 +399,18 @@ export default function AttendanceLogs() {
                       </TableCell>
                       <TableCell>
                         <Badge className="bg-slate-100 text-slate-700 border-slate-200">{log.entryType}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <Badge className={log.submittedSource === "Partner" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-indigo-100 text-indigo-700 border-indigo-200"}>
+                            {log.submittedSource}
+                          </Badge>
+                          {log.submittedBy ? (
+                            <div className="text-xs text-gray-500">
+                              {log.submittedBy.name} ({log.submittedBy.role})
+                            </div>
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell>{getStatusBadge(log.status)}</TableCell>
                       <TableCell>

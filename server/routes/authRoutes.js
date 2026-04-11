@@ -47,7 +47,9 @@ router.post('/register', auth, (req, res, next) => {
     // Generate token
     const token = jwt.sign({ userId: newUser._id }, JWT_SECRET, { expiresIn: '7d' });
 
-    const populatedUser = await User.findById(newUser._id).populate('partnerId');
+    const populatedUser = await User.findById(newUser._id)
+      .populate('partnerId')
+      .populate('linkedLearners', 'name trackingId');
     res.status(201).json({
       token,
       user: populatedUser.toJSON(),
@@ -63,21 +65,83 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email }).populate('partnerId');
+    const user = await User.findOne({ email })
+      .populate('partnerId')
+      .populate('linkedLearners', 'name trackingId');
     if (!user) {
+      await logAuditEvent({
+        req,
+        action: 'AUTH',
+        entityType: 'AuthSession',
+        entityId: email || 'unknown',
+        summary: `Failed login attempt for ${email || 'unknown email'}`,
+        metadata: {
+          outcome: 'FAILED',
+          email,
+          actorName: email || 'Unknown User',
+          actorRole: 'Unknown',
+          institution: 'N/A',
+          reason: 'User not found',
+        },
+      });
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
     if (user.status !== 'Active') {
+      await logAuditEvent({
+        req,
+        action: 'AUTH',
+        entityType: 'AuthSession',
+        entityId: user._id,
+        summary: `Blocked login for inactive user ${user.email}`,
+        metadata: {
+          outcome: 'FAILED',
+          email: user.email,
+          actorName: user.name,
+          actorRole: user.role,
+          institution: user.institution || 'N/A',
+          region: user.region || '',
+          reason: 'Inactive account',
+        },
+      });
       return res.status(401).json({ message: 'Account is inactive. Contact your administrator.' });
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      await logAuditEvent({
+        req,
+        action: 'AUTH',
+        entityType: 'AuthSession',
+        entityId: user._id,
+        summary: `Failed login attempt for ${user.email}`,
+        metadata: {
+          outcome: 'FAILED',
+          email: user.email,
+          actorName: user.name,
+          actorRole: user.role,
+          institution: user.institution || 'N/A',
+          region: user.region || '',
+          reason: 'Invalid password',
+        },
+      });
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+
+    user.lastLoginAt = new Date();
+    await user.save();
+
+    await logAuditEvent({
+      req,
+      actor: user,
+      action: 'AUTH',
+      entityType: 'AuthSession',
+      entityId: user._id,
+      summary: `Successful login for ${user.email}`,
+      metadata: { outcome: 'SUCCESS', email: user.email },
+    });
 
     res.json({
       token,
@@ -92,7 +156,9 @@ router.post('/login', async (req, res) => {
 
 // GET /api/auth/me
 router.get('/me', auth, async (req, res) => {
-  const user = await User.findById(req.user._id).populate('partnerId');
+  const user = await User.findById(req.user._id)
+    .populate('partnerId')
+    .populate('linkedLearners', 'name trackingId');
   if (!user) return res.status(404).json({ message: 'User not found' });
   res.json(user.toJSON());
 });
@@ -113,6 +179,9 @@ router.post('/change-password', auth, async (req, res) => {
 
     user.password = newPassword;
     user.passwordChangeRequired = false;
+    if (!user.inviteAcceptedAt) {
+      user.inviteAcceptedAt = new Date();
+    }
     await user.save();
 
     await logAuditEvent({
@@ -188,6 +257,9 @@ router.put('/reset-password/:token', async (req, res) => {
     // Set new password (it will be hashed by pre-save hook)
     user.password = newPassword;
     user.passwordChangeRequired = false;
+    if (!user.inviteAcceptedAt) {
+      user.inviteAcceptedAt = new Date();
+    }
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();

@@ -3,9 +3,11 @@ import { useAuth } from "@/context/AuthContext"
 import { useNavigate } from "react-router-dom"
 import { AlertCircle, User, Activity, Clock, ChevronRight } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Button } from "@/components/ui/button"
+import { toast } from "sonner"
 
 interface ActionAlert {
-  type: 'Needs Placement' | 'Needs Visit' | 'Needs Assessment';
+  type: 'Needs Placement' | 'Needs Visit' | 'Needs Assessment' | 'Setup Required' | 'Attendance Overdue' | 'Support Blocker';
   learnerId: string;
   learnerName: string;
   trackingId: string;
@@ -16,6 +18,7 @@ interface ActionAlert {
 export function ActionRequiredWidget() {
   const [alerts, setAlerts] = useState<ActionAlert[]>([])
   const [loading, setLoading] = useState(true)
+  const [sendingReminders, setSendingReminders] = useState(false)
   const { authFetch } = useAuth()
   const navigate = useNavigate()
 
@@ -35,6 +38,28 @@ export function ActionRequiredWidget() {
     }
     fetchAlerts()
   }, [authFetch])
+
+  const handleBulkReminders = async () => {
+    setSendingReminders(true)
+    try {
+      const res = await authFetch('/api/dashboard/bulk-reminders', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || 'Failed to send reminders')
+      toast.success(
+        data.remindersCreated > 0
+          ? `Sent ${data.remindersCreated} reminder notification(s)`
+          : 'No new reminders were needed'
+      )
+    } catch (error) {
+      console.error('Failed to send bulk reminders', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to send reminders')
+    } finally {
+      setSendingReminders(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -63,6 +88,9 @@ export function ActionRequiredWidget() {
       case 'Needs Placement': return <User className="w-5 h-5 text-indigo-500" />;
       case 'Needs Visit': return <Clock className="w-5 h-5 text-amber-500" />;
       case 'Needs Assessment': return <AlertCircle className="w-5 h-5 text-pink-500" />;
+      case 'Setup Required': return <AlertCircle className="w-5 h-5 text-orange-500" />;
+      case 'Attendance Overdue': return <Clock className="w-5 h-5 text-red-500" />;
+      case 'Support Blocker': return <AlertCircle className="w-5 h-5 text-fuchsia-500" />;
       default: return <Activity className="w-5 h-5 text-blue-500" />;
     }
   }
@@ -72,20 +100,34 @@ export function ActionRequiredWidget() {
       case 'Needs Placement': return 'bg-indigo-50 text-indigo-700 border-indigo-100';
       case 'Needs Visit': return 'bg-amber-50 text-amber-700 border-amber-100';
       case 'Needs Assessment': return 'bg-pink-50 text-pink-700 border-pink-100';
+      case 'Setup Required': return 'bg-orange-50 text-orange-700 border-orange-100';
+      case 'Attendance Overdue': return 'bg-red-50 text-red-700 border-red-100';
+      case 'Support Blocker': return 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-100';
       default: return 'bg-blue-50 text-blue-700 border-blue-100';
     }
   }
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          className="rounded-xl"
+          disabled={sendingReminders}
+          onClick={handleBulkReminders}
+        >
+          {sendingReminders ? 'Sending…' : 'Send Overdue Reminders'}
+        </Button>
+      </div>
       {alerts.map((alert, index) => {
         // More urgent actions get a pulsing dot
-        const isUrgent = alert.type === 'Needs Assessment' || alert.type === 'Needs Visit';
+        const isUrgent = alert.type === 'Needs Assessment' || alert.type === 'Needs Visit' || alert.type === 'Attendance Overdue' || alert.type === 'Support Blocker';
 
         return (
           <div 
             key={`${alert.learnerId}-${index}`}
-            onClick={() => navigate(`/learners/${alert.learnerId}`)}
+            onClick={() => navigate(alert.actionUrl || `/learners/${alert.learnerId}`)}
             className={`group flex items-start gap-4 p-4 rounded-[1.5rem] border cursor-pointer hover:shadow-lg transition-all duration-300 relative overflow-hidden ${getBgForType(alert.type)}`}
           >
             {isUrgent && (

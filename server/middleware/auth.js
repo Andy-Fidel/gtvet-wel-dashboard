@@ -19,7 +19,9 @@ export const auth = async (req, res, next) => {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     
-    const user = await User.findById(decoded.userId).populate('partnerId');
+    const user = await User.findById(decoded.userId)
+      .populate('partnerId')
+      .populate('linkedLearners', 'name trackingId institution');
     if (!user || user.status !== 'Active') {
       return res.status(401).json({ message: 'Invalid token or inactive user' });
     }

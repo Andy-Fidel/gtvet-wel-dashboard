@@ -52,22 +52,30 @@ export async function logAuditEvent({
 }) {
   try {
     const currentActor = actor || req?.user;
-    if (!currentActor) return;
 
     const cleanBefore = before ? sanitize(before) : undefined;
     const cleanAfter = after ? sanitize(after) : undefined;
+    const fallbackActor = {
+      _id: undefined,
+      name: metadata?.actorName || metadata?.email || 'Unknown Actor',
+      role: metadata?.actorRole || 'Unknown',
+      institution: metadata?.institution || 'N/A',
+      region: metadata?.region || '',
+      partnerId: metadata?.partnerId || undefined,
+    };
+    const actorDetails = currentActor || fallbackActor;
 
     await AuditLog.create({
       action,
       entityType,
       entityId: String(entityId),
       summary,
-      actorId: currentActor._id,
-      actorName: currentActor.name || 'System',
-      actorRole: currentActor.role || 'System',
-      institution: currentActor.institution || 'N/A',
-      region: currentActor.region || '',
-      partnerId: currentActor.partnerId?._id || currentActor.partnerId || undefined,
+      actorId: actorDetails._id,
+      actorName: actorDetails.name || 'System',
+      actorRole: actorDetails.role || 'System',
+      institution: actorDetails.institution || 'N/A',
+      region: actorDetails.region || '',
+      partnerId: actorDetails.partnerId?._id || actorDetails.partnerId || undefined,
       route: req?.originalUrl || '',
       method: req?.method || '',
       ipAddress: req?.ip || req?.headers?.['x-forwarded-for'] || '',

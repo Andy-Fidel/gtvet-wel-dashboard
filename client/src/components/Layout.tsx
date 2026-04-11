@@ -1,6 +1,6 @@
 import { Outlet, NavLink } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
-import { LayoutDashboard, Users, Briefcase, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy } from 'lucide-react';
+import { LayoutDashboard, Users, Briefcase, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake } from 'lucide-react';
 import { useState } from 'react';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
 import { useAuth } from '@/context/AuthContext';
@@ -13,13 +13,14 @@ import { PlacementProgressWidget } from './PlacementProgressWidget';
 export default function Layout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const { user } = useAuth();
+  const { user, offlineQueueCount } = useAuth();
   const { unreadCount } = useNotifications();
 
   const isAdminOrSuper = user?.role === 'Admin' || user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin';
   const isSuperAdmin = user?.role === 'SuperAdmin';
   const isRegionalAdmin = user?.role === 'RegionalAdmin';
   const isIndustryPartner = user?.role === 'IndustryPartner';
+  const isGuardian = user?.role === 'Guardian';
 
   return (
     <>
@@ -74,18 +75,22 @@ export default function Layout() {
           {user && !isSidebarCollapsed && (
             <div className="bg-gray-50/50 rounded-2xl px-4 py-3 mt-2">
               <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-                {user.role === 'RegionalAdmin' ? 'Region' : (user.role === 'SuperAdmin' ? 'HQ' : (isIndustryPartner || user.institution === 'N/A' ? 'Company' : 'Institution'))}
+                {user.role === 'RegionalAdmin' ? 'Region' : (user.role === 'SuperAdmin' ? 'HQ' : (isIndustryPartner ? 'Company' : isGuardian ? 'Portal' : user.institution === 'N/A' ? 'Company' : 'Institution'))}
               </p>
               <p className="text-sm font-black text-gray-700 truncate">
-                {isIndustryPartner || user.institution === 'N/A'
-                  ? (user.partnerId && typeof user.partnerId === 'object' ? user.partnerId.name : 'Partner Portal') 
-                  : (user.region || (user.institution !== 'N/A' ? user.institution : '') || 'Headquarters')}
+                {user.role === 'RegionalAdmin'
+                  ? (user.region || 'Regional Office')
+                  : isIndustryPartner || user.institution === 'N/A'
+                    ? (user.partnerId && typeof user.partnerId === 'object' ? user.partnerId.name : 'Partner Portal')
+                    : isGuardian
+                      ? 'Parent / Guardian Access'
+                    : (user.institution || user.region || 'Institution Portal')}
               </p>
             </div>
           )}
         </div>
         <nav className="flex-1 px-4 space-y-2 overflow-y-auto overflow-x-hidden pb-4">
-          {!isIndustryPartner && (
+          {!isIndustryPartner && !isGuardian && (
               <NavLink 
                 to="/" 
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
@@ -161,7 +166,38 @@ export default function Layout() {
               </>
           )}
 
-          {!isSuperAdmin && !isRegionalAdmin && !isIndustryPartner && (
+          {isGuardian && (
+              <>
+              <NavLink
+                to="/guardian-dashboard"
+                className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
+                onClick={() => setIsMobileMenuOpen(false)}
+              >
+                {({ isActive }) => (
+                  <>
+                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                    <HeartHandshake size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                    {!isSidebarCollapsed && <span className="text-base">Guardian Portal</span>}
+                  </>
+                )}
+              </NavLink>
+              <NavLink
+                to="/notifications"
+                className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
+                onClick={() => setIsMobileMenuOpen(false)}
+              >
+                {({ isActive }) => (
+                  <>
+                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                    <Bell size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                    {!isSidebarCollapsed && <span className="text-base">Notifications</span>}
+                  </>
+                )}
+              </NavLink>
+              </>
+          )}
+
+          {!isSuperAdmin && !isRegionalAdmin && !isIndustryPartner && !isGuardian && (
             <>
               <NavLink
                 to="/learners"
@@ -237,7 +273,7 @@ export default function Layout() {
                   <>
                     <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
                     <FileText size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">Semester Reports</span>}
+                    {!isSidebarCollapsed && <span className="text-base">Term Closure</span>}
                   </>
                 )}
               </NavLink>
@@ -302,7 +338,7 @@ export default function Layout() {
                 <>
                   <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
                   <FileText size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                  {!isSidebarCollapsed && <span className="text-base">Semester Reports</span>}
+                  {!isSidebarCollapsed && <span className="text-base">Term Closure</span>}
                 </>
               )}
             </NavLink>
@@ -379,6 +415,50 @@ export default function Layout() {
             )}
           </NavLink>
 
+          <NavLink 
+            to="/settings" 
+            className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
+            onClick={() => setIsMobileMenuOpen(false)}
+          >
+            {({ isActive }) => (
+              <>
+                <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                <Settings2 size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                {!isSidebarCollapsed && <span className="text-base">Settings</span>}
+              </>
+            )}
+          </NavLink>
+
+          <NavLink 
+            to="/offline-sync" 
+            className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
+            onClick={() => setIsMobileMenuOpen(false)}
+          >
+            {({ isActive }) => (
+              <>
+                <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                <div className={`relative ${isSidebarCollapsed ? 'mx-auto' : ''}`}>
+                  <WifiOff size={22} className="group-hover:scale-110 transition-transform" />
+                  {!isSidebarCollapsed && offlineQueueCount > 0 ? (
+                    <Badge className="absolute -top-2 -right-2 h-5 min-w-5 rounded-full bg-amber-500 text-white text-[10px] flex items-center justify-center p-0">
+                      {offlineQueueCount > 9 ? '9+' : offlineQueueCount}
+                    </Badge>
+                  ) : null}
+                </div>
+                {!isSidebarCollapsed && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">Offline Sync</span>
+                    {offlineQueueCount > 0 ? (
+                      <Badge className="bg-amber-500 text-white hover:bg-amber-600 border-0 text-[10px] h-5 min-w-5 rounded-full p-0 flex items-center justify-center">
+                        {offlineQueueCount > 9 ? '9+' : offlineQueueCount}
+                      </Badge>
+                    ) : null}
+                  </div>
+                )}
+              </>
+            )}
+          </NavLink>
+
           {/* SuperAdmin-only links */}
           {isSuperAdmin && (
             <>
@@ -425,7 +505,14 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
-      <Toaster />
+      <Toaster
+        position="top-center"
+        offset="42vh"
+        richColors
+        toastOptions={{
+          className: "min-w-[340px] rounded-2xl px-6 py-5 text-base font-bold shadow-2xl",
+        }}
+      />
     </div>
     </>
   );

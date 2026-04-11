@@ -20,31 +20,34 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useState, useEffect, useCallback } from "react"
-import { Loader2, CalendarDays, MapPin, MapPinOff } from "lucide-react"
+import { Loader2, CalendarDays, MapPin, MapPinOff, Handshake } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { Calendar } from "@/components/ui/Calendar"
 import { safeDateString } from "@/lib/dateUtils"
+import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
 
 const formSchema = z.object({
   learner: z.string().min(1, "Learner is required"),
   visitDate: z.date(),
-  visitType: z.enum(["Routine", "Emergency", "Follow-up"]),
+  visitType: z.enum(["Routine", "Urgent", "Emergency", "Follow-up"]),
   attendanceStatus: z.enum(["Present", "Absent", "Excused", "Late"]),
   performanceRating: z.number().min(1).max(5).int(),
+  keyObservations: z.string().optional(),
   issuesIdentified: z.string().optional(),
-  actionTaken: z.string().optional(),
-  nextSteps: z.string().optional(),
+  actionRequired: z.string().optional(),
+  gpsExceptionReason: z.string().optional(),
 })
 
 type MonitoringVisitFormValues = z.infer<typeof formSchema>
 
 interface MonitoringVisitFormProps {
-    onSuccess: (data: unknown) => void;
+    onSuccess: (data?: { offlineQueued?: boolean }) => void;
     initialData?: Partial<MonitoringVisitFormValues> & { 
         _id?: string;
+        updatedAt?: string;
         learner?: string | { _id: string; name: string; trackingId: string };
     };
 }
@@ -52,11 +55,12 @@ interface MonitoringVisitFormProps {
 export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitFormProps) {
   const [loading, setLoading] = useState(false)
   const [learners, setLearners] = useState<Learner[]>([])
-  const { authFetch } = useAuth()
+  const { authFetch, user } = useAuth()
 
   // GPS capture state
   const [gpsStatus, setGpsStatus] = useState<'acquiring' | 'captured' | 'denied' | 'unavailable'>('acquiring')
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
+  const draftKey = `draft:monitoring-visit:${initialData?._id || "new"}`
 
   const captureLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -96,8 +100,41 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
       visitDate: new Date(),
       attendanceStatus: 'Present',
       performanceRating: 3,
+      keyObservations: "",
+      issuesIdentified: "",
+      actionRequired: "",
+      gpsExceptionReason: "",
     },
   })
+
+  useEffect(() => {
+    if (initialData?._id) return
+    const draft = loadDraft<Record<string, string | number | null>>(draftKey)
+    if (!draft) return
+
+    form.reset({
+      learner: typeof draft.learner === "string" ? draft.learner : "",
+      visitType: draft.visitType === "Urgent" || draft.visitType === "Emergency" || draft.visitType === "Follow-up" ? draft.visitType : "Routine",
+      visitDate: draft.visitDate ? new Date(String(draft.visitDate)) : new Date(),
+      attendanceStatus: draft.attendanceStatus === "Absent" || draft.attendanceStatus === "Excused" || draft.attendanceStatus === "Late" ? draft.attendanceStatus : "Present",
+      performanceRating: typeof draft.performanceRating === "number" ? draft.performanceRating : 3,
+      keyObservations: typeof draft.keyObservations === "string" ? draft.keyObservations : "",
+      issuesIdentified: typeof draft.issuesIdentified === "string" ? draft.issuesIdentified : "",
+      actionRequired: typeof draft.actionRequired === "string" ? draft.actionRequired : "",
+      gpsExceptionReason: typeof draft.gpsExceptionReason === "string" ? draft.gpsExceptionReason : "",
+    })
+  }, [draftKey, form, initialData?._id])
+
+  useEffect(() => {
+    if (initialData?._id) return
+    const subscription = form.watch((values) => {
+      saveDraft(draftKey, {
+        ...values,
+        visitDate: values.visitDate instanceof Date ? values.visitDate.toISOString() : null,
+      })
+    })
+    return () => subscription.unsubscribe()
+  }, [draftKey, form, initialData?._id])
 
   const selectedLearnerId = form.watch("learner")
   const selectedLearner = learners.find(l => l._id === selectedLearnerId)
@@ -107,8 +144,14 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
     setLoading(true)
     try {
         const url = initialData?._id ? `/api/monitoring-visits/${initialData._id}` : '/api/monitoring-visits';
+        if (!initialData?._id && gpsStatus !== 'captured' && !values.gpsExceptionReason?.trim()) {
+            form.setError("gpsExceptionReason", { type: "manual", message: "Explain why GPS verification failed before saving this visit." })
+            setLoading(false)
+            return
+        }
         const payload = {
             ...values,
+            ...(initialData?._id && initialData.updatedAt ? { clientUpdatedAt: initialData.updatedAt } : {}),
             ...(gpsCoords && !initialData?._id ? { submittedLocation: gpsCoords } : {}),
         };
         const response = await authFetch(url, {
@@ -118,6 +161,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         })
         if (!response.ok) throw new Error('Failed to save visit')
         const data = await response.json()
+        clearDraft(draftKey)
         onSuccess(data)
     } catch (error) {
         console.error(error)
@@ -133,7 +177,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         {/* Learner */}
         <FormField control={form.control} name="learner" render={({ field }) => (
             <FormItem>
-              <FormLabel className="text-sm font-semibold text-white">Learner / Trainee</FormLabel>
+              <FormLabel className="text-sm font-semibold text-gray-900">Learner / Trainee</FormLabel>
               <Select onValueChange={field.onChange} defaultValue={field.value} disabled={!!initialData?.learner}>
                 <FormControl><SelectTrigger><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
                 <SelectContent>
@@ -151,6 +195,29 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tracking ID</p>
                 <p className="text-sm font-bold text-gray-900">{selectedLearner.trackingId || 'N/A'}</p>
             </div>
+        )}
+
+        {/* Delegation Banner */}
+        {selectedLearner && user?.institution && selectedLearner.region !== undefined && (
+          (() => {
+            // Check if learner belongs to a different institution (delegate scenario)
+            const learnerInst = (selectedLearner as any).institution;
+            if (learnerInst && learnerInst !== user.institution) {
+              return (
+                <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 rounded-xl border border-amber-200">
+                  <Handshake className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-bold text-amber-900">Delegated Visit</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      You are logging this visit as a delegate on behalf of <strong>{learnerInst}</strong>. 
+                      The originating officer will be notified.
+                    </p>
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()
         )}
 
         {/* GPS Status Indicator */}
@@ -174,7 +241,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
              <FormField control={form.control} name="visitDate" render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel className="text-sm font-semibold text-white">Visit Date</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Visit Date</FormLabel>
                   <Popover>
                     <PopoverTrigger asChild>
                       <FormControl>
@@ -193,11 +260,12 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
              )} />
             <FormField control={form.control} name="visitType" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Visit Type</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Visit Type</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
                     <SelectContent>
                         <SelectItem value="Routine">Routine</SelectItem>
+                        <SelectItem value="Urgent">Urgent</SelectItem>
                         <SelectItem value="Emergency">Emergency</SelectItem>
                         <SelectItem value="Follow-up">Follow-up</SelectItem>
                     </SelectContent>
@@ -211,7 +279,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
              <FormField control={form.control} name="attendanceStatus" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Attendance Status</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Attendance Status</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger></FormControl>
                     <SelectContent>
@@ -227,7 +295,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
 
             <FormField control={form.control} name="performanceRating" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Performance Rating (1-5)</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Performance Rating (1-5)</FormLabel>
                   <FormControl>
                     <div className="flex items-center bg-[#F5F5FA] rounded-xl h-12 px-3">
                        <input type="range" min="1" max="5" step="1" value={normalizeSliderValue(field.value)} onChange={e => field.onChange(Number(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-indigo-500 mx-2" />
@@ -240,26 +308,34 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         </div>
 
         {/* Textareas */}
+        <FormField control={form.control} name="keyObservations" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-sm font-semibold text-gray-900">Key Observations</FormLabel>
+              <FormControl><Textarea placeholder="Describe what you observed during the visit..." {...field} /></FormControl>
+              <FormMessage />
+            </FormItem>
+        )} />
+
         <FormField control={form.control} name="issuesIdentified" render={({ field }) => (
             <FormItem>
-              <FormLabel className="text-sm font-semibold text-white">Issues / Challenges Identified</FormLabel>
+              <FormLabel className="text-sm font-semibold text-gray-900">Issues / Challenges Identified</FormLabel>
               <FormControl><Textarea placeholder="Describe any issues observed during the visit..." {...field} /></FormControl>
               <FormMessage />
             </FormItem>
         )} />
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <FormField control={form.control} name="actionTaken" render={({ field }) => (
+            <FormField control={form.control} name="actionRequired" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Immediate Action Taken</FormLabel>
-                  <FormControl><Textarea placeholder="Actions immediately taken..." {...field} /></FormControl>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Action Required / Taken</FormLabel>
+                  <FormControl><Textarea placeholder="Actions taken during the visit or follow-up now required..." {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
-            <FormField control={form.control} name="nextSteps" render={({ field }) => (
+            <FormField control={form.control} name="gpsExceptionReason" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Agreed Next Steps</FormLabel>
-                  <FormControl><Textarea placeholder="Steps for continuous improvement..." {...field} /></FormControl>
+                  <FormLabel className="text-sm font-semibold text-gray-900">GPS Exception Reason</FormLabel>
+                  <FormControl><Textarea placeholder="Required if GPS is denied, unavailable, too far from site, or no placement coordinates exist." {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />

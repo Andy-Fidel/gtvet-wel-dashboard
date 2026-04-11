@@ -34,9 +34,10 @@ export function Search() {
   const [results, setResults] = useState<SearchResults>({ learners: [], placements: [], institutions: [] })
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
-  const { authFetch } = useAuth()
+  const { authFetch, user } = useAuth()
   const navigate = useNavigate()
   const searchRef = useRef<HTMLDivElement>(null)
+  const isInstitutionPortal = ["Admin", "Manager", "Staff"].includes(user?.role || "")
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -75,12 +76,13 @@ export function Search() {
 
   const hasResults = results.learners.length > 0 || results.placements.length > 0 || results.institutions.length > 0
 
-  const handleSelect = (type: string) => {
+  const handleSelect = (type: string, id?: string) => {
     setOpen(false)
     setQuery("")
     switch (type) {
       case 'learner':
-        navigate('/learners')
+        if (id) navigate(`/learners/${id}`)
+        else navigate('/learners')
         break
       case 'placement':
         navigate('/placements')
@@ -88,15 +90,36 @@ export function Search() {
       case 'institution':
         navigate('/system-overview')
         break
+      case 'learner-list':
+        navigate(`/learners?search=${encodeURIComponent(id || "")}`)
+        break
     }
+  }
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const trimmedQuery = query.trim()
+    if (trimmedQuery.length < 2) return
+
+    if (results.learners.length === 1) {
+      handleSelect("learner", results.learners[0]._id)
+      return
+    }
+
+    if (isInstitutionPortal) {
+      handleSelect("learner-list", trimmedQuery)
+      return
+    }
+
+    setOpen(true)
   }
 
   return (
     <div className="relative w-full max-w-[200px] sm:max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg" ref={searchRef}>
-      <div className="relative">
+      <form onSubmit={handleSubmit} className="relative">
         <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
         <Input
-          placeholder="Search learners, institutions..."
+          placeholder={isInstitutionPortal ? "Search learners by name, tracking ID, or index number..." : "Search learners, institutions..."}
           className="pl-11 h-12 bg-gray-50/50 border-gray-200 rounded-2xl focus:bg-white transition-all text-sm text-gray-900"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -105,7 +128,7 @@ export function Search() {
         {loading && (
           <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-gray-400" />
         )}
-      </div>
+      </form>
 
       {open && hasResults && (
         <div className="absolute top-full left-0 right-0 mt-2 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -117,7 +140,7 @@ export function Search() {
                 {results.learners.map((learner) => (
                   <button
                     key={learner._id}
-                    onClick={() => handleSelect('learner')}
+                    onClick={() => handleSelect('learner', learner._id)}
                     className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#FFB800]/10 rounded-2xl transition-all group text-left"
                   >
                     <div className="h-8 w-8 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500 group-hover:bg-blue-500 group-hover:text-white transition-all">
@@ -129,10 +152,22 @@ export function Search() {
                     </div>
                   </button>
                 ))}
+                {isInstitutionPortal && (
+                  <button
+                    onClick={() => handleSelect('learner-list', query.trim())}
+                    className="w-full mt-1 flex items-center justify-between gap-3 px-4 py-3 hover:bg-[#FFB800]/10 rounded-2xl transition-all group text-left"
+                  >
+                    <div>
+                      <div className="text-sm font-bold text-gray-900">View all learner results</div>
+                      <div className="text-[10px] text-gray-500">Open the learner register filtered by this search</div>
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-wider text-amber-700">Open</span>
+                  </button>
+                )}
               </div>
             )}
 
-            {results.placements.length > 0 && (
+            {!isInstitutionPortal && results.placements.length > 0 && (
               <div className="mb-2">
                 <div className="px-4 py-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">Placements</div>
                 {results.placements.map((placement) => (
@@ -153,7 +188,7 @@ export function Search() {
               </div>
             )}
 
-            {results.institutions.length > 0 && (
+            {!isInstitutionPortal && results.institutions.length > 0 && (
               <div>
                 <div className="px-4 py-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">Institutions</div>
                 {results.institutions.map((inst) => (

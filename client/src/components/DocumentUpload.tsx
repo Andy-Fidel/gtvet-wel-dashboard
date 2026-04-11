@@ -8,6 +8,10 @@ interface DocumentUploadProps {
   learnerId?: string;
   placementId?: string;
   monitoringVisitId?: string;
+  supportTicketId?: string;
+  employerEvaluationId?: string;
+  categories?: string[];
+  defaultCategory?: string;
   onUploadSuccess: () => void;
 }
 
@@ -21,14 +25,24 @@ const CATEGORIES = [
   'Other',
 ]
 
-export function DocumentUpload({ learnerId, placementId, monitoringVisitId, onUploadSuccess }: DocumentUploadProps) {
+export function DocumentUpload({
+  learnerId,
+  placementId,
+  monitoringVisitId,
+  supportTicketId,
+  employerEvaluationId,
+  categories,
+  defaultCategory = "Other",
+  onUploadSuccess,
+}: DocumentUploadProps) {
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
-  const [category, setCategory] = useState("Other")
+  const [category, setCategory] = useState(defaultCategory)
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { token } = useAuth()
+  const isOffline = typeof navigator !== "undefined" ? !navigator.onLine : false
 
   const handleFile = (f: File) => {
     setFile(f)
@@ -49,6 +63,10 @@ export function DocumentUpload({ learnerId, placementId, monitoringVisitId, onUp
 
   const handleUpload = async () => {
     if (!file) return
+    if (isOffline) {
+      toast.error("Uploads require connectivity. Reconnect to upload this file.")
+      return
+    }
     setUploading(true)
 
     try {
@@ -58,6 +76,8 @@ export function DocumentUpload({ learnerId, placementId, monitoringVisitId, onUp
       if (learnerId) formData.append('learnerId', learnerId)
       if (placementId) formData.append('placementId', placementId)
       if (monitoringVisitId) formData.append('monitoringVisitId', monitoringVisitId)
+      if (supportTicketId) formData.append('supportTicketId', supportTicketId)
+      if (employerEvaluationId) formData.append('employerEvaluationId', employerEvaluationId)
 
       const res = await fetch('/api/documents/upload', {
         method: 'POST',
@@ -75,7 +95,7 @@ export function DocumentUpload({ learnerId, placementId, monitoringVisitId, onUp
       toast.success("Document uploaded successfully!")
       setFile(null)
       setPreview(null)
-      setCategory("Other")
+      setCategory(defaultCategory)
       onUploadSuccess()
     } catch (err) {
       const e = err as Error
@@ -149,7 +169,7 @@ export function DocumentUpload({ learnerId, placementId, monitoringVisitId, onUp
             onChange={(e) => setCategory(e.target.value)}
             className="flex-1 h-12 px-4 rounded-xl border border-gray-200 bg-white text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#FFB800] focus:border-transparent"
           >
-            {CATEGORIES.map(c => (
+            {(categories || CATEGORIES).map(c => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
@@ -157,13 +177,18 @@ export function DocumentUpload({ learnerId, placementId, monitoringVisitId, onUp
           <Button
             onClick={handleUpload}
             disabled={uploading}
-            className="h-12 px-6 bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-bold rounded-xl shadow-lg shadow-[#FFB800]/20 disabled:opacity-50"
-          >
+          className="h-12 px-6 bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-bold rounded-xl shadow-lg shadow-[#FFB800]/20 disabled:opacity-50"
+        >
             {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5 mr-2" />}
             {uploading ? 'Uploading...' : 'Upload'}
           </Button>
         </div>
       )}
+      {isOffline ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800">
+          Offline mode: document uploads are paused until connectivity returns.
+        </div>
+      ) : null}
     </div>
   )
 }

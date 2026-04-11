@@ -4,11 +4,14 @@ import {
 } from "@tanstack/react-table"
 import { Badge } from "@/components/ui/badge"
 import { format } from "date-fns"
-import { 
+import {
   FileText,
   Plus,
   Eye,
   Send,
+  ShieldCheck,
+  RefreshCw,
+  Filter,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -32,6 +35,17 @@ import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { X } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+
+interface AcademicTermOption {
+  _id: string;
+  name: string;
+  academicYear: string;
+  termType: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+}
 
 interface SemesterReport {
   _id: string;
@@ -40,11 +54,27 @@ interface SemesterReport {
   academicYear: string;
   periodStart: string;
   periodEnd: string;
-  status: 'Generated' | 'Submitted' | 'Regional_Approved' | 'HQ_Approved' | 'Rejected';
+  status: 'Generated' | 'Draft' | 'Certified' | 'Submitted' | 'Regional_Approved' | 'HQ_Approved' | 'Rejected';
   generatedBy: { _id: string; name: string; email: string };
+  certifiedBy?: { _id: string; name: string; email: string };
+  certifiedAt?: string;
+  academicTerm?: AcademicTermOption;
   createdAt: string;
+  metrics?: {
+    placementRate: number;
+    avgHealthScore: number;
+    visitCoverage: number;
+    assessmentCoverage: number;
+    ticketResolutionRate: number;
+  };
+  exceptions?: { learnerId: string; learnerName: string; reasons: string[] }[];
   summary: {
     totalLearners: number;
+    currentEnrolled: number;
+    academicActive: number;
+    academicGraduating: number;
+    academicGraduated: number;
+    academicDropped: number;
     placed: number;
     pending: number;
     completed: number;
@@ -57,6 +87,8 @@ interface SemesterReport {
 
 const statusColors: Record<string, string> = {
   Generated: "bg-gray-100 text-gray-700",
+  Draft: "bg-slate-100 text-slate-700",
+  Certified: "bg-indigo-100 text-indigo-700",
   Submitted: "bg-blue-100 text-blue-700",
   Regional_Approved: "bg-amber-100 text-amber-700",
   HQ_Approved: "bg-green-100 text-green-700",
@@ -64,7 +96,9 @@ const statusColors: Record<string, string> = {
 };
 
 const statusLabels: Record<string, string> = {
-  Generated: "Generated",
+  Generated: "Legacy",
+  Draft: "Draft",
+  Certified: "Certified",
   Submitted: "Submitted",
   Regional_Approved: "Regional Approved",
   HQ_Approved: "HQ Approved",
@@ -74,22 +108,16 @@ const statusLabels: Record<string, string> = {
 export default function SemesterReports() {
   const [reports, setReports] = useState<SemesterReport[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showGenerate, setShowGenerate] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [formData, setFormData] = useState({
-    semester: 'Semester 1',
-    academicYear: '',
-    periodStart: '',
-    periodEnd: '',
-  });
+  const [showInitiate, setShowInitiate] = useState(false);
+  const [initiating, setInitiating] = useState(false);
+  const [terms, setTerms] = useState<AcademicTermOption[]>([]);
+  const [selectedTermId, setSelectedTermId] = useState("");
   const { authFetch, user } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFilter = searchParams.get("status") || "";
   const institutionFilter = searchParams.get("institution") || "";
-  const semesterFilter = searchParams.get("semester") || "";
   const academicYearFilter = searchParams.get("academicYear") || "";
-  const deadlineView = searchParams.get("deadlineView") || "";
 
   const fetchReports = async () => {
     try {
@@ -97,14 +125,27 @@ export default function SemesterReports() {
       const data = await res.json();
       setReports(data);
     } catch (err) {
-      console.error("Error fetching semester reports:", err);
+      console.error("Error fetching reports:", err);
     } finally {
       setLoading(false);
     }
   };
 
+  const fetchTerms = async () => {
+    try {
+      const res = await authFetch('/api/academic-terms');
+      if (res.ok) {
+        const data = await res.json();
+        setTerms(data);
+      }
+    } catch (err) {
+      console.error("Error fetching terms:", err);
+    }
+  };
+
   useEffect(() => {
     fetchReports();
+    fetchTerms();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authFetch]);
 
@@ -112,83 +153,82 @@ export default function SemesterReports() {
     return reports.filter((report) => {
       if (statusFilter && report.status !== statusFilter) return false;
       if (institutionFilter && report.institution !== institutionFilter) return false;
-      if (semesterFilter && report.semester !== semesterFilter) return false;
       if (academicYearFilter && report.academicYear !== academicYearFilter) return false;
       return true;
     });
-  }, [reports, statusFilter, institutionFilter, semesterFilter, academicYearFilter]);
+  }, [reports, statusFilter, institutionFilter, academicYearFilter]);
+
+  const lifecycleTotals = useMemo(() => {
+    return filteredReports.reduce((acc, report) => {
+      acc.currentEnrolled += report.summary.currentEnrolled || 0;
+      acc.graduated += report.summary.academicGraduated || 0;
+      return acc;
+    }, { currentEnrolled: 0, graduated: 0 });
+  }, [filteredReports]);
 
   const activeFilters = [
-    deadlineView === "overdue" ? "View: Overdue submissions" : "",
-    deadlineView === "at-risk" ? "View: At-risk cycle" : "",
-    statusFilter ? `Status: ${statusFilter}` : "",
+    statusFilter ? `Status: ${statusLabels[statusFilter] || statusFilter}` : "",
     institutionFilter ? `Institution: ${institutionFilter}` : "",
-    semesterFilter ? `Semester: ${semesterFilter}` : "",
-    academicYearFilter ? `Year: ${academicYearFilter}` : "",
+    academicYearFilter ? `Academic Year: ${academicYearFilter}` : "",
   ].filter(Boolean);
 
-  const handleGenerate = async () => {
-    if (!formData.academicYear || !formData.periodStart || !formData.periodEnd) {
-      toast.error("Please fill in all fields");
+  const academicYearOptions = Array.from(new Set(reports.map((report) => report.academicYear).filter(Boolean))).sort((a, b) => b.localeCompare(a));
+
+  // Which terms don't have reports yet
+  const usedTermIds = new Set(reports.map(r => r.academicTerm?._id).filter(Boolean));
+  const availableTerms = terms.filter(t => !usedTermIds.has(t._id));
+
+  const handleInitiate = async () => {
+    if (!selectedTermId) {
+      toast.error("Please select an academic term");
       return;
     }
-    setGenerating(true);
+    setInitiating(true);
     try {
-      const res = await authFetch('/api/semester-reports/generate', {
+      const res = await authFetch('/api/semester-reports/initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ termId: selectedTermId }),
       });
       if (res.ok) {
-        toast.success("Semester report generated successfully!");
-        setShowGenerate(false);
-        setFormData({ semester: 'Semester 1', academicYear: '', periodStart: '', periodEnd: '' });
-        fetchReports();
+        const report = await res.json();
+        toast.success("Term closure initiated! Redirecting…");
+        setShowInitiate(false);
+        setSelectedTermId("");
+        navigate(`/semester-reports/${report._id}`);
       } else {
         const err = await res.json();
-        toast.error(err.message || "Failed to generate report");
+        toast.error(err.message || "Failed to initiate closure");
       }
     } catch {
-      toast.error("Failed to generate report");
+      toast.error("Failed to initiate closure");
     } finally {
-      setGenerating(false);
+      setInitiating(false);
     }
   };
 
-  const handleSubmit = async (id: string) => {
-    try {
-      const res = await authFetch(`/api/semester-reports/${id}/submit`, {
-        method: 'PUT',
-      });
-      if (res.ok) {
-        toast.success("Report submitted to Regional Office");
-        fetchReports();
-      } else {
-        const err = await res.json();
-        toast.error(err.message);
-      }
-    } catch {
-      toast.error("Failed to submit report");
-    }
-  };
+  // Stats strip
+  const draftCount = reports.filter(r => r.status === 'Draft').length;
+  const certifiedCount = reports.filter(r => r.status === 'Certified').length;
+  const submittedCount = reports.filter(r => r.status === 'Submitted').length;
+  const approvedCount = reports.filter(r => r.status === 'HQ_Approved').length;
 
   const columns: ColumnDef<SemesterReport>[] = [
     {
       accessorKey: "semester",
-      header: "Semester",
+      header: "Term",
       cell: ({ row }) => (
-        <span className="font-bold">{row.original.semester}</span>
+        <div className="flex flex-col">
+          <span className="font-bold text-gray-900">{row.original.semester}</span>
+          <span className="text-xs text-gray-500">{row.original.academicYear}</span>
+        </div>
       ),
-    },
-    {
-      accessorKey: "academicYear",
-      header: "Academic Year",
     },
     {
       accessorKey: "institution",
       header: "Institution",
       cell: ({ row }) => (
-        <span className="truncate max-w-[200px] block">{row.original.institution}</span>
+        <span className="truncate max-w-[200px] block font-medium">{row.original.institution}</span>
       ),
     },
     {
@@ -210,8 +250,40 @@ export default function SemesterReports() {
       ),
     },
     {
+      id: "healthScore",
+      header: "Health",
+      cell: ({ row }) => {
+        const hs = row.original.metrics?.avgHealthScore;
+        if (hs == null) return <span className="text-gray-400 text-sm">—</span>;
+        const color = hs >= 80 ? 'text-emerald-600' : hs >= 60 ? 'text-blue-600' : hs >= 40 ? 'text-amber-600' : 'text-red-600';
+        return <span className={`font-black text-sm ${color}`}>{hs}/100</span>;
+      },
+    },
+    {
+      id: "exceptions",
+      header: "Exceptions",
+      cell: ({ row }) => {
+        const count = row.original.exceptions?.length || 0;
+        if (count === 0) return <Badge className="bg-emerald-50 text-emerald-600 border-0 font-bold">Clear</Badge>;
+        return <Badge className="bg-red-50 text-red-600 border-0 font-bold">{count} issue{count !== 1 ? 's' : ''}</Badge>;
+      },
+    },
+    {
+      id: "academicLifecycle",
+      header: "Lifecycle",
+      meta: {
+        exportValue: (report: SemesterReport) => `${report.summary.currentEnrolled || 0} current / ${report.summary.academicGraduated || 0} graduated`,
+      },
+      cell: ({ row }) => (
+        <div className="flex flex-col text-xs font-bold">
+          <span className="text-sky-700">{row.original.summary.currentEnrolled || 0} current</span>
+          <span className="text-emerald-700">{row.original.summary.academicGraduated || 0} graduated</span>
+        </div>
+      ),
+    },
+    {
       accessorKey: "createdAt",
-      header: "Generated",
+      header: "Created",
       cell: ({ row }) => format(new Date(row.original.createdAt), 'dd MMM yyyy'),
     },
     {
@@ -228,16 +300,6 @@ export default function SemesterReports() {
             >
               <Eye className="h-4 w-4 mr-1" /> View
             </Button>
-            {(report.status === 'Generated' || report.status === 'Rejected') && user?.role !== 'SuperAdmin' && user?.role !== 'RegionalAdmin' && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleSubmit(report._id)}
-                className="rounded-xl border-blue-200 text-blue-700 hover:bg-blue-50"
-              >
-                <Send className="h-4 w-4 mr-1" /> Submit
-              </Button>
-            )}
           </div>
         );
       },
@@ -254,21 +316,103 @@ export default function SemesterReports() {
   }
 
   return (
-    <div className="flex-1 space-y-6 md:space-y-8 p-4 md:p-8 pt-6">
+    <div className="flex-1 space-y-6 md:space-y-8 p-4 md:p-8 pt-12 md:pt-16">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Semester Reports</h2>
-          <p className="text-gray-400 font-bold mt-1">Auto-generated institutional performance reports</p>
+          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Term Closure Reports</h2>
+          <p className="text-gray-400 font-bold mt-1">Structured end-of-term reporting with auto-generated metrics</p>
         </div>
         {user?.role !== 'SuperAdmin' && user?.role !== 'RegionalAdmin' && (
           <Button
-            onClick={() => setShowGenerate(true)}
+            onClick={() => setShowInitiate(true)}
             className="w-full md:w-auto rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold"
           >
-            <Plus className="h-4 w-4 mr-2" /> Generate Report
+            <Plus className="h-4 w-4 mr-2" /> Initiate Closure
           </Button>
         )}
       </div>
+
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        {[
+          { label: 'Draft', count: draftCount, color: 'bg-slate-50 text-slate-700 border-slate-100', icon: <FileText className="h-4 w-4" /> },
+          { label: 'Certified', count: certifiedCount, color: 'bg-indigo-50 text-indigo-700 border-indigo-100', icon: <ShieldCheck className="h-4 w-4" /> },
+          { label: 'Submitted', count: submittedCount, color: 'bg-blue-50 text-blue-700 border-blue-100', icon: <Send className="h-4 w-4" /> },
+          { label: 'Approved', count: approvedCount, color: 'bg-emerald-50 text-emerald-700 border-emerald-100', icon: <ShieldCheck className="h-4 w-4" /> },
+          { label: 'Current Enrolled', count: lifecycleTotals.currentEnrolled, color: 'bg-sky-50 text-sky-700 border-sky-100', icon: <FileText className="h-4 w-4" /> },
+          { label: 'Graduated', count: lifecycleTotals.graduated, color: 'bg-emerald-50 text-emerald-700 border-emerald-100', icon: <ShieldCheck className="h-4 w-4" /> },
+        ].map(stat => (
+          <div key={stat.label} className={`rounded-2xl border p-4 ${stat.color}`}>
+            <div className="flex items-center gap-2 mb-1">
+              {stat.icon}
+              <span className="text-xs font-black uppercase tracking-widest">{stat.label}</span>
+            </div>
+            <p className="text-2xl font-black">{stat.count}</p>
+          </div>
+        ))}
+      </div>
+
+      <Card className="bg-white border-none sm:border sm:border-gray-100 rounded-2xl sm:rounded-[2rem] shadow-sm sm:shadow-xl overflow-hidden">
+        <CardContent className="p-4 sm:p-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs font-black uppercase tracking-widest text-gray-500 block mb-2">Report Status</label>
+              <Select
+                value={statusFilter || "__all_statuses"}
+                onValueChange={(value) => {
+                  const next = new URLSearchParams(searchParams)
+                  if (value === "__all_statuses") next.delete("status")
+                  else next.set("status", value)
+                  setSearchParams(next)
+                }}
+              >
+                <SelectTrigger className="rounded-xl border-gray-200 bg-gray-50">
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all_statuses">All statuses</SelectItem>
+                  {Object.entries(statusLabels).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-black uppercase tracking-widest text-gray-500 block mb-2">Academic Year</label>
+              <Select
+                value={academicYearFilter || "__all_academic_years"}
+                onValueChange={(value) => {
+                  const next = new URLSearchParams(searchParams)
+                  if (value === "__all_academic_years") next.delete("academicYear")
+                  else next.set("academicYear", value)
+                  setSearchParams(next)
+                }}
+              >
+                <SelectTrigger className="rounded-xl border-gray-200 bg-gray-50">
+                  <SelectValue placeholder="All academic years" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all_academic_years">All academic years</SelectItem>
+                  {academicYearOptions.map((year) => (
+                    <SelectItem key={year} value={year}>{year}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-end">
+              <Button
+                variant="outline"
+                className="w-full rounded-xl border-gray-200"
+                onClick={() => setSearchParams({})}
+                disabled={!statusFilter && !institutionFilter && !academicYearFilter}
+              >
+                <Filter className="mr-2 h-4 w-4" />
+                Clear Report Filters
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {activeFilters.length > 0 && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -299,72 +443,77 @@ export default function SemesterReports() {
           </div>
         </CardHeader>
         <CardContent className="p-0 sm:p-6 mt-4 sm:mt-0">
-          <DataTable columns={columns} data={filteredReports} exportTitle="Semester Reports Export" />
+          <DataTable columns={columns} data={filteredReports} exportTitle="Term Closure Reports Export" />
         </CardContent>
       </Card>
 
-      {/* Generate Report Dialog */}
-      <Dialog open={showGenerate} onOpenChange={setShowGenerate}>
-        <DialogContent className="rounded-2xl">
+      {/* Initiate Closure Dialog */}
+      <Dialog open={showInitiate} onOpenChange={setShowInitiate}>
+        <DialogContent className="rounded-2xl sm:max-w-[500px]">
           <DialogHeader>
-            <DialogTitle className="text-xl font-black">Generate Semester Report</DialogTitle>
+            <DialogTitle className="text-xl font-black">Initiate Term Closure</DialogTitle>
             <DialogDescription className="text-gray-400">
-              This will aggregate all learner activities for your institution within the selected period.
+              Select an academic term to generate a closure report with auto-computed metrics and exception tracking.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div>
-              <label className="text-sm font-bold text-gray-700 block mb-1">Semester</label>
-              <select
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
-                value={formData.semester}
-                onChange={(e) => setFormData({ ...formData, semester: e.target.value })}
-              >
-                <option value="Semester 1">Semester 1</option>
-                <option value="Semester 2">Semester 2</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-sm font-bold text-gray-700 block mb-1">Academic Year</label>
-              <input
-                type="text"
-                placeholder="e.g. 2025/2026"
-                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
-                value={formData.academicYear}
-                onChange={(e) => setFormData({ ...formData, academicYear: e.target.value })}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-bold text-gray-700 block mb-1">Period Start</label>
-                <input
-                  type="date"
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
-                  value={formData.periodStart}
-                  onChange={(e) => setFormData({ ...formData, periodStart: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-bold text-gray-700 block mb-1">Period End</label>
-                <input
-                  type="date"
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
-                  value={formData.periodEnd}
-                  onChange={(e) => setFormData({ ...formData, periodEnd: e.target.value })}
-                />
-              </div>
+              <label className="text-sm font-bold text-gray-700 block mb-2">Academic Term</label>
+              {availableTerms.length === 0 ? (
+                <div className="rounded-xl bg-gray-50 p-4 text-center">
+                  <p className="text-sm text-gray-500 font-medium">No available terms. All terms already have closure reports, or no terms have been created yet.</p>
+                  <Button variant="link" onClick={() => { setShowInitiate(false); navigate('/calendar'); }} className="mt-1 text-[#FFB800]">
+                    Manage Academic Terms →
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {availableTerms.map(term => (
+                    <label
+                      key={term._id}
+                      className={`flex items-center gap-3 p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                        selectedTermId === term._id
+                          ? 'border-[#FFB800] bg-[#FFB800]/5'
+                          : 'border-gray-100 hover:border-gray-200 bg-white'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="term"
+                        value={term._id}
+                        checked={selectedTermId === term._id}
+                        onChange={() => setSelectedTermId(term._id)}
+                        className="sr-only"
+                      />
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${selectedTermId === term._id ? 'border-[#FFB800]' : 'border-gray-300'}`}>
+                        {selectedTermId === term._id && <div className="w-2 h-2 rounded-full bg-[#FFB800]" />}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold text-gray-900">{term.name} <span className="text-gray-400">· {term.academicYear}</span></p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {format(new Date(term.startDate), 'dd MMM yyyy')} – {format(new Date(term.endDate), 'dd MMM yyyy')}
+                          <Badge className={`ml-2 border-0 text-[10px] font-bold ${term.status === 'Active' ? 'bg-green-100 text-green-700' : term.status === 'Completed' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {term.status}
+                          </Badge>
+                        </p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowGenerate(false)} className="rounded-xl">
+            <Button variant="outline" onClick={() => setShowInitiate(false)} className="rounded-xl">
               Cancel
             </Button>
             <Button
-              onClick={handleGenerate}
-              disabled={generating}
+              onClick={handleInitiate}
+              disabled={initiating || !selectedTermId}
               className="rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold"
             >
-              {generating ? 'Generating...' : 'Generate Report'}
+              <RefreshCw className={`h-4 w-4 mr-2 ${initiating ? 'animate-spin' : ''}`} />
+              {initiating ? 'Generating...' : 'Initiate Closure'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { format } from "date-fns"
 import { toast } from "sonner"
-import { Activity, Download, Eye, Filter, ShieldCheck } from "lucide-react"
+import { Activity, AlertTriangle, Download, Eye, Filter, ShieldCheck } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -33,12 +33,22 @@ interface AuditLogEntry {
   createdAt: string
 }
 
+interface AuditAnomalies {
+  windowDays: number
+  deleteSpikes: { institution: string; date: string; count: number; severity: string }[]
+  failedAuthActors: { actorName: string; institution: string; count: number }[]
+  failedAuthInstitutions: { institution: string; count: number }[]
+  massUpdates: { actorName: string; institution: string; count: number; severity: string }[]
+  riskyInstitutions: { institution: string; score: number; failedAuths: number; deleteSpikes: number }[]
+}
+
 const ALL_ACTIONS = "__all_actions"
 const ALL_ENTITIES = "__all_entities"
 
 export default function ActivityLog() {
   const { authFetch } = useAuth()
   const [logs, setLogs] = useState<AuditLogEntry[]>([])
+  const [anomalies, setAnomalies] = useState<AuditAnomalies | null>(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [actionFilter, setActionFilter] = useState("")
@@ -77,8 +87,21 @@ export default function ActivityLog() {
     }
   }
 
+  const fetchAnomalies = async () => {
+    try {
+      const res = await authFetch("/api/audit-logs/anomalies")
+      if (!res.ok) throw new Error("Failed to fetch audit anomalies")
+      const data = await res.json()
+      setAnomalies(data)
+    } catch (error) {
+      console.error("Error fetching audit anomalies:", error)
+      toast.error("Failed to load audit anomalies")
+    }
+  }
+
   useEffect(() => {
     fetchLogs()
+    fetchAnomalies()
   }, [actionFilter, entityFilter, actorFilter, dateFrom, dateTo])
 
   const entityOptions = useMemo(() => {
@@ -207,6 +230,93 @@ export default function ActivityLog() {
           <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Deletes</p><p className="text-3xl font-black text-red-600">{stats.deletes}</p></CardContent></Card>
         </div>
       )}
+
+      {anomalies ? (
+        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+          <CardHeader>
+            <CardTitle className="text-lg font-black text-gray-900 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-500" />
+              Audit Anomaly Detection
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-red-100 bg-red-50/70 p-4">
+                <p className="text-sm font-black text-red-700">Delete Spikes</p>
+                <div className="mt-3 space-y-3">
+                  {anomalies.deleteSpikes.length === 0 ? <p className="text-sm text-gray-500">No unusual delete spikes in the last {anomalies.windowDays} days.</p> : anomalies.deleteSpikes.map((entry) => (
+                    <div key={`${entry.institution}-${entry.date}`} className="flex items-center justify-between gap-3 text-sm">
+                      <div>
+                        <p className="font-bold text-gray-900">{entry.institution}</p>
+                        <p className="text-gray-500">{entry.date}</p>
+                      </div>
+                      <Badge className={entry.severity === "high" ? "bg-red-500 text-white border-0" : "bg-orange-100 text-orange-700 border-orange-200"}>{entry.count} deletes</Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+                <p className="text-sm font-black text-amber-700">Repeated Failed Auth Attempts</p>
+                <div className="mt-3 space-y-3">
+                  {anomalies.failedAuthActors.length === 0 ? <p className="text-sm text-gray-500">No repeated failed authentication patterns detected.</p> : anomalies.failedAuthActors.map((entry) => (
+                    <div key={`${entry.actorName}-${entry.institution}`} className="flex items-center justify-between gap-3 text-sm">
+                      <div>
+                        <p className="font-bold text-gray-900">{entry.actorName}</p>
+                        <p className="text-gray-500">{entry.institution}</p>
+                      </div>
+                      <Badge className="bg-amber-100 text-amber-700 border-amber-200">{entry.count} failures</Badge>
+                    </div>
+                  ))}
+                </div>
+                {anomalies.failedAuthInstitutions.length > 0 ? (
+                  <div className="mt-4 border-t border-amber-200 pt-4 space-y-2">
+                    <p className="text-xs font-black uppercase tracking-wider text-amber-700">By Institution</p>
+                    {anomalies.failedAuthInstitutions.map((entry) => (
+                      <div key={entry.institution} className="flex items-center justify-between gap-3 text-sm">
+                        <p className="font-bold text-gray-900">{entry.institution}</p>
+                        <Badge className="bg-amber-100 text-amber-700 border-amber-200">{entry.count} failures</Badge>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
+                <p className="text-sm font-black text-blue-700">Mass Update Signals</p>
+                <div className="mt-3 space-y-3">
+                  {anomalies.massUpdates.length === 0 ? <p className="text-sm text-gray-500">No sudden mass updates detected.</p> : anomalies.massUpdates.map((entry) => (
+                    <div key={`${entry.actorName}-${entry.institution}`} className="flex items-center justify-between gap-3 text-sm">
+                      <div>
+                        <p className="font-bold text-gray-900">{entry.actorName}</p>
+                        <p className="text-gray-500">{entry.institution}</p>
+                      </div>
+                      <Badge className={entry.severity === "high" ? "bg-red-500 text-white border-0" : "bg-blue-100 text-blue-700 border-blue-200"}>{entry.count} updates</Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/70 p-4">
+                <p className="text-sm font-black text-fuchsia-700">Top Risky Institutions</p>
+                <div className="mt-3 space-y-3">
+                  {anomalies.riskyInstitutions.length === 0 ? <p className="text-sm text-gray-500">No elevated institution risk detected in this window.</p> : anomalies.riskyInstitutions.map((entry, index) => (
+                    <div key={entry.institution} className="flex items-center justify-between gap-3 text-sm">
+                      <div>
+                        <p className="font-bold text-gray-900">#{index + 1} {entry.institution}</p>
+                        <p className="text-gray-500">{entry.failedAuths} failed auths · {entry.deleteSpikes} delete spike days</p>
+                      </div>
+                      <Badge className="bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200">Risk {entry.score}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card className="bg-white border-none shadow-xl rounded-[2rem]">
         <CardContent className="p-6">

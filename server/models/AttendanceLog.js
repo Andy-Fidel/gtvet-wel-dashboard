@@ -15,6 +15,12 @@ const attendanceLogSchema = new mongoose.Schema({
   hoursWorked: { type: Number, required: true, min: 0 },
   tasksCompleted: { type: String, required: true },
   notes: { type: String, default: '' },
+  submittedSource: {
+    type: String,
+    enum: ['Institution', 'Partner'],
+    required: true,
+    default: 'Institution',
+  },
   status: {
     type: String,
     enum: ['Pending', 'SignedOff', 'Rejected'],

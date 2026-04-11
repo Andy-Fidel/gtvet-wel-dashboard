@@ -11,6 +11,13 @@ const employerEvaluationSchema = new mongoose.Schema({
         ref: 'IndustryPartner',
         required: true
     },
+    version: { type: Number, required: true, default: 1 },
+    isCurrent: { type: Boolean, default: true },
+    supersedes: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'EmployerEvaluation',
+        default: null
+    },
     evaluatorName: { type: String, required: true },
     evaluatorPosition: { type: String, required: true },
     evaluationDate: { type: Date, default: Date.now },
@@ -27,5 +34,8 @@ const employerEvaluationSchema = new mongoose.Schema({
     wouldHire: { type: Boolean, required: true },
     additionalComments: { type: String }
 }, { timestamps: true });
+
+employerEvaluationSchema.index({ learner: 1, partner: 1, version: -1 });
+employerEvaluationSchema.index({ learner: 1, partner: 1, isCurrent: 1 });
 
 export const EmployerEvaluation = mongoose.model('EmployerEvaluation', employerEvaluationSchema);

@@ -27,12 +27,19 @@ import { cn } from "@/lib/utils"
 import { Calendar } from "@/components/ui/Calendar"
 import { safeDateString } from "@/lib/dateUtils"
 
+const GHANA_REGIONS = [
+  "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern",
+  "Greater Accra", "North East", "Northern", "Oti", "Savannah",
+  "Upper East", "Upper West", "Volta", "Western", "Western North"
+].sort();
+
 const formSchema = z.object({
   learner: z.string().min(2, { message: "Learner is required." }),
   companyName: z.string().min(2, { message: "Company Name is required." }),
   sector: z.string().min(1, { message: "Sector is required." }),
   location: z.string().min(1, { message: "Location is required." }),
   supervisorName: z.string().min(2, { message: "Supervisor Name is required." }),
+  supervisorPhone: z.string().optional(),
   supervisorEmail: z.string().email({ message: "Invalid email address." }).optional().or(z.literal('')),
   startDate: z.date(),
   endDate: z.date(),
@@ -57,6 +64,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
   // GPS coordinates for the placement site
   const [coordLat, setCoordLat] = useState(initialData && (initialData as Record<string, unknown>).coordinates ? String(((initialData as Record<string, unknown>).coordinates as {lat?: number}).lat || '') : '')
   const [coordLng, setCoordLng] = useState(initialData && (initialData as Record<string, unknown>).coordinates ? String(((initialData as Record<string, unknown>).coordinates as {lng?: number}).lng || '') : '')
+  const [placementRegion, setPlacementRegion] = useState((initialData as Record<string, unknown>)?.placementRegion as string || '')
 
   const form = useForm<EditPlacementFormValues>({
     resolver: zodResolver(formSchema),
@@ -80,6 +88,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
             body: JSON.stringify({
                 ...values,
                 ...(coordLat && coordLng ? { coordinates: { lat: parseFloat(coordLat), lng: parseFloat(coordLng) } } : {}),
+                ...(placementRegion ? { placementRegion } : {}),
             }),
         })
         if (!response.ok) throw new Error('Failed to save placement')
@@ -154,14 +163,23 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
             )} />
         </div>
 
-        {/* Supervisor Email */}
-        <FormField control={form.control} name="supervisorEmail" render={({ field }) => (
-            <FormItem>
-              <FormLabel className="text-sm font-semibold text-white">Supervisor Email</FormLabel>
-              <FormControl><Input placeholder="supervisor@company.com" type="email" {...field} /></FormControl>
-              <FormMessage />
-            </FormItem>
-        )} />
+        {/* Supervisor Contact */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <FormField control={form.control} name="supervisorPhone" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-white">Supervisor Phone</FormLabel>
+                <FormControl><Input placeholder="+233..." {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+          )} />
+          <FormField control={form.control} name="supervisorEmail" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-white">Supervisor Email</FormLabel>
+                <FormControl><Input placeholder="supervisor@company.com" type="email" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+          )} />
+        </div>
 
         {/* GPS Coordinates (for visit verification) */}
         <div className="space-y-2">
@@ -202,6 +220,20 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
           </div>
           <p className="text-[10px] text-gray-400 font-medium">Used to verify monitoring visit locations. Click &ldquo;Use my location&rdquo; if you&apos;re at the placement site.</p>
         </div>
+
+         {/* Placement Region (for cross-region delegation) */}
+         <div className="space-y-2">
+           <label className="text-sm font-semibold text-white">Placement Region</label>
+           <Select value={placementRegion} onValueChange={setPlacementRegion}>
+             <SelectTrigger className="h-12 rounded-xl border-transparent bg-[#F5F5FA] text-gray-900">
+               <SelectValue placeholder="Select region where placement is located" />
+             </SelectTrigger>
+             <SelectContent className="max-h-60">
+               {GHANA_REGIONS.map(r => (<SelectItem key={r} value={r}>{r}</SelectItem>))}
+             </SelectContent>
+           </Select>
+           <p className="text-[10px] text-gray-400 font-medium">Required for assigning a cross-region delegate supervisor.</p>
+         </div>
 
         {/* Date Range */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

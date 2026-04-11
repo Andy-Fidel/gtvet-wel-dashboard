@@ -21,11 +21,22 @@ export type Learner = {
   lastName: string
   firstName: string
   middleName?: string
+  gender?: "Male" | "Female" | "Other"
+  dateOfBirth?: string
+  phone?: string
   guardianContact?: string
   program: string
   region: string
   year: string
+  intakeAcademicYear?: string
+  academicStatus?: "Active" | "Graduating" | "Graduated" | "Dropped"
   status: "Pending" | "Placed" | "Completed" | "Dropped"
+  readiness?: {
+    isReadyForPlacement: boolean
+    missingFields: string[]
+    missingDocuments: string[]
+    documentCount: number
+  }
 }
 
 export const columns: ColumnDef<Learner>[] = [
@@ -60,6 +71,21 @@ export const columns: ColumnDef<Learner>[] = [
     accessorKey: "year",
     header: "Year",
   },
+  {
+    accessorKey: "academicStatus",
+    header: "Academic Status",
+    cell: ({ row }) => {
+      const status = row.original.academicStatus || "Active"
+      const color = status === "Graduated"
+        ? "bg-indigo-100 text-indigo-700 border-indigo-200"
+        : status === "Graduating"
+          ? "bg-sky-100 text-sky-700 border-sky-200"
+          : status === "Dropped"
+            ? "bg-rose-100 text-rose-700 border-rose-200"
+            : "bg-emerald-100 text-emerald-700 border-emerald-200"
+      return <Badge className={`${color}`}>{status}</Badge>
+    }
+  },
 
   {
     accessorKey: "status",
@@ -72,6 +98,18 @@ export const columns: ColumnDef<Learner>[] = [
         if (status === 'Dropped') color = "bg-red-500 hover:bg-red-600"
         
         return <Badge className={`${color} text-white`}>{status}</Badge>
+    }
+  },
+  {
+    id: "readiness",
+    header: "Placement Readiness",
+    cell: ({ row }) => {
+      const readiness = row.original.readiness
+      if (!readiness) return <Badge variant="outline">Unknown</Badge>
+      if (readiness.isReadyForPlacement) {
+        return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Ready</Badge>
+      }
+      return <Badge className="bg-amber-100 text-amber-700 border-amber-200">{readiness.missingFields.length} issue(s)</Badge>
     }
   },
   {

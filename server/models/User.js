@@ -7,7 +7,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   role: { 
     type: String, 
-    enum: ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'], 
+    enum: ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner', 'Guardian'], 
     default: 'Staff' 
   },
   status: { 
@@ -31,7 +31,26 @@ const userSchema = new mongoose.Schema({
     ref: 'IndustryPartner',
     required: function() { return this.role === 'IndustryPartner'; }
   },
+  linkedLearners: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Learner',
+  }],
   profilePicture: { type: String, default: '' },
+  notificationPreferences: {
+    inApp: { type: Boolean, default: true },
+    email: { type: Boolean, default: false },
+    whatsApp: { type: Boolean, default: false },
+    systemUpdates: { type: Boolean, default: true },
+    placementUpdates: { type: Boolean, default: true },
+    supportUpdates: { type: Boolean, default: true },
+    visitUpdates: { type: Boolean, default: true },
+    assessmentUpdates: { type: Boolean, default: true },
+    reportReminders: { type: Boolean, default: true },
+    partnerUpdates: { type: Boolean, default: true },
+  },
+  invitationSentAt: { type: Date },
+  inviteAcceptedAt: { type: Date },
+  lastLoginAt: { type: Date },
   passwordChangeRequired: { type: Boolean, default: true },
   resetPasswordToken: { type: String },
   resetPasswordExpires: { type: Date }

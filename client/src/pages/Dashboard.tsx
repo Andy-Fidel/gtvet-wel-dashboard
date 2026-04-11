@@ -9,7 +9,7 @@ import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Overview } from "@/components/dashboard/Overview"
 import { ActionRequiredWidget } from "@/components/dashboard/ActionRequiredWidget"
-import { Users, Briefcase, Clock, ArrowUpRight, Download, Building2, ClipboardList, FileText, TrendingUp, Timer, Plus, FileSpreadsheet } from "lucide-react"
+import { Users, Briefcase, Clock, ArrowUpRight, Download, Building2, ClipboardList, FileText, TrendingUp, Timer, Plus, FileSpreadsheet, GraduationCap, Handshake } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Cell, PieChart, Pie } from "recharts"
 import { useQuery } from '@tanstack/react-query'
@@ -30,8 +30,37 @@ interface DashboardStats {
   placed: number;
   pending: number;
   totalVisits: number;
+  academicSummary?: {
+    currentEnrolled: number;
+    active: number;
+    graduating: number;
+    graduated: number;
+    dropped: number;
+  };
+  intakeCohorts?: {
+    intakeAcademicYear: string;
+    totalLearners: number;
+    currentEnrolled: number;
+    graduating: number;
+    graduated: number;
+    placementRate?: number;
+    dropRate?: number;
+    riskLevel?: string;
+    riskReasons?: string[];
+    regionCount?: number;
+    institutionCount?: number;
+  }[];
   monthlyStats: { name: string; total: number }[];
   recentPlacements: SimpleLearner[];
+  institutionPerformance?: {
+    placementCoverageRate: number;
+    activeLearnerCount: number;
+    overdueAttendanceRate: number;
+    monitoringCoverageRate: number;
+    assessmentCompletionRate: number;
+    supportBacklog: number;
+    slaBreachCount: number;
+  };
 }
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton"
 import { useEffect } from "react";
@@ -39,6 +68,16 @@ import { useEffect } from "react";
 export default function Dashboard() {
   const { authFetch, user } = useAuth();
   const navigate = useNavigate();
+
+  const openLearnerRegister = (params?: Record<string, string>) => {
+    const query = new URLSearchParams(params || {}).toString();
+    navigate(query ? `/learners?${query}` : '/learners');
+  };
+
+  const openInterventionQueue = (params?: Record<string, string>) => {
+    const query = new URLSearchParams(params || {}).toString();
+    navigate(query ? `/learner-progress?${query}` : '/learner-progress');
+  };
 
   useEffect(() => {
      if (user?.role === 'IndustryPartner') {
@@ -71,7 +110,7 @@ export default function Dashboard() {
     : '/api/dashboard/stats';
 
   const { data: stats, isLoading, error } = useQuery<DashboardStats>({
-    queryKey: ['dashboardStats', user?.role],
+    queryKey: ['dashboardStats', user?._id, user?.role],
     queryFn: async () => {
       const res = await authFetch(fetchUrl);
       if (!res.ok) throw new Error('Failed to fetch dashboard stats');
@@ -79,6 +118,17 @@ export default function Dashboard() {
     },
     refetchInterval: 30000, // Poll every 30 seconds for real-time updates
     enabled: !!user, // Only run the query if we have a user
+  });
+
+  // Fetch delegated placements for institution-level users
+  const { data: delegatedPlacements } = useQuery<any[]>({
+    queryKey: ['delegatedPlacements', user?._id],
+    queryFn: async () => {
+      const res = await authFetch('/api/placements/delegated-to-me');
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!user && !isAdminView,
   });
 
   if (error) {
@@ -101,16 +151,57 @@ export default function Dashboard() {
       totalVisits: number;
       totalReports: number;
       overallPlacementRate: number;
+      academicSummary?: {
+        currentEnrolled: number;
+        active: number;
+        graduating: number;
+        graduated: number;
+        dropped: number;
+      };
+      intakeCohorts?: {
+        intakeAcademicYear: string;
+        totalLearners: number;
+        currentEnrolled: number;
+        graduating: number;
+        graduated: number;
+        regionCount: number;
+        institutionCount: number;
+      }[];
+      regionalCohortBreakdown?: {
+        region: string;
+        intakeAcademicYear: string;
+        totalLearners: number;
+        currentEnrolled: number;
+        graduating: number;
+        graduated: number;
+        institutionCount: number;
+      }[];
+      institutionCohortBreakdown?: {
+        institution: string;
+        region: string;
+        intakeAcademicYear: string;
+        totalLearners: number;
+        currentEnrolled: number;
+        graduating: number;
+        graduated: number;
+      }[];
       placementTrend: { name: string; year: number; month: number; count: number }[];
       regionalStats: {
         region: string;
         institutionCount: number;
         totalLearners: number;
+        currentEnrolled: number;
+        academicGraduating: number;
+        academicGraduated: number;
         placementRate: number;
       }[];
       institutionStats: {
         _id: string;
         totalLearners: number;
+        currentEnrolled: number;
+        academicActive: number;
+        academicGraduating: number;
+        academicGraduated: number;
         placed: number;
         pending: number;
         completed: number;
@@ -257,6 +348,157 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {adminData.academicSummary && (
+          <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+            <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
+              <CardTitle className="text-2xl font-black">Academic Lifecycle</CardTitle>
+              <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                Separate current enrolled learners from graduating and graduated cohorts.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-4 md:p-8">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <button type="button" onClick={() => openLearnerRegister({ academicStatus: "CurrentEnrolled" })} className="rounded-[1.5rem] border border-indigo-100 bg-indigo-50/70 p-5 text-left transition hover:bg-indigo-100/70">
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <Users className="h-5 w-5 text-indigo-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-indigo-700">Enrolled</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-indigo-700">{adminData.academicSummary.currentEnrolled}</div>
+                  <p className="mt-1 text-sm font-bold text-indigo-800/70">Current active + graduating learners</p>
+                </button>
+                <button type="button" onClick={() => openLearnerRegister({ academicStatus: "Graduating" })} className="rounded-[1.5rem] border border-amber-100 bg-amber-50/70 p-5 text-left transition hover:bg-amber-100/70">
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <ArrowUpRight className="h-5 w-5 text-amber-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-amber-700">Final Year</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-amber-700">{adminData.academicSummary.graduating}</div>
+                  <p className="mt-1 text-sm font-bold text-amber-800/70">Graduating learners</p>
+                </button>
+                <button type="button" onClick={() => openLearnerRegister({ academicStatus: "Graduated" })} className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5 text-left transition hover:bg-emerald-100/70">
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <GraduationCap className="h-5 w-5 text-emerald-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-emerald-700">Alumni</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-emerald-700">{adminData.academicSummary.graduated}</div>
+                  <p className="mt-1 text-sm font-bold text-emerald-800/70">Graduated learners</p>
+                </button>
+                <button type="button" onClick={() => openLearnerRegister({ academicStatus: "Dropped" })} className="rounded-[1.5rem] border border-rose-100 bg-rose-50/70 p-5 text-left transition hover:bg-rose-100/70">
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <Clock className="h-5 w-5 text-rose-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-rose-700">Dropped</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-rose-700">{adminData.academicSummary.dropped}</div>
+                  <p className="mt-1 text-sm font-bold text-rose-800/70">Dropped from academic cycle</p>
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {adminData.intakeCohorts && adminData.intakeCohorts.length > 0 && (
+          <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+            <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-2xl font-black">Cohort Comparison</CardTitle>
+                  <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                    Intake-year comparison across {user?.role === 'RegionalAdmin' ? 'your region' : 'the platform'}.
+                  </CardDescription>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => downloadCSV(adminData.regionalCohortBreakdown || [], 'regional-cohort-breakdown')}
+                    className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
+                  >
+                    <Download className="mr-2 h-4 w-4" /> Export Regions
+                  </Button>
+                  {user?.role !== 'RegionalAdmin' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => downloadCSV(adminData.institutionCohortBreakdown || [], 'institution-cohort-breakdown')}
+                      className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
+                    >
+                      <Download className="mr-2 h-4 w-4" /> Export Institutions
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4 md:p-8">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {adminData.intakeCohorts.map((cohort) => (
+                  <button
+                    key={cohort.intakeAcademicYear}
+                    type="button"
+                    onClick={() => openLearnerRegister({ intakeAcademicYear: cohort.intakeAcademicYear })}
+                    className="rounded-[1.5rem] border border-gray-100 bg-gray-50 p-5 text-left transition hover:bg-gray-100"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black uppercase tracking-widest text-gray-500">Intake</span>
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-gray-700">{cohort.totalLearners} learners</span>
+                    </div>
+                    <div className="mt-4 text-2xl font-black text-gray-900">{cohort.intakeAcademicYear}</div>
+                    {cohort.riskLevel && cohort.riskLevel !== 'low' && (
+                      <div className={`mt-2 inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
+                        cohort.riskLevel === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {cohort.riskLevel} risk
+                      </div>
+                    )}
+                    <p className="mt-1 text-xs font-bold text-gray-500">
+                      {cohort.regionCount} region{cohort.regionCount !== 1 ? 's' : ''} • {cohort.institutionCount} institution{cohort.institutionCount !== 1 ? 's' : ''}
+                    </p>
+                    <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-2xl bg-sky-50 px-3 py-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-sky-700">Current</p>
+                        <p className="mt-1 text-xl font-black text-sky-700">{cohort.currentEnrolled}</p>
+                      </div>
+                      <div className="rounded-2xl bg-amber-50 px-3 py-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Grad.</p>
+                        <p className="mt-1 text-xl font-black text-amber-700">{cohort.graduating}</p>
+                      </div>
+                      <div className="rounded-2xl bg-emerald-50 px-3 py-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Done</p>
+                        <p className="mt-1 text-xl font-black text-emerald-700">{cohort.graduated}</p>
+                      </div>
+                    </div>
+                    {cohort.riskReasons && cohort.riskReasons.length > 0 && (
+                      <p className="mt-3 text-xs font-bold text-gray-500">{cohort.riskReasons[0]}</p>
+                    )}
+                    {cohort.riskLevel && cohort.riskLevel !== 'low' && (
+                      <div className="mt-3">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="rounded-xl border-gray-200 bg-white font-bold"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openInterventionQueue({ intakeAcademicYear: cohort.intakeAcademicYear, risk: 'at-risk' });
+                          }}
+                        >
+                          View Intervention Queue
+                        </Button>
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Report Approval Pipeline — RegionalAdmin only */}
         {user?.role === 'RegionalAdmin' && adminData.reportPipeline && (
@@ -475,6 +717,9 @@ export default function Dashboard() {
                         <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">
                           {reg.institutionCount} Institutions • {reg.totalLearners} Learners
                         </span>
+                        <span className="text-[11px] font-bold text-gray-500 mt-1">
+                          {reg.currentEnrolled} current enrolled • {reg.academicGraduated} graduated
+                        </span>
                       </div>
                       <div className="flex flex-col items-end">
                         <span className={`text-xl font-black ${reg.placementRate > 70 ? 'text-green-600' : reg.placementRate > 40 ? 'text-amber-600' : 'text-red-600'}`}>
@@ -563,6 +808,9 @@ export default function Dashboard() {
                           <span className="text-xs font-bold text-gray-400 bg-gray-200 px-2 py-0.5 rounded-full inline-block mt-1">
                             {placementRate}% Placement Rate
                           </span>
+                          <p className="text-xs font-bold text-gray-500 mt-2">
+                            {inst.currentEnrolled} current enrolled • {inst.academicGraduated} graduated
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -601,6 +849,8 @@ export default function Dashboard() {
   }
 
   // Regular Institutional Dashboard renders below
+  const institutionPerformance = stats?.institutionPerformance;
+
   return (
     <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
       {/* Personalized Header & Quick Actions */}
@@ -623,7 +873,11 @@ export default function Dashboard() {
              </div>
              <div className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-xs items-center inline-flex font-bold border border-indigo-100">
                 <Users className="w-3 h-3 mr-1" />
-                {stats?.totalLearners || 0} Total Learners
+                {(stats?.academicSummary?.currentEnrolled ?? stats?.totalLearners ?? 0)} Current Enrolled
+             </div>
+             <div className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-xs items-center inline-flex font-bold border border-emerald-100">
+                <GraduationCap className="w-3 h-3 mr-1" />
+                {stats?.academicSummary?.graduated || 0} Graduated
              </div>
           </div>
         </div>
@@ -716,6 +970,288 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Delegated Learners Card */}
+          {delegatedPlacements && delegatedPlacements.length > 0 && (
+            <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 rounded-[2rem] shadow-lg overflow-hidden">
+              <CardHeader className="p-6 pb-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-amber-100 rounded-2xl">
+                      <Handshake className="h-6 w-6 text-amber-700" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg font-black text-amber-900">Delegated to Me</CardTitle>
+                      <CardDescription className="text-amber-700 font-medium">Learners from other institutions assigned to you for monitoring</CardDescription>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1.5 bg-amber-200 text-amber-800 rounded-full text-sm font-black">
+                    {delegatedPlacements.length}
+                  </span>
+                </div>
+              </CardHeader>
+              <CardContent className="px-6 pb-6">
+                <div className="space-y-3">
+                  {delegatedPlacements.slice(0, 5).map((p: any) => (
+                    <button
+                      key={p._id}
+                      type="button"
+                      onClick={() => navigate('/placements')}
+                      className="w-full text-left p-4 rounded-2xl bg-white/80 border border-amber-100 hover:border-amber-300 hover:bg-white transition-all"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-bold text-gray-900 text-sm">{p.learner?.name || 'Learner'}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            From <strong>{p.institution}</strong> · {p.companyName}
+                          </p>
+                        </div>
+                        <ArrowUpRight className="h-4 w-4 text-amber-500" />
+                      </div>
+                    </button>
+                  ))}
+                  {delegatedPlacements.length > 5 && (
+                    <Button
+                      variant="ghost"
+                      className="w-full text-amber-700 font-bold hover:text-amber-900 hover:bg-amber-100/50"
+                      onClick={() => navigate('/placements')}
+                    >
+                      View all {delegatedPlacements.length} delegated placements
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {stats?.academicSummary && (
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-6 md:p-8 pb-4 border-b border-gray-50">
+                <CardTitle className="text-2xl font-black">Academic Lifecycle</CardTitle>
+                <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                  Current enrolled learners are now tracked separately from graduates and WEL completion.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <button type="button" onClick={() => openLearnerRegister({ academicStatus: "CurrentEnrolled" })} className="rounded-[1.5rem] border border-indigo-100 bg-indigo-50/70 p-5 text-left transition hover:bg-indigo-100/70">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <Users className="h-5 w-5 text-indigo-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-indigo-700">Enrolled</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-indigo-700">{stats.academicSummary.currentEnrolled}</div>
+                    <p className="mt-1 text-sm font-bold text-indigo-800/70">Active + graduating learners</p>
+                  </button>
+                  <button type="button" onClick={() => openLearnerRegister({ academicStatus: "Active" })} className="rounded-[1.5rem] border border-sky-100 bg-sky-50/70 p-5 text-left transition hover:bg-sky-100/70">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <TrendingUp className="h-5 w-5 text-sky-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-sky-700">Active</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-sky-700">{stats.academicSummary.active}</div>
+                    <p className="mt-1 text-sm font-bold text-sky-800/70">Continuing learners</p>
+                  </button>
+                  <button type="button" onClick={() => openLearnerRegister({ academicStatus: "Graduating" })} className="rounded-[1.5rem] border border-amber-100 bg-amber-50/70 p-5 text-left transition hover:bg-amber-100/70">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <ArrowUpRight className="h-5 w-5 text-amber-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-amber-700">Graduating</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-amber-700">{stats.academicSummary.graduating}</div>
+                    <p className="mt-1 text-sm font-bold text-amber-800/70">Final-year learners nearing exit</p>
+                  </button>
+                  <button type="button" onClick={() => openLearnerRegister({ academicStatus: "Graduated" })} className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5 text-left transition hover:bg-emerald-100/70">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <GraduationCap className="h-5 w-5 text-emerald-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-emerald-700">Graduated</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-emerald-700">{stats.academicSummary.graduated}</div>
+                    <p className="mt-1 text-sm font-bold text-emerald-800/70">Completed academic cycle</p>
+                  </button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {stats?.intakeCohorts && stats.intakeCohorts.length > 0 && (
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-6 md:p-8 pb-4 border-b border-gray-50">
+                <CardTitle className="text-2xl font-black">Cohort Comparison</CardTitle>
+                <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                  Intake-year view of current enrolled, graduating, and graduated learners.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {stats.intakeCohorts.map((cohort) => (
+                    <button
+                      key={cohort.intakeAcademicYear}
+                      type="button"
+                      onClick={() => openLearnerRegister({ intakeAcademicYear: cohort.intakeAcademicYear })}
+                      className="rounded-[1.5rem] border border-gray-100 bg-gray-50 p-5 text-left transition hover:bg-gray-100"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black uppercase tracking-widest text-gray-500">Intake</span>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-gray-700">{cohort.totalLearners} total</span>
+                      </div>
+                      <div className="mt-4 text-2xl font-black text-gray-900">{cohort.intakeAcademicYear}</div>
+                      {cohort.riskLevel && cohort.riskLevel !== 'low' && (
+                        <div className={`mt-2 inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
+                          cohort.riskLevel === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {cohort.riskLevel} risk
+                        </div>
+                      )}
+                      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-2xl bg-sky-50 px-3 py-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-sky-700">Current</p>
+                          <p className="mt-1 text-xl font-black text-sky-700">{cohort.currentEnrolled}</p>
+                        </div>
+                        <div className="rounded-2xl bg-amber-50 px-3 py-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Grad.</p>
+                          <p className="mt-1 text-xl font-black text-amber-700">{cohort.graduating}</p>
+                        </div>
+                        <div className="rounded-2xl bg-emerald-50 px-3 py-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Done</p>
+                          <p className="mt-1 text-xl font-black text-emerald-700">{cohort.graduated}</p>
+                        </div>
+                      </div>
+                      {cohort.riskReasons && cohort.riskReasons.length > 0 && (
+                        <p className="mt-3 text-xs font-bold text-gray-500">{cohort.riskReasons[0]}</p>
+                      )}
+                      {cohort.riskLevel && cohort.riskLevel !== 'low' && (
+                        <div className="mt-3">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="rounded-xl border-gray-200 bg-white font-bold"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openInterventionQueue({ intakeAcademicYear: cohort.intakeAcademicYear, risk: 'at-risk' });
+                            }}
+                          >
+                            View Intervention Queue
+                          </Button>
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {institutionPerformance && (
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-6 md:p-8 pb-4 border-b border-gray-50">
+                <CardTitle className="text-2xl font-black">Institution Performance</CardTitle>
+                <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                  Live operational performance derived from placements, attendance, visits, assessments, and support tickets.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <Briefcase className="h-5 w-5 text-emerald-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-emerald-700">Coverage</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-emerald-700">
+                      {institutionPerformance.placementCoverageRate}%
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-emerald-800/70">Placement coverage rate</p>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-indigo-100 bg-indigo-50/70 p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <Users className="h-5 w-5 text-indigo-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-indigo-700">Active</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-indigo-700">
+                      {institutionPerformance.activeLearnerCount}
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-indigo-800/70">Learners in active placements</p>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/70 p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <Clock className="h-5 w-5 text-amber-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-amber-700">Overdue</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-amber-700">
+                      {institutionPerformance.overdueAttendanceRate}%
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-amber-800/70">Attendance overdue rate</p>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-sky-100 bg-sky-50/70 p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <ClipboardList className="h-5 w-5 text-sky-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-sky-700">Visits</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-sky-700">
+                      {institutionPerformance.monitoringCoverageRate}%
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-sky-800/70">Monitoring coverage rate</p>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-violet-100 bg-violet-50/70 p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <TrendingUp className="h-5 w-5 text-violet-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-violet-700">Assessments</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-violet-700">
+                      {institutionPerformance.assessmentCompletionRate}%
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-violet-800/70">Assessment completion rate</p>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-rose-100 bg-rose-50/70 p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <FileText className="h-5 w-5 text-rose-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-rose-700">Backlog</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-rose-700">
+                      {institutionPerformance.supportBacklog}
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-rose-800/70">Open support issues</p>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-red-100 bg-red-50/70 p-5">
+                    <div className="flex items-start justify-between">
+                      <div className="p-3 rounded-2xl bg-white/80">
+                        <Timer className="h-5 w-5 text-red-600" />
+                      </div>
+                      <span className="text-xs font-black uppercase tracking-widest text-red-700">SLA</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-black text-red-700">
+                      {institutionPerformance.slaBreachCount}
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-red-800/70">Breached institution-owned issues</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Bento Box Grid */}
           <div className="grid gap-6 grid-cols-1 xl:grid-cols-3">

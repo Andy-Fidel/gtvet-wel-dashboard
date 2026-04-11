@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { useAuth } from "@/context/AuthContext"
-import { Activity, AlertTriangle, TrendingUp, Users, Award, CheckCircle2 } from "lucide-react"
+import { Activity, AlertTriangle, TrendingUp, Users, Award, CheckCircle2, UserCircle2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,7 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
+import { toast } from "sonner"
 
 interface LearnerProgress {
   learner: {
@@ -23,8 +24,16 @@ interface LearnerProgress {
     name: string
     trackingId: string
     status: string
+    academicStatus: string
     program: string
     year: string
+    intakeAcademicYear?: string
+    owner?: {
+      _id: string
+      name: string
+      role: string
+      institution?: string
+    } | null
   }
   progress: {
     overall: number
@@ -45,32 +54,83 @@ interface ProgressStats {
   atRiskCount: number
   completedCount: number
   placedCount: number
+  academicSummary?: {
+    currentEnrolled: number
+    activeCount: number
+    graduatingCount: number
+    graduatedCount: number
+    academicDroppedCount: number
+  }
+  intakeCohorts?: {
+    intakeAcademicYear: string
+    totalLearners: number
+    currentEnrolled: number
+    graduating: number
+    graduated: number
+    avgProgress: number
+    atRiskCount: number
+    riskLevel?: string
+    riskReasons?: string[]
+  }[]
 }
 
 const ALL_PROGRAMS = "__all_programs"
 const ALL_YEARS = "__all_years"
 const ALL_STATUSES = "__all_statuses"
+const ALL_ACADEMIC_STATUSES = "__all_academic_statuses"
+const ALL_INTAKE_YEARS = "__all_intake_years"
+const ALL_RISK_STATES = "__all_risk_states"
 
 export default function LearnerProgressDashboard() {
-  const { authFetch } = useAuth()
+  const { authFetch, user } = useAuth()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
   const [learners, setLearners] = useState<LearnerProgress[]>([])
   const [stats, setStats] = useState<ProgressStats | null>(null)
-  const [filterProgram, setFilterProgram] = useState("")
-  const [filterYear, setFilterYear] = useState("")
-  const [filterStatus, setFilterStatus] = useState("")
+  const [ownerCandidates, setOwnerCandidates] = useState<Array<{ _id: string; name: string; role: string; institution?: string }>>([])
+  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>({})
+  const [savingOwners, setSavingOwners] = useState<Record<string, boolean>>({})
+  const filterProgram = searchParams.get("program") || ""
+  const filterYear = searchParams.get("year") || ""
+  const filterStatus = searchParams.get("status") || ""
+  const filterAcademicStatus = searchParams.get("academicStatus") || ""
+  const filterIntakeAcademicYear = searchParams.get("intakeAcademicYear") || ""
+  const filterRiskState = searchParams.get("risk") || ""
   const [searchQuery, setSearchQuery] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
   const itemsPerPage = 10
+  const canManageOwnership = ["Admin", "Manager", "RegionalAdmin", "SuperAdmin"].includes(user?.role || "")
 
   useEffect(() => {
     fetchProgress()
-  }, [filterProgram, filterYear, filterStatus])
+  }, [filterProgram, filterYear, filterStatus, filterAcademicStatus, filterIntakeAcademicYear])
+
+  useEffect(() => {
+    if (!canManageOwnership) return
+
+    authFetch("/api/ownership/users")
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to fetch ownership candidates")
+        return res.json()
+      })
+      .then(setOwnerCandidates)
+      .catch((error) => {
+        console.error("Error fetching ownership candidates:", error)
+      })
+  }, [authFetch, canManageOwnership])
+
+  useEffect(() => {
+    setOwnerDrafts(
+      Object.fromEntries(
+        learners.map((lp) => [lp.learner._id, lp.learner.owner?._id || "__unassigned"])
+      )
+    )
+  }, [learners])
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [searchQuery, filterProgram, filterYear, filterStatus])
+  }, [searchQuery, filterProgram, filterYear, filterStatus, filterAcademicStatus, filterIntakeAcademicYear])
 
   const fetchProgress = async () => {
     setLoading(true)
@@ -79,6 +139,8 @@ export default function LearnerProgressDashboard() {
       if (filterProgram) params.append("program", filterProgram)
       if (filterYear) params.append("year", filterYear)
       if (filterStatus) params.append("status", filterStatus)
+      if (filterAcademicStatus) params.append("academicStatus", filterAcademicStatus)
+      if (filterIntakeAcademicYear) params.append("intakeAcademicYear", filterIntakeAcademicYear)
 
       const res = await authFetch(`/api/learners/progress/bulk?${params.toString()}`)
       if (res.ok) {
@@ -95,12 +157,18 @@ export default function LearnerProgressDashboard() {
 
   const filteredLearners = learners.filter((lp) => {
     const query = searchQuery.toLowerCase()
-    return (
+    const matchesSearch = (
       lp.learner.name.toLowerCase().includes(query) ||
       lp.learner.trackingId.toLowerCase().includes(query) ||
       lp.learner.program.toLowerCase().includes(query)
     )
+    const matchesRisk = filterRiskState === "at-risk" ? lp.progress.atRisk : true
+    return matchesSearch && matchesRisk
   })
+
+  const assignedCount = filteredLearners.filter((lp) => Boolean(lp.learner.owner?._id)).length
+  const unassignedCount = filteredLearners.length - assignedCount
+  const atRiskOwnedCount = filteredLearners.filter((lp) => lp.progress.atRisk && lp.learner.owner?._id).length
 
   const totalPages = Math.max(1, Math.ceil(filteredLearners.length / itemsPerPage))
   const paginatedLearners = filteredLearners.slice(
@@ -117,8 +185,8 @@ export default function LearnerProgressDashboard() {
 
   const statCards = [
     {
-      title: "Total Learners",
-      value: stats?.totalLearners || 0,
+      title: "Current Enrolled",
+      value: stats?.academicSummary?.currentEnrolled ?? stats?.totalLearners ?? 0,
       icon: Users,
       color: "text-indigo-600",
       bgColor: "bg-indigo-50",
@@ -140,13 +208,60 @@ export default function LearnerProgressDashboard() {
       alert: Boolean(stats?.atRiskCount),
     },
     {
-      title: "Completed",
-      value: stats?.completedCount || 0,
-      icon: CheckCircle2,
-      color: "text-blue-600",
-      bgColor: "bg-blue-50",
+      title: "Graduated",
+      value: stats?.academicSummary?.graduatedCount || 0,
+      icon: Award,
+      color: "text-emerald-600",
+      bgColor: "bg-emerald-50",
     },
   ]
+
+  const getWELStatusColor = (status: string) => {
+    if (status === "Completed") return "bg-emerald-100 text-emerald-700"
+    if (status === "Placed") return "bg-blue-100 text-blue-700"
+    if (status === "Dropped") return "bg-red-100 text-red-700"
+    return "bg-gray-100 text-gray-600"
+  }
+
+  const getAcademicStatusColor = (status: string) => {
+    if (status === "Graduated") return "bg-emerald-100 text-emerald-700"
+    if (status === "Graduating") return "bg-amber-100 text-amber-700"
+    if (status === "Dropped") return "bg-rose-100 text-rose-700"
+    return "bg-indigo-100 text-indigo-700"
+  }
+
+  const intakeAcademicYearOptions = Array.from(
+    new Set(learners.map((lp) => lp.learner.intakeAcademicYear).filter(Boolean))
+  ) as string[]
+  intakeAcademicYearOptions.sort((a, b) => b.localeCompare(a))
+
+  const updateFilter = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (value) next.set(key, value)
+    else next.delete(key)
+    setSearchParams(next)
+  }
+
+  const saveLearnerOwner = async (learnerId: string) => {
+    setSavingOwners((current) => ({ ...current, [learnerId]: true }))
+    try {
+      const res = await authFetch(`/api/learners/${learnerId}/owner`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ownerId: ownerDrafts[learnerId] === "__unassigned" ? null : ownerDrafts[learnerId],
+        }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || "Failed to update learner owner")
+      toast.success("Learner owner updated")
+      fetchProgress()
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : "Failed to update learner owner")
+    } finally {
+      setSavingOwners((current) => ({ ...current, [learnerId]: false }))
+    }
+  }
 
   return (
     <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
@@ -203,8 +318,8 @@ export default function LearnerProgressDashboard() {
       {/* Filters */}
       <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
         <CardContent className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="md:col-span-1">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
+            <div className="xl:col-span-1">
               <Input
                 placeholder="Search learners..."
                 value={searchQuery}
@@ -215,7 +330,7 @@ export default function LearnerProgressDashboard() {
             <div>
               <Select
                 value={filterProgram || ALL_PROGRAMS}
-                onValueChange={(value) => setFilterProgram(value === ALL_PROGRAMS ? "" : value)}
+                onValueChange={(value) => updateFilter("program", value === ALL_PROGRAMS ? "" : value)}
               >
                 <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
                   <SelectValue placeholder="All Programs" />
@@ -232,7 +347,7 @@ export default function LearnerProgressDashboard() {
             <div>
               <Select
                 value={filterYear || ALL_YEARS}
-                onValueChange={(value) => setFilterYear(value === ALL_YEARS ? "" : value)}
+                onValueChange={(value) => updateFilter("year", value === ALL_YEARS ? "" : value)}
               >
                 <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
                   <SelectValue placeholder="All Years" />
@@ -248,13 +363,13 @@ export default function LearnerProgressDashboard() {
             <div>
               <Select
                 value={filterStatus || ALL_STATUSES}
-                onValueChange={(value) => setFilterStatus(value === ALL_STATUSES ? "" : value)}
+                onValueChange={(value) => updateFilter("status", value === ALL_STATUSES ? "" : value)}
               >
                 <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
-                  <SelectValue placeholder="All Statuses" />
+                  <SelectValue placeholder="All WEL Statuses" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={ALL_STATUSES}>All Statuses</SelectItem>
+                  <SelectItem value={ALL_STATUSES}>All WEL Statuses</SelectItem>
                   <SelectItem value="Pending">Pending</SelectItem>
                   <SelectItem value="Placed">Placed</SelectItem>
                   <SelectItem value="Completed">Completed</SelectItem>
@@ -262,9 +377,149 @@ export default function LearnerProgressDashboard() {
                 </SelectContent>
               </Select>
             </div>
+            <div>
+              <Select
+                value={filterAcademicStatus || ALL_ACADEMIC_STATUSES}
+                onValueChange={(value) => updateFilter("academicStatus", value === ALL_ACADEMIC_STATUSES ? "" : value)}
+              >
+                <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
+                  <SelectValue placeholder="All Academic Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_ACADEMIC_STATUSES}>All Academic Statuses</SelectItem>
+                  <SelectItem value="Active">Active</SelectItem>
+                  <SelectItem value="Graduating">Graduating</SelectItem>
+                  <SelectItem value="Graduated">Graduated</SelectItem>
+                  <SelectItem value="Dropped">Dropped</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Select
+                value={filterIntakeAcademicYear || ALL_INTAKE_YEARS}
+                onValueChange={(value) => updateFilter("intakeAcademicYear", value === ALL_INTAKE_YEARS ? "" : value)}
+              >
+                <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
+                  <SelectValue placeholder="All Intake Years" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_INTAKE_YEARS}>All Intake Years</SelectItem>
+                  {intakeAcademicYearOptions.map((intakeYear) => (
+                    <SelectItem key={intakeYear} value={intakeYear}>{intakeYear}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Select
+                value={filterRiskState || ALL_RISK_STATES}
+                onValueChange={(value) => updateFilter("risk", value === ALL_RISK_STATES ? "" : value)}
+              >
+                <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
+                  <SelectValue placeholder="All Risk States" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_RISK_STATES}>All Risk States</SelectItem>
+                  <SelectItem value="at-risk">At Risk Only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardContent>
       </Card>
+
+      {!loading && stats?.academicSummary && (
+        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+          <CardHeader>
+            <CardTitle className="text-lg font-black text-gray-900">Academic Lifecycle</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            {[
+              { label: "Current Enrolled", value: stats.academicSummary.currentEnrolled, color: "bg-sky-50 text-sky-700" },
+              { label: "Academic Active", value: stats.academicSummary.activeCount, color: "bg-indigo-50 text-indigo-700" },
+              { label: "Graduating", value: stats.academicSummary.graduatingCount, color: "bg-amber-50 text-amber-700" },
+              { label: "Graduated", value: stats.academicSummary.graduatedCount, color: "bg-emerald-50 text-emerald-700" },
+              { label: "Academic Dropped", value: stats.academicSummary.academicDroppedCount, color: "bg-rose-50 text-rose-700" },
+            ].map((item) => (
+              <div key={item.label} className={`rounded-2xl px-4 py-5 ${item.color}`}>
+                <p className="text-[11px] font-black uppercase tracking-widest">{item.label}</p>
+                <p className="text-3xl font-black mt-2">{item.value}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {!loading && stats?.intakeCohorts && stats.intakeCohorts.length > 0 && (
+        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+          <CardHeader>
+            <CardTitle className="text-lg font-black text-gray-900">Cohort Comparison</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+            {stats.intakeCohorts.map((cohort) => (
+              <div key={cohort.intakeAcademicYear} className="rounded-[1.5rem] border border-gray-100 bg-gray-50 p-5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black uppercase tracking-widest text-gray-500">Intake {cohort.intakeAcademicYear}</span>
+                  <Badge className="bg-white text-gray-700 border-gray-200">{cohort.totalLearners} learners</Badge>
+                </div>
+                {cohort.riskLevel && cohort.riskLevel !== 'low' && (
+                  <div className={`mt-2 inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
+                    cohort.riskLevel === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    {cohort.riskLevel} risk
+                  </div>
+                )}
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-sky-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-sky-700">Current</p>
+                    <p className="mt-1 text-2xl font-black text-sky-700">{cohort.currentEnrolled}</p>
+                  </div>
+                  <div className="rounded-2xl bg-emerald-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Graduated</p>
+                    <p className="mt-1 text-2xl font-black text-emerald-700">{cohort.graduated}</p>
+                  </div>
+                  <div className="rounded-2xl bg-amber-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Progress</p>
+                    <p className="mt-1 text-2xl font-black text-amber-700">{cohort.avgProgress}%</p>
+                  </div>
+                  <div className="rounded-2xl bg-rose-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">At Risk</p>
+                    <p className="mt-1 text-2xl font-black text-rose-700">{cohort.atRiskCount}</p>
+                  </div>
+                </div>
+                {cohort.riskReasons && cohort.riskReasons.length > 0 && (
+                  <p className="mt-3 text-xs font-bold text-gray-500">{cohort.riskReasons[0]}</p>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {!loading && (
+        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+          <CardHeader>
+            <CardTitle className="text-lg font-black text-gray-900">Intervention Ownership</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="rounded-2xl bg-indigo-50 px-4 py-5">
+              <p className="text-[11px] font-black uppercase tracking-widest text-indigo-700">Assigned Queue</p>
+              <p className="mt-2 text-3xl font-black text-indigo-700">{assignedCount}</p>
+              <p className="mt-1 text-xs font-medium text-indigo-600">Learners in the current view with an owner</p>
+            </div>
+            <div className="rounded-2xl bg-amber-50 px-4 py-5">
+              <p className="text-[11px] font-black uppercase tracking-widest text-amber-700">Unassigned Queue</p>
+              <p className="mt-2 text-3xl font-black text-amber-700">{unassignedCount}</p>
+              <p className="mt-1 text-xs font-medium text-amber-600">Learners still needing a responsible staff owner</p>
+            </div>
+            <div className="rounded-2xl bg-rose-50 px-4 py-5">
+              <p className="text-[11px] font-black uppercase tracking-widest text-rose-700">At-Risk Owned</p>
+              <p className="mt-2 text-3xl font-black text-rose-700">{atRiskOwnedCount}</p>
+              <p className="mt-1 text-xs font-medium text-rose-600">At-risk learners already assigned for follow-up</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Progress Table */}
       <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
@@ -292,7 +547,9 @@ export default function LearnerProgressDashboard() {
                 <TableRow className="border-gray-100">
                   <TableHead className="font-bold text-gray-500">Learner</TableHead>
                   <TableHead className="font-bold text-gray-500">Program</TableHead>
-                  <TableHead className="font-bold text-gray-500">Status</TableHead>
+                  <TableHead className="font-bold text-gray-500">Owner</TableHead>
+                  <TableHead className="font-bold text-gray-500">WEL Status</TableHead>
+                  <TableHead className="font-bold text-gray-500">Academic Status</TableHead>
                   <TableHead className="font-bold text-gray-500">Progress</TableHead>
                   <TableHead className="font-bold text-gray-500">Category Breakdown</TableHead>
                   <TableHead className="font-bold text-gray-500 text-right">Risk Level</TableHead>
@@ -314,20 +571,60 @@ export default function LearnerProgressDashboard() {
                     <TableCell className="text-gray-600">
                       {lp.learner.program}
                       <div className="text-xs text-gray-400">{lp.learner.year}</div>
+                      {lp.learner.intakeAcademicYear && (
+                        <div className="text-xs text-gray-400">Intake {lp.learner.intakeAcademicYear}</div>
+                      )}
+                    </TableCell>
+                    <TableCell onClick={(event) => event.stopPropagation()}>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <UserCircle2 className="h-4 w-4 text-gray-400" />
+                          <span className="text-sm font-bold text-gray-900">{lp.learner.owner?.name || "Unassigned"}</span>
+                        </div>
+                        {lp.learner.owner?.role ? (
+                          <p className="text-xs text-gray-500">{lp.learner.owner.role}</p>
+                        ) : (
+                          <p className="text-xs text-amber-600">Needs follow-up owner</p>
+                        )}
+                        {canManageOwnership ? (
+                          <div className="flex flex-col gap-2">
+                            <Select
+                              value={ownerDrafts[lp.learner._id] || "__unassigned"}
+                              onValueChange={(value) => setOwnerDrafts((current) => ({ ...current, [lp.learner._id]: value }))}
+                            >
+                              <SelectTrigger className="min-w-[220px] bg-white">
+                                <SelectValue placeholder="Select owner" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__unassigned">Unassigned</SelectItem>
+                                {ownerCandidates.map((candidate) => (
+                                  <SelectItem key={candidate._id} value={candidate._id}>
+                                    {candidate.name} ({candidate.role})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="rounded-xl"
+                              disabled={savingOwners[lp.learner._id]}
+                              onClick={() => saveLearnerOwner(lp.learner._id)}
+                            >
+                              {savingOwners[lp.learner._id] ? "Saving…" : "Assign Owner"}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        className={`border-0 ${
-                          lp.learner.status === "Completed"
-                            ? "bg-emerald-100 text-emerald-700"
-                            : lp.learner.status === "Placed"
-                            ? "bg-blue-100 text-blue-700"
-                            : lp.learner.status === "Dropped"
-                            ? "bg-red-100 text-red-700"
-                            : "bg-gray-100 text-gray-600"
-                        }`}
-                      >
+                      <Badge className={`border-0 ${getWELStatusColor(lp.learner.status)}`}>
                         {lp.learner.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge className={`border-0 ${getAcademicStatusColor(lp.learner.academicStatus)}`}>
+                        {lp.learner.academicStatus}
                       </Badge>
                     </TableCell>
                     <TableCell>

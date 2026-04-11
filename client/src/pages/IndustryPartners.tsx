@@ -124,7 +124,7 @@ export default function IndustryPartners() {
         setOpen(val)
         if (!val) setEditingPartner(null)
       }}>
-        <DialogContent className="sm:max-w-[600px] bg-white border-none rounded-[2rem] shadow-2xl overflow-hidden p-0 [&>button]:text-gray-500 hover:[&>button]:text-gray-900 [&>button]:bg-gray-100 hover:[&>button]:bg-gray-200">
+        <DialogContent className="sm:max-w-[600px] bg-white border-none rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh] p-0 [&>button]:text-gray-500 hover:[&>button]:text-gray-900 [&>button]:bg-gray-100 hover:[&>button]:bg-gray-200">
           <div className="p-8">
             <DialogHeader className="mb-6">
               <DialogTitle className="text-2xl font-black">{editingPartner ? 'Edit Partner' : 'Register New Partner'}</DialogTitle>

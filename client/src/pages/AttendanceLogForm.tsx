@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/Calendar"
 import { cn } from "@/lib/utils"
 import { safeDateString } from "@/lib/dateUtils"
+import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
 
 const formSchema = z.object({
   learner: z.string().min(1, "Learner is required"),
@@ -29,9 +30,10 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>
 
 interface AttendanceLogFormProps {
-  onSuccess: () => void
+  onSuccess: (result?: { offlineQueued?: boolean }) => void
   initialData?: {
     _id?: string
+    updatedAt?: string
     learner?: string | { _id: string }
     entryType?: "Daily" | "Weekly"
     periodStart?: string
@@ -44,10 +46,11 @@ interface AttendanceLogFormProps {
 }
 
 export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: AttendanceLogFormProps) {
-  const { authFetch } = useAuth()
+  const { authFetch, user } = useAuth()
   const [loading, setLoading] = useState(false)
   const [learners, setLearners] = useState<Learner[]>([])
   const normalizeNumberInput = (value: string) => (value === "" ? 0 : Number(value))
+  const draftKey = `draft:attendance-log:${initialData?._id || presetLearnerId || "new"}`
 
   const defaultLearner = useMemo(() => {
     if (typeof initialData?.learner === "object" && initialData.learner) {
@@ -69,16 +72,65 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
     },
   })
 
+  useEffect(() => {
+    if (initialData?._id) return
+    const draft = loadDraft<Record<string, string | number | null>>(draftKey)
+    if (!draft) return
+
+    form.reset({
+      learner: typeof draft.learner === "string" ? draft.learner : defaultLearner,
+      entryType: draft.entryType === "Weekly" ? "Weekly" : "Daily",
+      periodStart: draft.periodStart ? new Date(String(draft.periodStart)) : new Date(),
+      periodEnd: draft.periodEnd ? new Date(String(draft.periodEnd)) : new Date(),
+      hoursWorked: typeof draft.hoursWorked === "number" ? draft.hoursWorked : 0,
+      tasksCompleted: typeof draft.tasksCompleted === "string" ? draft.tasksCompleted : "",
+      notes: typeof draft.notes === "string" ? draft.notes : "",
+    })
+  }, [defaultLearner, draftKey, form, initialData?._id])
+
+  useEffect(() => {
+    if (initialData?._id) return
+    const subscription = form.watch((values) => {
+      saveDraft(draftKey, {
+        ...values,
+        periodStart: values.periodStart instanceof Date ? values.periodStart.toISOString() : null,
+        periodEnd: values.periodEnd instanceof Date ? values.periodEnd.toISOString() : null,
+      })
+    })
+    return () => subscription.unsubscribe()
+  }, [draftKey, form, initialData?._id])
+
   const entryType = form.watch("entryType")
   const selectedLearnerId = form.watch("learner")
   const selectedLearner = learners.find((learner) => learner._id === selectedLearnerId)
 
   useEffect(() => {
-    authFetch("/api/learners")
-      .then((res) => res.json())
-      .then((data) => setLearners(data))
-      .catch((err) => console.error("Error fetching learners:", err))
-  }, [authFetch])
+    const fetchLearners = async () => {
+      try {
+        if (user?.role === "IndustryPartner") {
+          const res = await authFetch("/api/partner-portal/placements")
+          const data = await res.json()
+          const partnerLearners = (data || [])
+            .filter((placement: { assignedToCurrentSupervisor?: boolean; partnerSupervisor?: { _id: string } | null }) => {
+              if (!placement.partnerSupervisor?._id) return true
+              return placement.assignedToCurrentSupervisor
+            })
+            .map((placement: { learner?: Learner }) => placement.learner)
+            .filter(Boolean)
+          setLearners(partnerLearners)
+          return
+        }
+
+        const res = await authFetch("/api/learners")
+        const data = await res.json()
+        setLearners(data)
+      } catch (err) {
+        console.error("Error fetching learners:", err)
+      }
+    }
+
+    fetchLearners()
+  }, [authFetch, user?.role])
 
   useEffect(() => {
     if (entryType === "Daily") {
@@ -93,6 +145,7 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
         ...values,
         periodStart: values.periodStart.toISOString(),
         periodEnd: (values.entryType === "Daily" ? values.periodStart : values.periodEnd).toISOString(),
+        ...(initialData?._id && initialData.updatedAt ? { clientUpdatedAt: initialData.updatedAt } : {}),
       }
       const url = initialData?._id ? `/api/attendance-logs/${initialData._id}` : "/api/attendance-logs"
       const method = initialData?._id ? "PUT" : "POST"
@@ -105,7 +158,9 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
         const error = await response.json().catch(() => ({ message: "Failed to save attendance log" }))
         throw new Error(error.message || "Failed to save attendance log")
       }
-      onSuccess()
+      const data = await response.json().catch(() => ({}))
+      clearDraft(draftKey)
+      onSuccess(data)
     } catch (error) {
       console.error("Error submitting attendance log:", error)
     } finally {

@@ -32,11 +32,13 @@ export default function UserProfile() {
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       })
-      if (!res.ok) throw new Error('Upload failed')
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || 'Upload failed')
       setAvatarUrl(data.url)
-    } catch {
-      console.error('Avatar upload failed')
+      toast.success("Profile picture updated")
+    } catch (error) {
+      console.error('Avatar upload failed', error)
+      toast.error(error instanceof Error ? error.message : "Avatar upload failed")
     } finally {
       setAvatarUploading(false)
       if (avatarInputRef.current) avatarInputRef.current.value = ''
@@ -54,6 +56,7 @@ export default function UserProfile() {
       case 'Admin': return 'bg-blue-500';
       case 'Manager': return 'bg-green-500';
       case 'IndustryPartner': return 'bg-orange-500';
+      case 'Guardian': return 'bg-teal-500';
       default: return 'bg-gray-500';
     }
   };
@@ -63,6 +66,7 @@ export default function UserProfile() {
       case 'SuperAdmin': return 'Super Admin';
       case 'RegionalAdmin': return 'Regional Admin';
       case 'IndustryPartner': return 'Industry Partner';
+      case 'Guardian': return 'Parent / Guardian';
       default: return role;
     }
   };
@@ -239,11 +243,13 @@ export default function UserProfile() {
             <div className="space-y-2">
               <Label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                 <Building2 className="h-4 w-4 text-[#FFB800]" />
-                {user.role === 'IndustryPartner' ? 'Company' : 'Institution'}
+                {user.role === 'IndustryPartner' ? 'Company' : user.role === 'Guardian' ? 'Portal Scope' : 'Institution'}
               </Label>
               <div className="h-12 px-4 rounded-xl bg-gray-50 flex items-center text-gray-900 font-medium">
                 {user.role === 'IndustryPartner' 
                   ? (user.partnerId?.name || 'Partner Profile') 
+                  : user.role === 'Guardian'
+                    ? `${user.linkedLearners?.length || 0} linked learner${(user.linkedLearners?.length || 0) === 1 ? '' : 's'}`
                   : (user.institution || <span className="text-gray-400 italic">Not assigned</span>)}
               </div>
             </div>

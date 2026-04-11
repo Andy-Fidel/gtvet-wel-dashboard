@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Layout from '@/components/Layout';
@@ -10,6 +10,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { PageSkeleton } from '@/components/PageSkeleton';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense } from 'react';
+import { useAuth } from '@/context/AuthContext';
 
 // Lazy-loaded page components (code-split by route)
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -28,10 +29,33 @@ const AcademicCalendarPage = lazy(() => import('@/pages/AcademicCalendar'));
 const Users = lazy(() => import('@/pages/Users'));
 const SuperAdminDashboard = lazy(() => import('@/pages/SuperAdminDashboard'));
 const PartnerDashboard = lazy(() => import('@/pages/PartnerDashboard'));
+const GuardianDashboard = lazy(() => import('@/pages/GuardianDashboard'));
 const UserProfile = lazy(() => import('@/pages/UserProfile'));
 const Notifications = lazy(() => import('@/pages/Notifications'));
 const SupportCenter = lazy(() => import('@/pages/SupportCenter'));
 const ActivityLog = lazy(() => import('@/pages/ActivityLog'));
+const SettingsPage = lazy(() => import('@/pages/Settings'));
+const OfflineSync = lazy(() => import('@/pages/OfflineSync'));
+
+function HomeRoute() {
+  const { user } = useAuth();
+
+  if (user?.role === 'IndustryPartner') {
+    return <Navigate to="/partner-dashboard" replace />;
+  }
+
+  if (user?.role === 'Guardian') {
+    return <Navigate to="/guardian-dashboard" replace />;
+  }
+
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<PageSkeleton />}>
+        <Dashboard />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -60,13 +84,7 @@ function App() {
                 <Layout />
               </ProtectedRoute>
             }>
-              <Route index element={
-                <ErrorBoundary>
-                  <Suspense fallback={<PageSkeleton />}>
-                    <Dashboard />
-                  </Suspense>
-                </ErrorBoundary>
-              } />
+              <Route index element={<HomeRoute />} />
               <Route path="learners" element={
                 <ErrorBoundary>
                   <Suspense fallback={<PageSkeleton />}>
@@ -180,6 +198,15 @@ function App() {
                   </ErrorBoundary>
                 </ProtectedRoute>
               } />
+              <Route path="guardian-dashboard" element={
+                <ProtectedRoute requiredRoles={['Guardian']}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <GuardianDashboard />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              } />
               <Route path="profile" element={
                 <ErrorBoundary>
                   <Suspense fallback={<PageSkeleton />}>
@@ -191,6 +218,20 @@ function App() {
                 <ErrorBoundary>
                   <Suspense fallback={<PageSkeleton />}>
                     <Notifications />
+                  </Suspense>
+                </ErrorBoundary>
+              } />
+              <Route path="settings" element={
+                <ErrorBoundary>
+                  <Suspense fallback={<PageSkeleton />}>
+                    <SettingsPage />
+                  </Suspense>
+                </ErrorBoundary>
+              } />
+              <Route path="offline-sync" element={
+                <ErrorBoundary>
+                  <Suspense fallback={<PageSkeleton />}>
+                    <OfflineSync />
                   </Suspense>
                 </ErrorBoundary>
               } />

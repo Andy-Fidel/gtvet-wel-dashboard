@@ -10,7 +10,7 @@ export interface Notification {
     role: string;
     profilePicture?: string;
   };
-  type: 'system' | 'placement' | 'visit' | 'assessment' | 'report' | 'partner';
+  type: 'system' | 'placement' | 'visit' | 'assessment' | 'report' | 'partner' | 'support';
   title: string;
   message: string;
   read: boolean;

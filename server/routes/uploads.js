@@ -1,13 +1,62 @@
 import express from 'express';
 import multer from 'multer';
-import cloudinary from '../config/cloudinary.js';
+import cloudinary, { isCloudinaryConfigured } from '../config/cloudinary.js';
+import fs from 'fs/promises';
+import path from 'path';
+import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 import { Document } from '../models/Document.js';
 import { Learner } from '../models/Learner.js';
 import { User } from '../models/User.js';
+import { Placement } from '../models/Placement.js';
+import { SupportTicket } from '../models/SupportTicket.js';
+import { EmployerEvaluation } from '../models/EmployerEvaluation.js';
+import { MonitoringVisit } from '../models/MonitoringVisit.js';
 import { auth } from '../middleware/auth.js';
 import { logAuditEvent } from '../utils/audit.js';
 
 const router = express.Router();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const localUploadRoot = path.resolve(__dirname, '../local-uploads');
+
+const ensureDirectory = async (dirPath) => {
+  await fs.mkdir(dirPath, { recursive: true });
+};
+
+const sanitizeBaseName = (value) => value.replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
+
+const getFileExtension = (file) => {
+  const fromName = path.extname(file.originalname || '').toLowerCase();
+  if (fromName) return fromName;
+  const mimeMap = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+  };
+  return mimeMap[file.mimetype] || '.bin';
+};
+
+const saveLocalProfileImage = async ({ file, folder, prefix }) => {
+  const directory = path.join(localUploadRoot, folder);
+  await ensureDirectory(directory);
+  const fileName = `${sanitizeBaseName(prefix)}-${crypto.randomBytes(8).toString('hex')}${getFileExtension(file)}`;
+  const filePath = path.join(directory, fileName);
+  await fs.writeFile(filePath, file.buffer);
+  return {
+    fileName,
+    filePath,
+    url: `/api/documents/local-file/${folder}/${fileName}`,
+  };
+};
+
+const deleteLocalProfileImage = async (url) => {
+  if (!url?.startsWith('/api/documents/local-file/')) return;
+  const relativePath = url.replace('/api/documents/local-file/', '');
+  const targetPath = path.join(localUploadRoot, relativePath);
+  await fs.unlink(targetPath).catch(() => {});
+};
 
 // Multer for images only (profile pictures)
 const imageUpload = multer({
@@ -41,7 +90,32 @@ const upload = multer({
   },
 });
 
-// All routes require auth
+router.get('/local-file/:folder/:fileName', async (req, res) => {
+  try {
+    const folder = req.params.folder;
+    const fileName = req.params.fileName;
+    if (!['profile-pictures', 'user-avatars'].includes(folder)) {
+      return res.status(404).json({ message: 'File not found' });
+    }
+
+    const resolvedPath = path.join(localUploadRoot, folder, fileName);
+    if (!resolvedPath.startsWith(path.join(localUploadRoot, folder))) {
+      return res.status(400).json({ message: 'Invalid file path' });
+    }
+
+    res.sendFile(resolvedPath, (error) => {
+      if (error) {
+        if (!res.headersSent) {
+          res.status(error.statusCode || 404).json({ message: 'File not found' });
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error loading local file' });
+  }
+});
+
+// All routes below require auth
 router.use(auth);
 
 // ==================== PROFILE PICTURE ====================
@@ -54,42 +128,55 @@ router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (re
     const learner = await Learner.findById(req.params.learnerId);
     if (!learner) return res.status(404).json({ message: 'Learner not found' });
 
-    // Delete previous profile picture from Cloudinary if it exists
+    // Delete previous profile picture if it exists
     if (learner.profilePicture) {
       try {
-        // Extract public_id from the URL
-        const urlParts = learner.profilePicture.split('/');
-        const folder = urlParts.slice(-2, -1)[0];
-        const fileNameWithExt = urlParts.slice(-1)[0];
-        const fileName = fileNameWithExt.split('.')[0];
-        const publicId = `${folder}/${fileName}`;
-        await cloudinary.uploader.destroy(publicId);
+        if (learner.profilePicture.startsWith('/api/documents/local-file/')) {
+          await deleteLocalProfileImage(learner.profilePicture);
+        } else if (isCloudinaryConfigured()) {
+          const urlParts = learner.profilePicture.split('/');
+          const folder = urlParts.slice(-2, -1)[0];
+          const fileNameWithExt = urlParts.slice(-1)[0];
+          const fileName = fileNameWithExt.split('.')[0];
+          const publicId = `${folder}/${fileName}`;
+          await cloudinary.uploader.destroy(publicId);
+        }
       } catch (e) {
         console.warn('Could not delete old profile picture:', e);
       }
     }
 
-    // Upload new profile picture to Cloudinary
-    const result = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: 'gtvet-wel/profile-pictures',
-          resource_type: 'image',
-          transformation: [
-            { width: 400, height: 400, crop: 'fill', gravity: 'face' }
-          ],
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      uploadStream.end(req.file.buffer);
-    });
+    let profilePictureUrl = '';
+    if (isCloudinaryConfigured()) {
+      const result = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            folder: 'gtvet-wel/profile-pictures',
+            resource_type: 'image',
+            transformation: [
+              { width: 400, height: 400, crop: 'fill', gravity: 'face' }
+            ],
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        uploadStream.end(req.file.buffer);
+      });
+      profilePictureUrl = result.secure_url;
+    } else {
+      const localFile = await saveLocalProfileImage({
+        file: req.file,
+        folder: 'profile-pictures',
+        prefix: learner._id.toString(),
+      });
+      profilePictureUrl = localFile.url;
+    }
 
     // Update learner with new profile picture URL
     const before = learner.toObject();
-    learner.profilePicture = result.secure_url;
+    learner.profilePicture = profilePictureUrl;
     await learner.save();
 
     await logAuditEvent({
@@ -103,10 +190,10 @@ router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (re
       changedFields: ['profilePicture'],
     });
 
-    res.json({ url: result.secure_url });
+    res.json({ url: profilePictureUrl, storage: isCloudinaryConfigured() ? 'cloudinary' : 'local' });
   } catch (error) {
     console.error('Profile picture upload error:', error);
-    res.status(500).json({ message: 'Upload failed', error: error.message });
+    res.status(500).json({ message: error.message || 'Upload failed' });
   }
 });
 
@@ -120,71 +207,126 @@ router.post('/user-profile-picture', imageUpload.single('file'), async (req, res
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Delete previous profile picture from Cloudinary if it exists
+    // Delete previous profile picture if it exists
     if (user.profilePicture) {
       try {
-        const urlParts = user.profilePicture.split('/');
-        const folder = urlParts.slice(-2, -1)[0];
-        const fileNameWithExt = urlParts.slice(-1)[0];
-        const fileName = fileNameWithExt.split('.')[0];
-        const publicId = `${folder}/${fileName}`;
-        await cloudinary.uploader.destroy(publicId);
+        if (user.profilePicture.startsWith('/api/documents/local-file/')) {
+          await deleteLocalProfileImage(user.profilePicture);
+        } else if (isCloudinaryConfigured()) {
+          const urlParts = user.profilePicture.split('/');
+          const folder = urlParts.slice(-2, -1)[0];
+          const fileNameWithExt = urlParts.slice(-1)[0];
+          const fileName = fileNameWithExt.split('.')[0];
+          const publicId = `${folder}/${fileName}`;
+          await cloudinary.uploader.destroy(publicId);
+        }
       } catch (e) {
         console.warn('Could not delete old profile picture:', e);
       }
     }
 
-    // Upload new profile picture to Cloudinary
-    const result = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: 'gtvet-wel/user-avatars',
-          resource_type: 'image',
-          transformation: [
-            { width: 400, height: 400, crop: 'fill', gravity: 'face' }
-          ],
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      uploadStream.end(req.file.buffer);
-    });
+    let profilePictureUrl = '';
+    if (isCloudinaryConfigured()) {
+      const result = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            folder: 'gtvet-wel/user-avatars',
+            resource_type: 'image',
+            transformation: [
+              { width: 400, height: 400, crop: 'fill', gravity: 'face' }
+            ],
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        uploadStream.end(req.file.buffer);
+      });
+      profilePictureUrl = result.secure_url;
+    } else {
+      const localFile = await saveLocalProfileImage({
+        file: req.file,
+        folder: 'user-avatars',
+        prefix: user._id.toString(),
+      });
+      profilePictureUrl = localFile.url;
+    }
 
     // Update user — use updateOne to avoid triggering password rehash
-    await User.updateOne({ _id: req.user._id }, { profilePicture: result.secure_url });
+    await User.updateOne({ _id: req.user._id }, { profilePicture: profilePictureUrl });
     await logAuditEvent({
       req,
       action: 'UPLOAD',
       entityType: 'UserProfilePicture',
       entityId: req.user._id,
       summary: `Updated profile picture for user ${req.user.name}`,
-      metadata: { profilePicture: result.secure_url },
+      metadata: { profilePicture: profilePictureUrl },
       changedFields: ['profilePicture'],
     });
 
-    res.json({ url: result.secure_url });
+    res.json({ url: profilePictureUrl, storage: isCloudinaryConfigured() ? 'cloudinary' : 'local' });
   } catch (error) {
     console.error('User profile picture upload error:', error);
-    res.status(500).json({ message: 'Upload failed', error: error.message });
+    res.status(500).json({ message: error.message || 'Upload failed' });
   }
 });
 
 // ==================== UPLOAD ====================
 router.post('/upload', upload.single('file'), async (req, res) => {
   try {
+    if (!isCloudinaryConfigured()) {
+      return res.status(500).json({ message: 'Document uploads are unavailable because Cloudinary is not configured on the server' });
+    }
+
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
 
-    const { category, learnerId, placementId, monitoringVisitId } = req.body;
+    const { category, learnerId, placementId, monitoringVisitId, supportTicketId, employerEvaluationId } = req.body;
+    let institution = req.user.institution || 'N/A';
+    let partnerId = req.user.partnerId?._id || req.user.partnerId || undefined;
+
+    if (learnerId) {
+      const learner = await Learner.findById(learnerId).select('institution');
+      if (learner?.institution) institution = learner.institution;
+    }
+
+    if (placementId) {
+      const placement = await Placement.findById(placementId).select('institution partner');
+      if (!placement) return res.status(404).json({ message: 'Placement not found' });
+      if (placement.institution) institution = placement.institution;
+      if (placement.partner) partnerId = placement.partner;
+    }
+
+    if (monitoringVisitId) {
+      const visit = await MonitoringVisit.findById(monitoringVisitId).select('institution');
+      if (!visit) return res.status(404).json({ message: 'Monitoring visit not found' });
+      if (visit.institution) institution = visit.institution;
+    }
+
+    if (supportTicketId) {
+      const ticket = await SupportTicket.findById(supportTicketId).select('institution partnerId');
+      if (!ticket) return res.status(404).json({ message: 'Support ticket not found' });
+      if (ticket.institution) institution = ticket.institution;
+      if (ticket.partnerId) partnerId = ticket.partnerId;
+    }
+
+    if (employerEvaluationId) {
+      const evaluation = await EmployerEvaluation.findById(employerEvaluationId).select('partner learner');
+      if (!evaluation) return res.status(404).json({ message: 'Employer evaluation not found' });
+      if (evaluation.partner) partnerId = evaluation.partner;
+      if (evaluation.learner) {
+        const learner = await Learner.findById(evaluation.learner).select('institution');
+        if (learner?.institution) institution = learner.institution;
+      }
+    }
 
     // Stream the buffer to Cloudinary
     const result = await new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
-          folder: `gtvet-wel/${req.user.institution || 'general'}`,
+          folder: `gtvet-wel/${institution || 'general'}`,
           resource_type: 'auto',
           allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf', 'doc', 'docx'],
         },
@@ -208,11 +350,21 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       learner: learnerId || undefined,
       placement: placementId || undefined,
       monitoringVisit: monitoringVisitId || undefined,
-      institution: req.user.institution || 'N/A',
+      supportTicket: supportTicketId || undefined,
+      employerEvaluation: employerEvaluationId || undefined,
+      institution,
+      partnerId,
     });
 
     await doc.save();
     await doc.populate('uploadedBy', 'name');
+
+    if (supportTicketId) {
+      await SupportTicket.findByIdAndUpdate(supportTicketId, {
+        lastActivityBy: req.user._id,
+        lastActivityAt: new Date(),
+      });
+    }
 
     await logAuditEvent({
       req,
@@ -229,8 +381,23 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     if (error.message?.includes('File type not supported')) {
       return res.status(400).json({ message: error.message });
     }
-    res.status(500).json({ message: 'Upload failed', error: error.message });
+    res.status(500).json({ message: error.message || 'Upload failed' });
   }
+});
+
+router.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: 'File is too large for this upload type' });
+    }
+    return res.status(400).json({ message: error.message });
+  }
+
+  if (error) {
+    return res.status(400).json({ message: error.message || 'Upload request failed' });
+  }
+
+  next();
 });
 
 // ==================== GET DOCUMENTS ====================
@@ -241,9 +408,13 @@ router.get('/', async (req, res) => {
     if (req.query.learnerId) filter.learner = req.query.learnerId;
     if (req.query.placementId) filter.placement = req.query.placementId;
     if (req.query.monitoringVisitId) filter.monitoringVisit = req.query.monitoringVisitId;
+    if (req.query.supportTicketId) filter.supportTicket = req.query.supportTicketId;
+    if (req.query.employerEvaluationId) filter.employerEvaluation = req.query.employerEvaluationId;
 
     // Non-super admins can only see their institution's documents
-    if (req.user.role !== 'SuperAdmin' && req.user.role !== 'RegionalAdmin') {
+    if (req.user.role === 'IndustryPartner') {
+      filter.partnerId = req.user.partnerId?._id || req.user.partnerId;
+    } else if (req.user.role !== 'SuperAdmin' && req.user.role !== 'RegionalAdmin') {
       filter.institution = req.user.institution;
     }
 

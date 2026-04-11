@@ -183,7 +183,10 @@ export default function SuperAdminDashboard() {
 
   useEffect(() => {
     authFetch('/api/admin/overview')
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        return res.json();
+      })
       .then(d => {
         setData(d);
         setLoading(false);
@@ -665,7 +668,7 @@ export default function SuperAdminDashboard() {
                         </ResponsiveContainer>
                       </div>
                       <div className="mt-2 grid grid-cols-6 gap-2">
-                        {region.sparkline.map((point) => (
+                        {region.sparkline?.map((point) => (
                           <div key={`${region.region}-${point.month}`} className="text-center">
                             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{point.month}</p>
                             <p className="text-xs font-bold text-gray-700 mt-1">{point.count}</p>
@@ -1291,11 +1294,11 @@ export default function SuperAdminDashboard() {
           </div>
         </CardHeader>
         <CardContent className="p-8">
-          {data.institutionStats.length === 0 ? (
+          {(data.institutionStats?.length || 0) === 0 ? (
             <p className="text-center text-gray-400 py-8">No institution data yet. Users must register and create learners.</p>
           ) : (
             <div className="space-y-4">
-              {data.institutionStats.map((inst) => {
+              {data.institutionStats?.map((inst) => {
                 const placementRate = inst.totalLearners > 0 
                   ? Math.round((inst.placed / inst.totalLearners) * 100) 
                   : 0;

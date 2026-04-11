@@ -11,9 +11,20 @@ export interface Learner {
   name: string;
   trackingId: string;
   indexNumber?: string;
+  dateOfBirth?: string;
   program?: string;
+  phone?: string;
+  year?: string;
   status?: string;
+  academicStatus?: string;
   region?: string;
+  hasActivePlacement?: boolean;
+  readiness?: {
+    isReadyForPlacement: boolean;
+    missingFields: string[];
+    missingDocuments: string[];
+    documentCount: number;
+  };
 }
 
 /** Industry Partner entity */
