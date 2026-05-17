@@ -1,6 +1,7 @@
 import { Outlet, NavLink } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
-import { LayoutDashboard, Users, Briefcase, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake } from 'lucide-react';
+import { LayoutDashboard, Users, Briefcase, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake, Archive } from 'lucide-react';
+import type { FocusEvent, MouseEvent } from 'react';
 import { useState } from 'react';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
 import { useAuth } from '@/context/AuthContext';
@@ -13,6 +14,7 @@ import { PlacementProgressWidget } from './PlacementProgressWidget';
 export default function Layout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarTooltip, setSidebarTooltip] = useState<{ label: string; top: number } | null>(null);
   const { user, offlineQueueCount } = useAuth();
   const { unreadCount } = useNotifications();
 
@@ -21,6 +23,20 @@ export default function Layout() {
   const isRegionalAdmin = user?.role === 'RegionalAdmin';
   const isIndustryPartner = user?.role === 'IndustryPartner';
   const isGuardian = user?.role === 'Guardian';
+  const showSidebarTooltip = (label: string, element: HTMLElement) => {
+    if (!isSidebarCollapsed) return;
+
+    const rect = element.getBoundingClientRect();
+    setSidebarTooltip({ label, top: rect.top + rect.height / 2 });
+  };
+  const hideSidebarTooltip = () => setSidebarTooltip(null);
+  const collapsedNavTooltip = (label: string) => ({
+    'aria-label': isSidebarCollapsed ? label : undefined,
+    onMouseEnter: (event: MouseEvent<HTMLElement>) => showSidebarTooltip(label, event.currentTarget),
+    onMouseLeave: hideSidebarTooltip,
+    onFocus: (event: FocusEvent<HTMLElement>) => showSidebarTooltip(label, event.currentTarget),
+    onBlur: hideSidebarTooltip,
+  });
 
   return (
     <>
@@ -56,8 +72,12 @@ export default function Layout() {
       `}>
         {/* Desktop Collapse Toggle */}
         <button 
-          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          onClick={() => {
+            hideSidebarTooltip();
+            setIsSidebarCollapsed(!isSidebarCollapsed);
+          }}
           className="hidden md:flex absolute -right-3 top-8 w-6 h-6 bg-white border border-gray-200 rounded-full items-center justify-center hover:bg-gray-50 shadow-sm z-50 transition-transform"
+          title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {isSidebarCollapsed ? <Menu size={14} className="text-gray-500" /> : <X size={14} className="text-gray-500" />}
         </button>
@@ -95,6 +115,7 @@ export default function Layout() {
                 to="/" 
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Dashboard')}
               >
                 {({ isActive }) => (
                   <>
@@ -112,6 +133,7 @@ export default function Layout() {
                 to="/partner-dashboard"
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Partner Portal')}
               >
                 {({ isActive }) => (
                   <>
@@ -125,6 +147,7 @@ export default function Layout() {
                 to="/notifications"
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Notifications')}
               >
                 {({ isActive }) => (
                   <>
@@ -154,12 +177,27 @@ export default function Layout() {
                 to="/attendance-logs"
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Attendance Logs')}
               >
                 {({ isActive }) => (
                   <>
                     <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
                     <Clock3 size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
                     {!isSidebarCollapsed && <span className="text-base">Attendance Logs</span>}
+                  </>
+                )}
+              </NavLink>
+              <NavLink
+                to="/partner-history"
+                className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
+                onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Partner History')}
+              >
+                {({ isActive }) => (
+                  <>
+                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                    <Archive size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                    {!isSidebarCollapsed && <span className="text-base">Partner History</span>}
                   </>
                 )}
               </NavLink>
@@ -172,6 +210,7 @@ export default function Layout() {
                 to="/guardian-dashboard"
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Guardian Portal')}
               >
                 {({ isActive }) => (
                   <>
@@ -185,6 +224,7 @@ export default function Layout() {
                 to="/notifications"
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Notifications')}
               >
                 {({ isActive }) => (
                   <>
@@ -203,6 +243,7 @@ export default function Layout() {
                 to="/learners"
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Learner Register')}
               >
                 {({ isActive }) => (
                   <>
@@ -213,9 +254,24 @@ export default function Layout() {
                 )}
               </NavLink>
               <NavLink
+                to="/graduated-learners"
+                className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
+                onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Graduated Learners')}
+              >
+                {({ isActive }) => (
+                  <>
+                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                    <GraduationCap size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                    {!isSidebarCollapsed && <span className="text-base">Graduated Learners</span>}
+                  </>
+                )}
+              </NavLink>
+              <NavLink
                 to="/learner-progress"
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Progress Tracker')}
               >
                 {({ isActive }) => (
                   <>
@@ -229,6 +285,7 @@ export default function Layout() {
                 to="/placements" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Placements')}
               >
                 {({ isActive }) => (
                   <>
@@ -242,6 +299,7 @@ export default function Layout() {
                 to="/attendance-logs" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Attendance Logs')}
               >
                 {({ isActive }) => (
                   <>
@@ -255,6 +313,7 @@ export default function Layout() {
                 to="/monitoring-visits" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Monitoring Visits')}
               >
                 {({ isActive }) => (
                   <>
@@ -268,6 +327,7 @@ export default function Layout() {
                 to="/semester-reports" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Term Closure')}
               >
                 {({ isActive }) => (
                   <>
@@ -281,6 +341,7 @@ export default function Layout() {
                 to="/assessments" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Assessments')}
               >
                 {({ isActive }) => (
                   <>
@@ -301,6 +362,7 @@ export default function Layout() {
                 to="/industry-partners" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Industry Partners')}
               >
                 {({ isActive }) => (
                   <>
@@ -315,6 +377,7 @@ export default function Layout() {
                 to="/calendar" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Calendar')}
               >
                 {({ isActive }) => (
                   <>
@@ -333,6 +396,7 @@ export default function Layout() {
               to="/semester-reports" 
               className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
               onClick={() => setIsMobileMenuOpen(false)}
+              {...collapsedNavTooltip('Term Closure')}
             >
               {({ isActive }) => (
                 <>
@@ -355,6 +419,7 @@ export default function Layout() {
                 to="/industry-partners" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Industry Partners')}
               >
                 {({ isActive }) => (
                   <>
@@ -368,12 +433,30 @@ export default function Layout() {
             </>
           )}
 
+          {isSuperAdmin && (
+            <NavLink 
+              to="/hq-industry-partners" 
+              className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
+              onClick={() => setIsMobileMenuOpen(false)}
+              {...collapsedNavTooltip('HQ Partner Registry')}
+            >
+              {({ isActive }) => (
+                <>
+                  <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                  <HeartHandshake size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                  {!isSidebarCollapsed && <span className="text-base">HQ Partner Registry</span>}
+                </>
+              )}
+            </NavLink>
+          )}
+
           {/* Admin-only links */}
           {isAdminOrSuper && (
             <NavLink 
               to="/users" 
               className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
               onClick={() => setIsMobileMenuOpen(false)}
+              {...collapsedNavTooltip('User Management')}
             >
               {({ isActive }) => (
                 <>
@@ -390,6 +473,7 @@ export default function Layout() {
               to="/activity-log" 
               className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
               onClick={() => setIsMobileMenuOpen(false)}
+              {...collapsedNavTooltip('Activity Log')}
             >
               {({ isActive }) => (
                 <>
@@ -405,6 +489,7 @@ export default function Layout() {
             to="/support-center" 
             className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
             onClick={() => setIsMobileMenuOpen(false)}
+            {...collapsedNavTooltip('Help & Support')}
           >
             {({ isActive }) => (
               <>
@@ -419,6 +504,7 @@ export default function Layout() {
             to="/settings" 
             className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
             onClick={() => setIsMobileMenuOpen(false)}
+            {...collapsedNavTooltip('Settings')}
           >
             {({ isActive }) => (
               <>
@@ -433,6 +519,7 @@ export default function Layout() {
             to="/offline-sync" 
             className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
             onClick={() => setIsMobileMenuOpen(false)}
+            {...collapsedNavTooltip('Offline Sync')}
           >
             {({ isActive }) => (
               <>
@@ -466,6 +553,7 @@ export default function Layout() {
                 to="/academic-calendar" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Academic Calendar')}
               >
                 {({ isActive }) => (
                   <>
@@ -479,6 +567,7 @@ export default function Layout() {
                 to="/system-overview" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('System Overview')}
               >
                 {({ isActive }) => (
                   <>
@@ -491,12 +580,21 @@ export default function Layout() {
             </>
           )}
         </nav>
-        {!isSidebarCollapsed && !isIndustryPartner && (
+        {!isSidebarCollapsed && !isIndustryPartner && !isGuardian && (
           <div className="mt-auto p-8">
              <PlacementProgressWidget />
           </div>
         )}
       </aside>
+      {isSidebarCollapsed && sidebarTooltip ? (
+        <div
+          role="tooltip"
+          className="pointer-events-none fixed left-[7.5rem] z-50 hidden -translate-y-1/2 whitespace-nowrap rounded-lg bg-gray-950 px-3 py-2 text-sm font-bold text-white shadow-xl md:block"
+          style={{ top: sidebarTooltip.top }}
+        >
+          {sidebarTooltip.label}
+        </div>
+      ) : null}
 
       {/* Main Content */}
       <main className={`flex-1 flex flex-col min-w-0 min-h-screen md:min-h-0 relative z-20 transition-[margin] duration-200 ease-in-out ml-0 ${isSidebarCollapsed ? 'md:ml-32' : 'md:ml-80'}`}>

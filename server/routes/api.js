@@ -1,5 +1,6 @@
 import express from 'express';
 import mongoose from 'mongoose';
+import { LRUCache } from 'lru-cache';
 import { Learner } from '../models/Learner.js';
 import { Placement } from '../models/Placement.js';
 import { MonitoringVisit } from '../models/MonitoringVisit.js';
@@ -23,7 +24,7 @@ import { GuardianConsent } from '../models/GuardianConsent.js';
 import { PlacementAgreement } from '../models/PlacementAgreement.js';
 import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
-import { sendPlacementApprovalEmail, sendReportStatusEmail } from '../utils/mailer.js';
+import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { Notification } from '../models/Notification.js';
@@ -37,9 +38,31 @@ const router = express.Router();
 // All routes below require authentication
 router.use(auth);
 
+const DASHBOARD_CACHE_TTL_MS = Number(process.env.DASHBOARD_CACHE_TTL_MS || 60 * 1000);
+const dashboardCache = new LRUCache({ max: 500, ttl: DASHBOARD_CACHE_TTL_MS });
+
+const getScopedCacheKey = (prefix, user, extras = '') => [
+  prefix,
+  user?.role || 'unknown',
+  user?.institution || '',
+  user?.region || '',
+  getPartnerId(user)?.toString?.() || getPartnerId(user) || '',
+  extras,
+].join(':');
+
+const readScopedCache = (key) => {
+  return dashboardCache.get(key) || null;
+};
+
+const writeScopedCache = (key, payload) => {
+  dashboardCache.set(key, payload);
+};
+
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // Helper: get institution filter (SuperAdmin sees all, RegionalAdmin sees their region)
 const getFilter = async (user) => {
-  if (user.role === 'SuperAdmin') return {};
+  if (user.role === 'SuperAdmin') return { ...archiveFilter };
   if (user.role === 'RegionalAdmin') {
      const insts = await Institution.find({ region: user.region }).select('name');
      const instNames = insts.map(i => i.name);
@@ -83,7 +106,22 @@ const buildAttendanceScope = async (user) => {
   return { institution: user.institution };
 };
 
-const validateAttendancePayload = ({ entryType, periodStart, periodEnd, hoursWorked }) => {
+const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+const validateAttendancePayload = ({
+  entryType,
+  periodStart,
+  periodEnd,
+  startTime,
+  endTime,
+  hoursWorked,
+  tasksCompleted,
+  skillsDemonstrated,
+  learnerSignatureName,
+  facilitatorName,
+  facilitatorSignatureName,
+  facilitatorSignedAt,
+}) => {
   const start = new Date(periodStart);
   const end = new Date(periodEnd);
 
@@ -114,6 +152,38 @@ const validateAttendancePayload = ({ entryType, periodStart, periodEnd, hoursWor
     return 'Weekly entries must be between 0 and 168 hours';
   }
 
+  if (!tasksCompleted || String(tasksCompleted).trim().length < 5) {
+    return 'Describe the work completed for this period';
+  }
+
+  if (!skillsDemonstrated || String(skillsDemonstrated).trim().length < 3) {
+    return 'Describe the skills demonstrated during this period';
+  }
+
+  if (!startTime || !TIME_PATTERN.test(String(startTime))) {
+    return 'Start time must be in HH:MM format';
+  }
+
+  if (!endTime || !TIME_PATTERN.test(String(endTime))) {
+    return 'End time must be in HH:MM format';
+  }
+
+  if (!learnerSignatureName || String(learnerSignatureName).trim().length < 2) {
+    return 'Learner signature name is required';
+  }
+
+  if (!facilitatorName || String(facilitatorName).trim().length < 2) {
+    return 'Facilitator name is required';
+  }
+
+  if (!facilitatorSignatureName || String(facilitatorSignatureName).trim().length < 2) {
+    return 'Facilitator signature name is required';
+  }
+
+  if (!facilitatorSignedAt || Number.isNaN(new Date(facilitatorSignedAt).getTime())) {
+    return 'Facilitator signed date is required';
+  }
+
   return null;
 };
 
@@ -132,19 +202,25 @@ const buildStaleUpdateConflict = ({ entityType, currentRecord, clientPayload, cl
   },
 });
 
-const getSupportTicketScope = async (user) => {
+const getSupportTicketScope = async (user, { includeArchived = false, archivedOnly = false } = {}) => {
+  const archiveFilter = archivedOnly
+    ? { archivedAt: { $ne: null } }
+    : includeArchived
+      ? {}
+      : { archivedAt: null };
+
   if (user.role === 'SuperAdmin') return {};
   if (user.role === 'RegionalAdmin') {
     const insts = await Institution.find({ region: user.region }).select('name');
-    return { institution: { $in: insts.map((inst) => inst.name) } };
+    return { institution: { $in: insts.map((inst) => inst.name) }, ...archiveFilter };
   }
   if (user.role === 'IndustryPartner') {
-    return { partnerId: getPartnerId(user) };
+    return { partnerId: getPartnerId(user), ...archiveFilter };
   }
   if (user.role === 'Guardian') {
-    return { requester: user._id };
+    return { requester: user._id, ...archiveFilter };
   }
-  return { institution: user.institution };
+  return { institution: user.institution, ...archiveFilter };
 };
 
 const getGuardianLearnerIds = async (user) => {
@@ -152,6 +228,28 @@ const getGuardianLearnerIds = async (user) => {
   const hydratedUser = await User.findById(user._id).select('linkedLearners');
   return (hydratedUser?.linkedLearners || []).map((learnerId) => learnerId.toString());
 };
+
+const buildArchiveQueryFilter = ({ includeArchived = false, archivedOnly = false } = {}) => (
+  archivedOnly
+    ? { archivedAt: { $ne: null } }
+    : includeArchived
+      ? {}
+      : { archivedAt: null }
+);
+
+const getAcademicYearBounds = (academicYear = '') => {
+  const match = String(academicYear || '').match(/^(\d{4})\s*\/\s*(\d{4})$/);
+  if (!match) return null;
+  const startYear = Number.parseInt(match[1], 10);
+  const endYear = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(startYear) || !Number.isFinite(endYear) || endYear !== startYear + 1) return null;
+  return {
+    start: new Date(Date.UTC(startYear, 7, 1, 0, 0, 0, 0)),
+    end: new Date(Date.UTC(endYear, 7, 1, 0, 0, 0, 0)),
+  };
+};
+
+const isArchivedRecord = (record) => Boolean(record?.archivedAt);
 
 const getAccessApprovalScope = async (user) => {
   if (user.role === 'SuperAdmin') return {};
@@ -186,12 +284,236 @@ const resolveCurrentAcademicYear = async () => {
   return `${startYear}/${startYear + 1}`;
 };
 
+const resolveCurrentAcademicTerm = async () => AcademicTerm.findOne({
+  $or: [{ isCurrent: true }, { status: 'Active' }],
+})
+  .sort({ isCurrent: -1, startDate: -1 })
+  .lean();
+
 const resolveAcademicYearFromDate = (value) => {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   const startYear = date.getMonth() >= 7 ? date.getFullYear() : date.getFullYear() - 1;
   return `${startYear}/${startYear + 1}`;
+};
+
+const resolveNextAcademicYearLabel = (academicYear = '') => {
+  const match = String(academicYear || '').match(/^(\d{4})\s*\/\s*(\d{4})$/);
+  if (!match) return '';
+  const nextStartYear = Number(match[1]) + 1;
+  return `${nextStartYear}/${nextStartYear + 1}`;
+};
+
+const resolveLatestEligibleProgressionTerm = async () => {
+  const now = new Date();
+  return AcademicTerm.findOne({
+    termType: 'Semester 2',
+    $or: [
+      { status: 'Completed' },
+      { endDate: { $lte: now } },
+    ],
+  })
+    .sort({ endDate: -1, startDate: -1 })
+    .select('_id academicYear termType endDate status')
+    .lean();
+};
+
+const buildProgressionLockKey = (academicYear, institutionName) =>
+  `learner-auto-progression:${academicYear}:${institutionName}`;
+
+const resolveScopedInstitutionNames = async (user) => {
+  if (user.role === 'SuperAdmin') {
+    const institutions = await Institution.find({}).select('name').lean();
+    return institutions.map((institution) => institution.name).filter(Boolean);
+  }
+
+  if (user.role === 'RegionalAdmin') {
+    const institutions = await Institution.find({ region: user.region }).select('name').lean();
+    return institutions.map((institution) => institution.name).filter(Boolean);
+  }
+
+  return user.institution ? [user.institution] : [];
+};
+
+const runAutomaticLearnerProgression = async (user) => {
+  if (!user || user.role === 'Guardian' || user.role === 'IndustryPartner') return null;
+
+  const progressionTerm = await resolveLatestEligibleProgressionTerm();
+  if (!progressionTerm?.academicYear) return null;
+
+  const institutionNames = await resolveScopedInstitutionNames(user);
+  if (!institutionNames.length) return null;
+
+  const summary = {
+    academicYear: progressionTerm.academicYear,
+    promotedYear1To2: 0,
+    promotedYear2To3: 0,
+    graduatedYear3: 0,
+    institutionsProcessed: 0,
+    institutionsSkipped: 0,
+  };
+
+  for (const institutionName of institutionNames) {
+    const lockKey = buildProgressionLockKey(progressionTerm.academicYear, institutionName);
+    const existingLock = await SystemSetting.findOne({ key: lockKey }).select('_id').lean();
+    if (existingLock) {
+      summary.institutionsSkipped += 1;
+      continue;
+    }
+
+    const [year1Learners, year2Learners, year3Learners] = await Promise.all([
+      Learner.find({
+        institution: institutionName,
+        year: 'Year 1',
+        academicStatus: { $in: ['Active', 'Graduating'] },
+      }),
+      Learner.find({
+        institution: institutionName,
+        year: 'Year 2',
+        academicStatus: { $in: ['Active', 'Graduating'] },
+      }),
+      Learner.find({
+        institution: institutionName,
+        year: 'Year 3',
+        academicStatus: { $ne: 'Graduated' },
+      }),
+    ]);
+
+    for (const learner of year1Learners) {
+      learner.year = 'Year 2';
+      learner.academicStatus = 'Active';
+      learner.progressionHistory.push({
+        academicYear: progressionTerm.academicYear,
+        action: 'Promoted',
+        fromYear: 'Year 1',
+        toYear: 'Year 2',
+        note: 'Automatically promoted after Semester 2 completion',
+        changedBy: user._id,
+      });
+      await learner.save();
+    }
+
+    for (const learner of year2Learners) {
+      learner.year = 'Year 3';
+      learner.academicStatus = 'Active';
+      learner.progressionHistory.push({
+        academicYear: progressionTerm.academicYear,
+        action: 'Promoted',
+        fromYear: 'Year 2',
+        toYear: 'Year 3',
+        note: 'Automatically promoted after Semester 2 completion',
+        changedBy: user._id,
+      });
+      await learner.save();
+    }
+
+    for (const learner of year3Learners) {
+      learner.academicStatus = 'Graduated';
+      learner.graduationAcademicYear = progressionTerm.academicYear;
+      learner.graduatedAt = learner.graduatedAt || new Date();
+      learner.progressionHistory.push({
+        academicYear: progressionTerm.academicYear,
+        action: 'Graduated',
+        fromYear: learner.year,
+        toYear: learner.year,
+        note: 'Automatically graduated after Semester 2 completion',
+        changedBy: user._id,
+      });
+      await learner.save();
+    }
+
+    await SystemSetting.create({
+      key: lockKey,
+      organizationName: `Auto Progression ${institutionName}`,
+      value: {
+        institution: institutionName,
+        academicYear: progressionTerm.academicYear,
+        termId: progressionTerm._id,
+        promotedYear1To2: year1Learners.length,
+        promotedYear2To3: year2Learners.length,
+        graduatedYear3: year3Learners.length,
+        mode: 'automatic',
+      },
+      updatedBy: user._id,
+    });
+
+    if (year1Learners.length || year2Learners.length || year3Learners.length) {
+      await logAuditEvent({
+        req: { user },
+        action: 'UPDATE',
+        entityType: 'LearnerAutoProgression',
+        entityId: lockKey,
+        summary: `Automatically progressed learners for ${institutionName} in ${progressionTerm.academicYear}`,
+        metadata: {
+          institution: institutionName,
+          academicYear: progressionTerm.academicYear,
+          promotedYear1To2: year1Learners.length,
+          promotedYear2To3: year2Learners.length,
+          graduatedYear3: year3Learners.length,
+          mode: 'automatic',
+        },
+      });
+    }
+
+    summary.promotedYear1To2 += year1Learners.length;
+    summary.promotedYear2To3 += year2Learners.length;
+    summary.graduatedYear3 += year3Learners.length;
+    summary.institutionsProcessed += 1;
+  }
+
+  return summary;
+};
+
+const recalculatePartnerUsedSlots = async () => {
+  const activeCounts = await Placement.aggregate([
+    {
+      $match: {
+        partner: { $ne: null },
+        status: 'Active',
+      },
+    },
+    {
+      $group: {
+        _id: '$partner',
+        usedSlots: { $sum: 1 },
+      },
+    },
+  ]);
+
+  const bulkOps = activeCounts.map((entry) => ({
+    updateOne: {
+      filter: { _id: entry._id },
+      update: { $set: { usedSlots: entry.usedSlots } },
+    },
+  }));
+
+  await IndustryPartner.updateMany({}, { $set: { usedSlots: 0 } });
+  if (bulkOps.length) {
+    await IndustryPartner.bulkWrite(bulkOps);
+  }
+
+  return {
+    partnersWithActivePlacements: activeCounts.length,
+    activePlacements: activeCounts.reduce((sum, entry) => sum + entry.usedSlots, 0),
+  };
+};
+
+const findNextTermForRollover = async (currentTerm, preferredNextTermId = '') => {
+  if (!currentTerm?._id) return null;
+
+  if (preferredNextTermId) {
+    if (String(preferredNextTermId) === String(currentTerm._id)) return null;
+    return AcademicTerm.findById(preferredNextTermId).lean();
+  }
+
+  return AcademicTerm.findOne({
+    _id: { $ne: currentTerm._id },
+    startDate: { $gte: currentTerm.endDate },
+    status: { $in: ['Planned', 'Active'] },
+  })
+    .sort({ startDate: 1, createdAt: 1 })
+    .lean();
 };
 
 const buildPlacementHistory = (placements = []) => placements.map((placement, index) => ({
@@ -263,6 +585,153 @@ const nextStudyYear = (year) => {
   if (year === 'Year 1') return 'Year 2';
   if (year === 'Year 2') return 'Year 3';
   return null;
+};
+
+const normalizeStudyYear = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['year 1', 'year1', '1', 'first year', 'year one'].includes(normalized)) return 'Year 1';
+  if (['year 2', 'year2', '2', 'second year', 'year two'].includes(normalized)) return 'Year 2';
+  if (['year 3', 'year3', '3', 'third year', 'year three'].includes(normalized)) return 'Year 3';
+  return value || '';
+};
+
+const WEL_PREPARATION_WINDOW_DAYS = 45;
+
+const formatScheduleDate = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+const getInstitutionCalendarType = async (institutionName) => {
+  if (!institutionName) return 'Single Track';
+  const institution = await Institution.findOne({ name: institutionName }).select('calendarType').lean();
+  return institution?.calendarType || 'Single Track';
+};
+
+const getInstitutionWELWindows = async ({ institutionName, academicYear, referenceDate = new Date() }) => {
+  const calendarType = await getInstitutionCalendarType(institutionName);
+  const resolvedAcademicYear = academicYear || await resolveCurrentAcademicYear();
+  const windows = await AcademicCalendar.find({
+    isActive: true,
+    eventType: 'WEL Window',
+    academicYear: resolvedAcademicYear,
+    institutionCalendarType: calendarType,
+  })
+    .sort({ startDate: 1 })
+    .lean();
+
+  return windows.map((window) => {
+    const startDate = new Date(window.startDate);
+    const endDate = new Date(window.endDate);
+    const preparationStart = new Date(startDate);
+    preparationStart.setDate(preparationStart.getDate() - WEL_PREPARATION_WINDOW_DAYS);
+
+    let status = 'upcoming';
+    if (referenceDate >= startDate && referenceDate <= endDate) status = 'active';
+    else if (referenceDate >= preparationStart && referenceDate < startDate) status = 'preparation';
+    else if (referenceDate > endDate) status = 'closed';
+
+    return {
+      ...window,
+      status,
+      preparationStart,
+    };
+  });
+};
+
+const buildPlacementEligibility = ({
+  learner,
+  hasActivePlacement = false,
+  welWindows = [],
+}) => {
+  const academicState = learner?.academicStatus || 'Active';
+  const normalizedYear = normalizeStudyYear(learner?.year);
+
+  const base = {
+    isEligible: false,
+    calendarType: null,
+    yearGroup: normalizedYear || '',
+    allowedWindowStatus: null,
+    schedule: null,
+    reason: '',
+  };
+
+  if (!['Active', 'Graduating'].includes(academicState)) {
+    return {
+      ...base,
+      reason: 'Only active or graduating learners can enter a WEL placement cycle.',
+    };
+  }
+
+  if (hasActivePlacement) {
+    return {
+      ...base,
+      reason: 'This learner already has an active placement.',
+    };
+  }
+
+  if (!normalizedYear) {
+    return {
+      ...base,
+      reason: 'Learner year group is missing, so WEL cohort eligibility cannot be resolved.',
+    };
+  }
+
+  const matchingWindows = welWindows.filter((window) => normalizeStudyYear(window.targetYearGroup) === normalizedYear);
+  const preferredWindow = matchingWindows.find((window) => ['active', 'preparation'].includes(window.status)) || matchingWindows[0] || null;
+
+  if (!preferredWindow) {
+    return {
+      ...base,
+      reason: `No WEL window is configured for ${normalizedYear} in the current academic calendar.`,
+    };
+  }
+
+  const schedule = {
+    title: preferredWindow.title,
+    semester: preferredWindow.semester || '',
+    academicYear: preferredWindow.academicYear || '',
+    startDate: preferredWindow.startDate,
+    endDate: preferredWindow.endDate,
+    totalWeeks: preferredWindow.totalWeeks || null,
+    hoursPerDay: preferredWindow.hoursPerDay || null,
+    institutionCalendarType: preferredWindow.institutionCalendarType || null,
+    status: preferredWindow.status,
+  };
+
+  if (preferredWindow.status === 'active' || preferredWindow.status === 'preparation') {
+    return {
+      isEligible: true,
+      calendarType: preferredWindow.institutionCalendarType || null,
+      yearGroup: normalizedYear,
+      allowedWindowStatus: preferredWindow.status,
+      schedule,
+      reason: preferredWindow.status === 'active'
+        ? `Eligible now under the ${preferredWindow.semester} ${preferredWindow.academicYear} WEL window.`
+        : `Eligible for preparation because the ${normalizedYear} WEL window opens on ${formatScheduleDate(preferredWindow.startDate)}.`,
+    };
+  }
+
+  if (preferredWindow.status === 'upcoming') {
+    return {
+      ...base,
+      calendarType: preferredWindow.institutionCalendarType || null,
+      schedule,
+      reason: `${normalizedYear} is scheduled for WEL from ${formatScheduleDate(preferredWindow.startDate)} to ${formatScheduleDate(preferredWindow.endDate)}. Placement initiation opens ${WEL_PREPARATION_WINDOW_DAYS} days before the window starts.`,
+    };
+  }
+
+  return {
+    ...base,
+    calendarType: preferredWindow.institutionCalendarType || null,
+    schedule,
+    reason: `${normalizedYear} WEL for this academic cycle closed on ${formatScheduleDate(preferredWindow.endDate)}.`,
+  };
 };
 
 const canManageSupportTicketStatus = (user, ticket) => {
@@ -356,13 +825,65 @@ const withSupportTicketViewerMeta = (ticketDoc, user) => {
   };
 };
 
+const supportTicketAwaitsCurrentUser = (ticket, user) => {
+  if (ticket.awaitingParty === 'Support') {
+    return canManageSupportAssignments(user) || ticket.isOwnedByCurrentUser;
+  }
+  if (ticket.awaitingParty === 'Partner') {
+    return user.role === 'IndustryPartner';
+  }
+  if (ticket.awaitingParty === 'Institution') {
+    return ['Admin', 'Manager', 'Staff'].includes(user.role);
+  }
+  if (ticket.awaitingParty === 'Requester') {
+    return ticket.requester?._id?.toString?.() === user._id.toString() || ticket.requester?.toString?.() === user._id.toString();
+  }
+  return false;
+};
+
+const matchesSupportQueueView = (ticket, queueView, user) => {
+  if (queueView === 'new') return ticket.hasUnreadChanges;
+  if (queueView === 'owned') return ticket.isOwnedByCurrentUser;
+  if (queueView === 'awaiting') return supportTicketAwaitsCurrentUser(ticket, user);
+  return true;
+};
+
 const markSupportTicketReadForUser = (ticket, userId) => {
   const existing = ticket.readStates.find((entry) => entry.user.toString() === userId.toString());
   if (existing) {
     existing.lastReadAt = new Date();
   } else {
     ticket.readStates.push({ user: userId, lastReadAt: new Date() });
-  }
+    }
+};
+
+const notifyHQOfPartnerSubmission = async ({ partner, sender }) => {
+    try {
+        await notifyUsers({
+            roles: ['SuperAdmin'],
+            sender: sender?._id || null,
+            type: 'partner',
+            title: 'New industry partner awaiting HQ approval',
+            message: `${sender?.name || 'A user'} submitted ${partner.name} for HQ approval.`,
+            link: '/hq-industry-partners',
+            dedupeKey: `partner-hq-submission:${partner._id}`,
+        });
+
+        const hqRecipients = await User.find({
+            role: 'SuperAdmin',
+            status: 'Active',
+            email: { $exists: true, $ne: '' },
+            'notificationPreferences.email': true,
+            'notificationPreferences.partnerUpdates': { $ne: false },
+        }).select('email');
+
+        const emails = hqRecipients.map((user) => user.email).filter(Boolean).join(',');
+        if (emails) {
+            await sendHQIndustryPartnerSubmissionEmail(emails, partner, sender);
+        }
+    } catch (error) {
+        console.error('Error notifying HQ of industry partner submission:', error);
+    }
 };
 
 const calculatePlacementManagementSummary = ({
@@ -550,6 +1071,20 @@ const getUserLifecycleState = (user) => {
   }
 
   return { code: 'Active', label: 'Active' };
+};
+
+const issueSetupLink = async (user, { expiresInMs = 3600000 } = {}) => {
+  const rawToken = crypto.randomBytes(20).toString('hex');
+  user.resetPasswordToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+  user.resetPasswordExpires = Date.now() + expiresInMs;
+  user.passwordChangeRequired = true;
+  user.invitationSentAt = new Date();
+  await user.save();
+
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const resetUrl = `${frontendUrl}/reset-password/${rawToken}`;
+  await sendPasswordResetEmail(user.email, resetUrl);
+  return resetUrl;
 };
 
 const withUserLifecycleMeta = (userDoc) => {
@@ -867,7 +1402,8 @@ const getOperationalOwnerCandidates = async (user) => {
   if (user.role === 'SuperAdmin') {
     return User.find({ role: { $in: ['Admin', 'Manager', 'Staff'] }, status: 'Active' })
       .select('_id name role institution')
-      .sort({ institution: 1, name: 1 });
+      .sort({ institution: 1, name: 1 })
+      .lean();
   }
 
   if (user.role === 'RegionalAdmin') {
@@ -878,7 +1414,8 @@ const getOperationalOwnerCandidates = async (user) => {
       institution: { $in: institutions.map((inst) => inst.name) },
     })
       .select('_id name role institution')
-      .sort({ institution: 1, name: 1 });
+      .sort({ institution: 1, name: 1 })
+      .lean();
   }
 
   return User.find({
@@ -887,12 +1424,14 @@ const getOperationalOwnerCandidates = async (user) => {
     institution: user.institution,
   })
     .select('_id name role institution')
-    .sort({ name: 1 });
+    .sort({ name: 1 })
+    .lean();
 };
 
 const getVisibleSupportAssignees = async (user) => {
   const users = await User.find({ status: 'Active' })
-    .select('name email role institution region partnerId');
+    .select('name email role institution region partnerId')
+    .lean();
 
   return users.filter((candidate) => {
     if (user.role === 'SuperAdmin') return ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(candidate.role);
@@ -1216,6 +1755,87 @@ const withCohortRiskMeta = (cohort) => {
   };
 };
 
+const buildLearnerProgressSummary = (learners, placements, visits, assessments, evaluations, semesterReports) => {
+  const placementsByLearner = new Map();
+  placements.forEach((placement) => {
+    const key = placement.learner?.toString?.();
+    if (!key) return;
+    if (!placementsByLearner.has(key)) placementsByLearner.set(key, []);
+    placementsByLearner.get(key).push(placement);
+  });
+
+  const visitsByLearner = new Map();
+  visits.forEach((visit) => {
+    const key = visit.learner?.toString?.();
+    if (!key) return;
+    if (!visitsByLearner.has(key)) visitsByLearner.set(key, []);
+    visitsByLearner.get(key).push(visit);
+  });
+
+  const assessmentsByLearner = new Map();
+  assessments.forEach((assessment) => {
+    const key = assessment.learner?.toString?.();
+    if (!key) return;
+    if (!assessmentsByLearner.has(key)) assessmentsByLearner.set(key, []);
+    assessmentsByLearner.get(key).push(assessment);
+  });
+
+  const evaluationsByLearner = new Map();
+  evaluations.forEach((evaluation) => {
+    const key = evaluation.learner?.toString?.();
+    if (!key) return;
+    if (!evaluationsByLearner.has(key)) evaluationsByLearner.set(key, []);
+    evaluationsByLearner.get(key).push(evaluation);
+  });
+
+  const reportsByInstitution = new Map();
+  semesterReports.forEach((report) => {
+    const key = report.institution;
+    if (!key) return;
+    if (!reportsByInstitution.has(key)) reportsByInstitution.set(key, []);
+    reportsByInstitution.get(key).push(report);
+  });
+
+  const progressSummary = learners.map((learner) => {
+    const learnerPlacements = placementsByLearner.get(learner._id.toString()) || [];
+    const learnerVisits = visitsByLearner.get(learner._id.toString()) || [];
+    const learnerAssessments = assessmentsByLearner.get(learner._id.toString()) || [];
+    const learnerEvaluations = evaluationsByLearner.get(learner._id.toString()) || [];
+    const learnerReports = reportsByInstitution.get(learner.institution) || [];
+
+    const progress = calculateLearnerProgress(
+      learner,
+      learnerPlacements,
+      learnerVisits,
+      learnerAssessments,
+      learnerEvaluations,
+      learnerReports
+    );
+
+    return {
+      learner,
+      progress,
+    };
+  });
+
+  const totalLearners = progressSummary.length;
+
+  return {
+    totalLearners,
+    averageProgress: totalLearners > 0
+      ? Math.round(progressSummary.reduce((sum, item) => sum + item.progress.overall, 0) / totalLearners)
+      : 0,
+    atRiskCount: progressSummary.filter((item) => item.progress.atRisk).length,
+    completedCount: progressSummary.filter((item) => item.learner.status === 'Completed').length,
+    placedCount: progressSummary.filter((item) => item.learner.status === 'Placed').length,
+    ownershipSummary: {
+      assignedCount: progressSummary.filter((item) => Boolean(item.learner.owner?._id)).length,
+      unassignedCount: progressSummary.filter((item) => !item.learner.owner?._id).length,
+      atRiskOwnedCount: progressSummary.filter((item) => item.progress.atRisk && item.learner.owner?._id).length,
+    },
+  };
+};
+
 // ---- Placement Health Scoring (5 dimensions × 20 pts = 100) ----
 const calculatePlacementHealth = (placement, { attendanceLogs, visits, assessments, openTicketCount }) => {
   const dims = {};
@@ -1324,7 +1944,14 @@ router.get('/notifications', async (req, res) => {
         await ensureInstitutionExceptionNotifications(req.user);
         await ensurePartnerEvaluationNotifications(req.user);
 
-        const notifications = await Notification.find({ recipient: req.user._id, visibleInApp: { $ne: false } })
+        const archivedOnly = req.query.archived === 'true';
+        const includeArchived = req.query.includeArchived === 'true';
+
+        const notifications = await Notification.find({
+            recipient: req.user._id,
+            visibleInApp: { $ne: false },
+            ...buildArchiveQueryFilter({ includeArchived, archivedOnly }),
+        })
             .sort({ createdAt: -1 })
             .limit(50)
             .populate('sender', 'name role profilePicture');
@@ -1338,7 +1965,7 @@ router.get('/notifications', async (req, res) => {
 router.put('/notifications/read-all', async (req, res) => {
     try {
         await Notification.updateMany(
-            { recipient: req.user._id, read: false, visibleInApp: { $ne: false } },
+            { recipient: req.user._id, read: false, visibleInApp: { $ne: false }, archivedAt: null },
             { $set: { read: true } }
         );
         res.json({ message: 'All notifications marked as read' });
@@ -1350,9 +1977,9 @@ router.put('/notifications/read-all', async (req, res) => {
 router.put('/notifications/:id/read', async (req, res) => {
     try {
         const notification = await Notification.findOneAndUpdate(
-            { _id: req.params.id, recipient: req.user._id, visibleInApp: { $ne: false } },
+            { _id: req.params.id, recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null },
             { $set: { read: true } },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!notification) return res.status(404).json({ message: 'Notification not found' });
         res.json(notification);
@@ -1541,30 +2168,511 @@ router.put('/settings/system', requireRole('SuperAdmin'), async (req, res) => {
     }
 });
 
+router.post('/settings/rollover/semester', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const now = new Date();
+        const currentTerm = await resolveCurrentAcademicTerm();
+        if (!currentTerm?._id) {
+            return res.status(404).json({ message: 'No active academic term found.' });
+        }
+
+        const currentEndDate = new Date(currentTerm.endDate);
+        if (Number.isNaN(currentEndDate.getTime())) {
+            return res.status(400).json({ message: 'The current academic term has an invalid end date.' });
+        }
+
+        if (currentEndDate > now && currentTerm.status !== 'Completed') {
+            return res.status(409).json({
+                message: `The current term cannot be rolled over before ${currentEndDate.toLocaleDateString()}.`,
+            });
+        }
+
+        const openReportStatuses = ['Draft', 'Generated', 'Certified', 'Submitted', 'Regional_Approved'];
+        const openReportCount = await SemesterReport.countDocuments({
+            academicTerm: currentTerm._id,
+            status: { $in: openReportStatuses },
+        });
+        if (openReportCount > 0) {
+            return res.status(409).json({
+                message: `Resolve ${openReportCount} in-progress term closure report(s) before semester rollover.`,
+                openReportCount,
+            });
+        }
+
+        const nextTerm = await findNextTermForRollover(currentTerm, req.body.nextTermId || '');
+        if (!nextTerm?._id) {
+            return res.status(404).json({ message: 'No next academic term is available for activation.' });
+        }
+
+        const currentBefore = await AcademicTerm.findById(currentTerm._id).lean();
+        const nextBefore = await AcademicTerm.findById(nextTerm._id).lean();
+        const settings = await getOrCreateSystemSettings();
+        const previousDefaultAcademicYear = settings.defaultAcademicYear;
+
+        await AcademicTerm.findByIdAndUpdate(currentTerm._id, {
+            $set: {
+                status: 'Completed',
+                isCurrent: false,
+            },
+        });
+
+        await AcademicTerm.updateMany(
+            { _id: { $ne: nextTerm._id }, isCurrent: true },
+            { $set: { isCurrent: false } }
+        );
+
+        const updatedNextTerm = await AcademicTerm.findByIdAndUpdate(nextTerm._id, {
+            $set: {
+                status: 'Active',
+                isCurrent: true,
+            },
+        }, { returnDocument: 'after' }).lean();
+
+        settings.defaultAcademicYear = updatedNextTerm?.academicYear || settings.defaultAcademicYear;
+        settings.updatedBy = req.user._id;
+        await settings.save();
+
+        await logAuditEvent({
+            req,
+            action: 'STATUS_CHANGE',
+            entityType: 'SemesterRollover',
+            entityId: String(currentTerm._id),
+            summary: `Rolled over from ${currentTerm.name} to ${updatedNextTerm?.name || nextTerm.name}`,
+            before: {
+                currentTerm: currentBefore,
+                nextTerm: nextBefore,
+                defaultAcademicYear: previousDefaultAcademicYear,
+            },
+            after: {
+                currentTerm: await AcademicTerm.findById(currentTerm._id).lean(),
+                nextTerm: updatedNextTerm,
+                defaultAcademicYear: settings.defaultAcademicYear,
+            },
+            metadata: {
+                outgoingTermId: String(currentTerm._id),
+                incomingTermId: String(nextTerm._id),
+                openReportCount,
+            },
+        });
+
+        res.json({
+            message: `Semester rollover completed. ${updatedNextTerm?.name || nextTerm.name} is now the current term.`,
+            summary: {
+                outgoingTerm: {
+                    id: String(currentTerm._id),
+                    name: currentTerm.name,
+                    academicYear: currentTerm.academicYear,
+                },
+                incomingTerm: {
+                    id: String(nextTerm._id),
+                    name: updatedNextTerm?.name || nextTerm.name,
+                    academicYear: updatedNextTerm?.academicYear || nextTerm.academicYear,
+                },
+                defaultAcademicYear: settings.defaultAcademicYear,
+            },
+        });
+    } catch (error) {
+        console.error('Error running semester rollover:', error);
+        res.status(500).json({ message: 'Error running semester rollover' });
+    }
+});
+
+router.post('/settings/rollover/academic-year', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const progressionTerm = await resolveLatestEligibleProgressionTerm();
+        if (!progressionTerm?._id || !progressionTerm.academicYear) {
+            return res.status(404).json({ message: 'No completed Semester 2 term is available for academic year rollover.' });
+        }
+
+        const rolloverKey = `academic-year-rollover:${progressionTerm.academicYear}`;
+        const existingRollover = await SystemSetting.findOne({ key: rolloverKey }).select('_id value').lean();
+        if (existingRollover) {
+            return res.status(409).json({
+                message: `Academic year rollover for ${progressionTerm.academicYear} has already been completed.`,
+                summary: existingRollover.value || null,
+            });
+        }
+
+        const openReportStatuses = ['Draft', 'Generated', 'Certified', 'Submitted', 'Regional_Approved'];
+        const openReportCount = await SemesterReport.countDocuments({
+            academicYear: progressionTerm.academicYear,
+            status: { $in: openReportStatuses },
+        });
+        if (openReportCount > 0) {
+            return res.status(409).json({
+                message: `Resolve ${openReportCount} in-progress report(s) for ${progressionTerm.academicYear} before academic year rollover.`,
+                openReportCount,
+            });
+        }
+
+        const progressionSummary = await runAutomaticLearnerProgression(req.user);
+        const outgoingAcademicYear = progressionTerm.academicYear;
+        const nextAcademicYear = resolveNextAcademicYearLabel(outgoingAcademicYear);
+        const academicYearBounds = getAcademicYearBounds(outgoingAcademicYear);
+        const rolloverTimestamp = new Date();
+
+        const placementsToClose = await Placement.find({
+            academicYear: outgoingAcademicYear,
+            status: 'Active',
+        }).select('_id learner partner').lean();
+        const outgoingPlacementIds = await Placement.find({ academicYear: outgoingAcademicYear }).distinct('_id');
+
+        let closedPlacementCount = 0;
+        if (placementsToClose.length) {
+            const placementIds = placementsToClose.map((placement) => placement._id);
+            const learnerIds = [...new Set(placementsToClose.map((placement) => placement.learner?.toString()).filter(Boolean))];
+
+            const closeResult = await Placement.updateMany(
+                { _id: { $in: placementIds } },
+                {
+                    $set: {
+                        status: 'Completed',
+                        closedAt: new Date(),
+                        closedBy: req.user._id,
+                        closureReason: 'Academic year rollover',
+                        closureNote: `Closed automatically during academic year rollover for ${outgoingAcademicYear}.`,
+                    },
+                }
+            );
+            closedPlacementCount = closeResult.modifiedCount || 0;
+
+            if (learnerIds.length) {
+                await Learner.updateMany(
+                    { _id: { $in: learnerIds } },
+                    { $set: { status: 'Completed' } }
+                );
+            }
+        }
+
+        const partnerCapacitySummary = await recalculatePartnerUsedSlots();
+
+        const archivedRequestResult = await PlacementRequest.updateMany(
+            {
+                archivedAt: null,
+                ...(academicYearBounds
+                    ? {
+                        $or: [
+                            { startDate: { $lt: academicYearBounds.end } },
+                            { startDate: null, createdAt: { $lt: academicYearBounds.end } },
+                        ],
+                    }
+                    : {}),
+            },
+            {
+                $set: {
+                    archivedAt: rolloverTimestamp,
+                    archivedBy: req.user._id,
+                    archiveReason: `Archived during academic year rollover for ${outgoingAcademicYear}.`,
+                    archivedAcademicYear: outgoingAcademicYear,
+                },
+            }
+        );
+
+        const archivedSupportResult = await SupportTicket.updateMany(
+            {
+                archivedAt: null,
+                status: { $in: ['Resolved', 'Closed'] },
+                ...(academicYearBounds
+                    ? {
+                        $or: [
+                            { placement: { $in: outgoingPlacementIds } },
+                            { createdAt: { $lt: academicYearBounds.end } },
+                        ],
+                    }
+                    : {
+                        placement: { $in: outgoingPlacementIds },
+                    }),
+            },
+            {
+                $set: {
+                    archivedAt: rolloverTimestamp,
+                    archivedBy: req.user._id,
+                    archiveReason: `Archived during academic year rollover for ${outgoingAcademicYear}.`,
+                    archivedAcademicYear: outgoingAcademicYear,
+                },
+            }
+        );
+
+        const carryOverSupportTicketCount = await SupportTicket.countDocuments({
+            archivedAt: null,
+            status: { $in: ['Open', 'InProgress'] },
+            ...(academicYearBounds
+                ? {
+                    $or: [
+                        { placement: { $in: outgoingPlacementIds } },
+                        { createdAt: { $lt: academicYearBounds.end } },
+                    ],
+                }
+                : {
+                    placement: { $in: outgoingPlacementIds },
+                }),
+        });
+
+        const archivedNotificationResult = await Notification.updateMany(
+            {
+                archivedAt: null,
+                visibleInApp: { $ne: false },
+                ...(academicYearBounds ? { createdAt: { $lt: academicYearBounds.end } } : {}),
+                $or: [
+                    { type: { $ne: 'system' } },
+                    { read: true },
+                ],
+            },
+            {
+                $set: {
+                    archivedAt: rolloverTimestamp,
+                    archiveReason: `Archived during academic year rollover for ${outgoingAcademicYear}.`,
+                    visibleInApp: false,
+                    read: true,
+                },
+            }
+        );
+
+        const settings = await getOrCreateSystemSettings();
+        const previousDefaultAcademicYear = settings.defaultAcademicYear;
+        if (nextAcademicYear) {
+            settings.defaultAcademicYear = nextAcademicYear;
+        }
+        settings.updatedBy = req.user._id;
+        await settings.save();
+
+        const summary = {
+            outgoingAcademicYear,
+            nextAcademicYear: nextAcademicYear || settings.defaultAcademicYear,
+            learnerProgression: progressionSummary || {
+                academicYear: outgoingAcademicYear,
+                promotedYear1To2: 0,
+                promotedYear2To3: 0,
+                graduatedYear3: 0,
+                institutionsProcessed: 0,
+                institutionsSkipped: 0,
+            },
+            closedPlacements: closedPlacementCount,
+            activePartnerCapacity: partnerCapacitySummary,
+            archivedPlacementRequests: archivedRequestResult.modifiedCount || 0,
+            archivedSupportTickets: archivedSupportResult.modifiedCount || 0,
+            carryOverSupportTickets: carryOverSupportTicketCount,
+            archivedNotifications: archivedNotificationResult.modifiedCount || 0,
+            previousDefaultAcademicYear,
+            defaultAcademicYear: settings.defaultAcademicYear,
+        };
+
+        await SystemSetting.create({
+            key: rolloverKey,
+            organizationName: `Academic Year Rollover ${outgoingAcademicYear}`,
+            value: summary,
+            updatedBy: req.user._id,
+        });
+
+        await logAuditEvent({
+            req,
+            action: 'STATUS_CHANGE',
+            entityType: 'AcademicYearRollover',
+            entityId: outgoingAcademicYear,
+            summary: `Completed academic year rollover for ${outgoingAcademicYear}`,
+            metadata: summary,
+        });
+
+        res.json({
+            message: `Academic year rollover for ${outgoingAcademicYear} completed.`,
+            summary,
+        });
+    } catch (error) {
+        console.error('Error running academic year rollover:', error);
+        res.status(500).json({ message: 'Error running academic year rollover' });
+    }
+});
+
+router.get('/settings/archive-summary', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const academicYear = String(req.query.academicYear || '').trim();
+
+        const placementRequestFilter = academicYear
+            ? { archivedAcademicYear: academicYear, archivedAt: { $ne: null } }
+            : { archivedAt: { $ne: null } };
+        const supportTicketFilter = academicYear
+            ? { archivedAcademicYear: academicYear, archivedAt: { $ne: null } }
+            : { archivedAt: { $ne: null } };
+        const notificationFilter = academicYear
+            ? {
+                archivedAt: { $ne: null },
+                archiveReason: { $regex: academicYear.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' },
+            }
+            : { archivedAt: { $ne: null } };
+
+        const [
+            placementRequestCount,
+            supportTicketCount,
+            notificationCount,
+            recentPlacementRequests,
+            recentSupportTickets,
+            recentNotifications,
+        ] = await Promise.all([
+            PlacementRequest.countDocuments(placementRequestFilter),
+            SupportTicket.countDocuments(supportTicketFilter),
+            Notification.countDocuments(notificationFilter),
+            PlacementRequest.find(placementRequestFilter)
+                .select('institution program status archivedAt archiveReason archivedAcademicYear sourceType requestedSlots createdAt')
+                .sort({ archivedAt: -1, createdAt: -1 })
+                .limit(5)
+                .lean(),
+            SupportTicket.find(supportTicketFilter)
+                .select('subject ticketType status institution archivedAt archiveReason archivedAcademicYear priority updatedAt')
+                .sort({ archivedAt: -1, updatedAt: -1 })
+                .limit(5)
+                .lean(),
+            Notification.find(notificationFilter)
+                .select('type title archivedAt archiveReason createdAt recipient')
+                .populate('recipient', 'name role')
+                .sort({ archivedAt: -1, createdAt: -1 })
+                .limit(5)
+                .lean(),
+        ]);
+
+        res.json({
+            academicYear: academicYear || null,
+            totals: {
+                placementRequests: placementRequestCount,
+                supportTickets: supportTicketCount,
+                notifications: notificationCount,
+            },
+            recent: {
+                placementRequests: recentPlacementRequests.map((item) => ({
+                    id: item._id,
+                    label: `${item.program} · ${item.institution}`,
+                    status: item.status,
+                    archivedAt: item.archivedAt,
+                    archiveReason: item.archiveReason || '',
+                    archivedAcademicYear: item.archivedAcademicYear || '',
+                    detail: `${item.sourceType === 'LearnerFound' ? 'Learner-sourced' : 'Institution-sourced'} · ${item.requestedSlots} slot(s)`,
+                })),
+                supportTickets: recentSupportTickets.map((item) => ({
+                    id: item._id,
+                    label: item.subject,
+                    status: item.status,
+                    archivedAt: item.archivedAt,
+                    archiveReason: item.archiveReason || '',
+                    archivedAcademicYear: item.archivedAcademicYear || '',
+                    detail: `${item.ticketType} · ${item.priority} · ${item.institution}`,
+                })),
+                notifications: recentNotifications.map((item) => ({
+                    id: item._id,
+                    label: item.title,
+                    status: item.type,
+                    archivedAt: item.archivedAt,
+                    archiveReason: item.archiveReason || '',
+                    detail: `${item.type} · ${item.recipient?.name || 'Unknown recipient'}${item.recipient?.role ? ` · ${item.recipient.role}` : ''}`,
+                })),
+            },
+        });
+    } catch (error) {
+        console.error('Error fetching archive summary:', error);
+        res.status(500).json({ message: 'Error fetching archive summary' });
+    }
+});
+
 // ==================== SUPPORT CENTER ====================
 
 router.get('/support-tickets', async (req, res) => {
     try {
-        const scope = await getSupportTicketScope(req.user);
-        const { status, category, learnerId, placementId } = req.query;
+        const archivedOnly = req.query.archived === 'true';
+        const includeArchived = req.query.includeArchived === 'true';
+        const scope = await getSupportTicketScope(req.user, { includeArchived, archivedOnly });
+        const { status, category, learnerId, placementId, queueView, focusedTicketId } = req.query;
         const query = { ...scope };
+        const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+        const pageSize = Math.min(Math.max(Number.parseInt(req.query.pageSize, 10) || 10, 1), 50);
+        const paginationRequested = Boolean(req.query.page || req.query.pageSize || queueView || focusedTicketId);
 
         if (status) query.status = status;
         if (category) query.category = category;
         if (learnerId) query.learner = learnerId;
         if (placementId) query.placement = placementId;
 
-        const tickets = await SupportTicket.find(query)
-            .populate('requester', 'name email role institution')
-            .populate('learner', 'name trackingId')
-            .populate('placement', 'companyName status')
-            .populate('assignedTo', 'name email role institution')
-            .populate('escalatedTo', 'name email role institution')
-            .populate('replies.createdBy', 'name role')
-            .sort({ updatedAt: -1, createdAt: -1 });
+        if (!paginationRequested) {
+            const tickets = await SupportTicket.find(query)
+                .populate('requester', 'name email role institution')
+                .populate('learner', 'name trackingId')
+                .populate('placement', 'companyName status')
+                .populate('assignedTo', 'name email role institution')
+                .populate('escalatedTo', 'name email role institution')
+                .populate('replies.createdBy', 'name role')
+                .sort({ updatedAt: -1, createdAt: -1 });
 
-        const ticketIds = tickets.map((ticket) => ticket._id);
-        const documents = await Document.find({ supportTicket: { $in: ticketIds } })
+            const ticketIds = tickets.map((ticket) => ticket._id);
+            const documents = await Document.find({ supportTicket: { $in: ticketIds } })
+                .populate('uploadedBy', 'name')
+                .sort({ createdAt: -1 })
+                .lean();
+            const docsByTicket = new Map();
+            documents.forEach((doc) => {
+                const key = doc.supportTicket?.toString();
+                if (!key) return;
+                if (!docsByTicket.has(key)) docsByTicket.set(key, []);
+                docsByTicket.get(key).push(doc);
+            });
+
+            return res.json(tickets.map((ticket) => ({
+                ...withSupportTicketViewerMeta(ticket, req.user),
+                documents: docsByTicket.get(ticket._id.toString()) || [],
+            })));
+        }
+
+        const ticketMeta = await SupportTicket.find(query)
+            .select('_id status priority ticketType requester assignedTo escalatedTo awaitingParty escalationLevel lastActivityBy lastActivityAt updatedAt createdAt firstRespondedAt firstResponseDueAt resolutionDueAt readStates')
+            .populate('requester', '_id')
+            .populate('assignedTo', '_id')
+            .populate('escalatedTo', '_id')
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .lean();
+
+        const scopedTickets = ticketMeta.map((ticket) => withSupportTicketViewerMeta(ticket, req.user));
+        const stats = {
+            total: scopedTickets.length,
+            open: scopedTickets.filter((ticket) => ticket.status === 'Open').length,
+            inProgress: scopedTickets.filter((ticket) => ticket.status === 'InProgress').length,
+            resolved: scopedTickets.filter((ticket) => ticket.status === 'Resolved').length,
+            breached: scopedTickets.filter((ticket) => ticket.slaStatus?.hasBreach).length,
+            escalated: scopedTickets.filter((ticket) => ticket.escalationLevel && ticket.escalationLevel !== 'None').length,
+            unread: scopedTickets.filter((ticket) => ticket.hasUnreadChanges).length,
+            ownedByMe: scopedTickets.filter((ticket) => ticket.isOwnedByCurrentUser).length,
+        };
+        const hqQueueStats = {
+            awaitingSupport: scopedTickets.filter((ticket) => ticket.awaitingParty === 'Support').length,
+            urgent: scopedTickets.filter((ticket) => ticket.priority === 'Urgent').length,
+            unassigned: scopedTickets.filter((ticket) => !ticket.assignedTo?._id).length,
+            incidents: scopedTickets.filter((ticket) => ticket.ticketType === 'Incident').length,
+        };
+
+        const queueFilteredTickets = scopedTickets.filter((ticket) => matchesSupportQueueView(ticket, queueView, req.user));
+        const total = queueFilteredTickets.length;
+        const totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
+        const safePage = Math.min(page, totalPages);
+        const start = (safePage - 1) * pageSize;
+        const pagedTicketIds = queueFilteredTickets
+            .slice(start, start + pageSize)
+            .map((ticket) => ticket._id.toString());
+
+        const tickets = pagedTicketIds.length
+            ? await SupportTicket.find({ _id: { $in: pagedTicketIds } })
+                .populate('requester', 'name email role institution')
+                .populate('learner', 'name trackingId')
+                .populate('placement', 'companyName status')
+                .populate('assignedTo', 'name email role institution')
+                .populate('escalatedTo', 'name email role institution')
+                .populate('replies.createdBy', 'name role')
+                .lean()
+            : [];
+
+        const orderedTicketMap = new Map(
+            tickets.map((ticket) => [ticket._id.toString(), withSupportTicketViewerMeta(ticket, req.user)])
+        );
+        const orderedTickets = pagedTicketIds
+            .map((id) => orderedTicketMap.get(id))
+            .filter(Boolean);
+
+        const pageTicketIds = orderedTickets.map((ticket) => ticket._id);
+        const documents = await Document.find({ supportTicket: { $in: pageTicketIds } })
             .populate('uploadedBy', 'name')
             .sort({ createdAt: -1 })
             .lean();
@@ -1576,10 +2684,47 @@ router.get('/support-tickets', async (req, res) => {
             docsByTicket.get(key).push(doc);
         });
 
-        res.json(tickets.map((ticket) => ({
-            ...withSupportTicketViewerMeta(ticket, req.user),
+        const items = orderedTickets.map((ticket) => ({
             documents: docsByTicket.get(ticket._id.toString()) || [],
-        })));
+            ...ticket,
+        }));
+
+        let focusedTicket = null;
+        if (focusedTicketId && !pagedTicketIds.includes(focusedTicketId.toString())) {
+            const hasFocusedMatch = queueFilteredTickets.some((ticket) => ticket._id.toString() === focusedTicketId.toString());
+            if (hasFocusedMatch) {
+                const focusedRecord = await SupportTicket.findOne({ _id: focusedTicketId, ...query })
+                    .populate('requester', 'name email role institution')
+                    .populate('learner', 'name trackingId')
+                    .populate('placement', 'companyName status')
+                    .populate('assignedTo', 'name email role institution')
+                    .populate('escalatedTo', 'name email role institution')
+                    .populate('replies.createdBy', 'name role')
+                    .lean();
+
+                if (focusedRecord) {
+                    const focusedDocuments = await Document.find({ supportTicket: focusedRecord._id })
+                        .populate('uploadedBy', 'name')
+                        .sort({ createdAt: -1 })
+                        .lean();
+                    focusedTicket = {
+                        ...withSupportTicketViewerMeta(focusedRecord, req.user),
+                        documents: focusedDocuments,
+                    };
+                }
+            }
+        }
+
+        res.json({
+            items,
+            total,
+            page: safePage,
+            pageSize,
+            totalPages,
+            stats,
+            hqQueueStats,
+            focusedTicket,
+        });
     } catch (error) {
         console.error('Error fetching support tickets:', error);
         res.status(500).json({ message: 'Error fetching support tickets' });
@@ -1588,10 +2733,13 @@ router.get('/support-tickets', async (req, res) => {
 
 router.put('/support-tickets/:id/read', async (req, res) => {
     try {
-        const scope = await getSupportTicketScope(req.user);
+        const scope = await getSupportTicketScope(req.user, { includeArchived: true });
         const ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
         if (!ticket) {
             return res.status(404).json({ message: 'Support ticket not found or unauthorized' });
+        }
+        if (isArchivedRecord(ticket)) {
+            return res.status(409).json({ message: 'Archived support tickets cannot be updated.' });
         }
 
         markSupportTicketReadForUser(ticket, req.user._id);
@@ -2032,10 +3180,13 @@ router.post('/support-tickets', async (req, res) => {
 
 router.post('/support-tickets/:id/replies', async (req, res) => {
     try {
-        const scope = await getSupportTicketScope(req.user);
+        const scope = await getSupportTicketScope(req.user, { includeArchived: true });
         const ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
         if (!ticket) {
             return res.status(404).json({ message: 'Support ticket not found or unauthorized' });
+        }
+        if (isArchivedRecord(ticket)) {
+            return res.status(409).json({ message: 'Archived support tickets cannot receive replies.' });
         }
 
         const { message } = req.body;
@@ -2101,10 +3252,13 @@ router.post('/support-tickets/:id/replies', async (req, res) => {
 
 router.put('/support-tickets/:id/status', async (req, res) => {
     try {
-        const scope = await getSupportTicketScope(req.user);
+        const scope = await getSupportTicketScope(req.user, { includeArchived: true });
         const ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
         if (!ticket) {
             return res.status(404).json({ message: 'Support ticket not found or unauthorized' });
+        }
+        if (isArchivedRecord(ticket)) {
+            return res.status(409).json({ message: 'Archived support tickets cannot change status.' });
         }
 
         if (!canManageSupportTicketStatus(req.user, ticket)) {
@@ -2176,10 +3330,13 @@ router.put('/support-tickets/:id/assignment', async (req, res) => {
             return res.status(403).json({ message: 'You do not have permission to assign tickets' });
         }
 
-        const scope = await getSupportTicketScope(req.user);
+        const scope = await getSupportTicketScope(req.user, { includeArchived: true });
         const ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
         if (!ticket) {
             return res.status(404).json({ message: 'Support ticket not found or unauthorized' });
+        }
+        if (isArchivedRecord(ticket)) {
+            return res.status(409).json({ message: 'Archived support tickets cannot be reassigned.' });
         }
 
         const { assignedTo } = req.body;
@@ -2239,10 +3396,13 @@ router.put('/support-tickets/:id/escalation', async (req, res) => {
             return res.status(403).json({ message: 'You do not have permission to escalate tickets' });
         }
 
-        const scope = await getSupportTicketScope(req.user);
+        const scope = await getSupportTicketScope(req.user, { includeArchived: true });
         const ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
         if (!ticket) {
             return res.status(404).json({ message: 'Support ticket not found or unauthorized' });
+        }
+        if (isArchivedRecord(ticket)) {
+            return res.status(409).json({ message: 'Archived support tickets cannot be escalated.' });
         }
 
         const { escalatedTo, escalationLevel, escalationReason } = req.body;
@@ -2302,36 +3462,109 @@ router.put('/support-tickets/:id/escalation', async (req, res) => {
 
 // ==================== AUDIT LOGS ====================
 
+const buildAuditLogQuery = async (user, params) => {
+    const scope = await getAuditLogScope(user);
+    const { entityType, action, actorId, entityId, search, dateFrom, dateTo } = params;
+    const query = { ...scope };
+
+    if (entityType) query.entityType = entityType;
+    if (action) query.action = action;
+    if (actorId) query.actorId = actorId;
+    if (entityId) query.entityId = { $regex: entityId, $options: 'i' };
+    if (dateFrom || dateTo) {
+        query.createdAt = {};
+        if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+        if (dateTo) {
+            const end = new Date(dateTo);
+            end.setHours(23, 59, 59, 999);
+            query.createdAt.$lte = end;
+        }
+    }
+    if (search) {
+        query.$or = [
+            { summary: { $regex: search, $options: 'i' } },
+            { actorName: { $regex: search, $options: 'i' } },
+            { entityType: { $regex: search, $options: 'i' } },
+            { entityId: { $regex: search, $options: 'i' } },
+        ];
+    }
+
+    return query;
+};
+
 router.get('/audit-logs', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const scope = await getAuditLogScope(req.user);
-        const { entityType, action, actorId, entityId, search, dateFrom, dateTo } = req.query;
-        const query = { ...scope };
+        const query = await buildAuditLogQuery(req.user, req.query);
+        const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
+        const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
+        const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+        const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0 ? Math.min(parsedPageSize, 100) : 25;
+        const paginationRequested = Boolean(req.query.page || req.query.pageSize);
 
-        if (entityType) query.entityType = entityType;
-        if (action) query.action = action;
-        if (actorId) query.actorId = actorId;
-        if (entityId) query.entityId = { $regex: entityId, $options: 'i' };
-        if (dateFrom || dateTo) {
-            query.createdAt = {};
-            if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
-            if (dateTo) {
-                const end = new Date(dateTo);
-                end.setHours(23, 59, 59, 999);
-                query.createdAt.$lte = end;
-            }
-        }
-        if (search) {
-            query.$or = [
-                { summary: { $regex: search, $options: 'i' } },
-                { actorName: { $regex: search, $options: 'i' } },
-                { entityType: { $regex: search, $options: 'i' } },
-                { entityId: { $regex: search, $options: 'i' } },
-            ];
+        if (!paginationRequested) {
+            const logs = await AuditLog.find(query).sort({ createdAt: -1 }).limit(300);
+            return res.json(logs);
         }
 
-        const logs = await AuditLog.find(query).sort({ createdAt: -1 }).limit(300);
-        res.json(logs);
+        const [total, items, statsRaw, entityOptionsRaw, actorOptionsRaw] = await Promise.all([
+            AuditLog.countDocuments(query),
+            AuditLog.find(query).sort({ createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize),
+            AuditLog.aggregate([
+                { $match: query },
+                {
+                    $group: {
+                        _id: null,
+                        total: { $sum: 1 },
+                        creates: { $sum: { $cond: [{ $eq: ['$action', 'CREATE'] }, 1, 0] } },
+                        updates: {
+                            $sum: {
+                                $cond: [
+                                    { $in: ['$action', ['UPDATE', 'STATUS_CHANGE']] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        deletes: { $sum: { $cond: [{ $eq: ['$action', 'DELETE'] }, 1, 0] } },
+                    },
+                },
+            ]),
+            AuditLog.distinct('entityType', query),
+            AuditLog.aggregate([
+                { $match: query },
+                { $match: { actorId: { $exists: true, $ne: null } } },
+                {
+                    $group: {
+                        _id: '$actorId',
+                        actorName: { $first: '$actorName' },
+                        actorRole: { $first: '$actorRole' },
+                    },
+                },
+                { $sort: { actorName: 1 } },
+                { $limit: 200 },
+            ]),
+        ]);
+
+        const stats = statsRaw[0] || { total: 0, creates: 0, updates: 0, deletes: 0 };
+        res.json({
+            items,
+            total,
+            page,
+            pageSize,
+            totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
+            stats: {
+                total: stats.total || 0,
+                creates: stats.creates || 0,
+                updates: stats.updates || 0,
+                deletes: stats.deletes || 0,
+            },
+            entityOptions: (entityOptionsRaw || []).filter(Boolean).sort(),
+            actorOptions: actorOptionsRaw.map((entry) => ({
+                actorId: entry._id,
+                actorName: entry.actorName || 'Unknown',
+                actorRole: entry.actorRole || 'Unknown',
+            })),
+        });
     } catch (error) {
         console.error('Error fetching audit logs:', error);
         res.status(500).json({ message: 'Error fetching audit logs' });
@@ -2340,31 +3573,7 @@ router.get('/audit-logs', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), a
 
 router.get('/audit-logs/export', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const scope = await getAuditLogScope(req.user);
-        const { entityType, action, actorId, entityId, search, dateFrom, dateTo } = req.query;
-        const query = { ...scope };
-
-        if (entityType) query.entityType = entityType;
-        if (action) query.action = action;
-        if (actorId) query.actorId = actorId;
-        if (entityId) query.entityId = { $regex: entityId, $options: 'i' };
-        if (dateFrom || dateTo) {
-            query.createdAt = {};
-            if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
-            if (dateTo) {
-                const end = new Date(dateTo);
-                end.setHours(23, 59, 59, 999);
-                query.createdAt.$lte = end;
-            }
-        }
-        if (search) {
-            query.$or = [
-                { summary: { $regex: search, $options: 'i' } },
-                { actorName: { $regex: search, $options: 'i' } },
-                { entityType: { $regex: search, $options: 'i' } },
-                { entityId: { $regex: search, $options: 'i' } },
-            ];
-        }
+        const query = await buildAuditLogQuery(req.user, req.query);
 
         const logs = await AuditLog.find(query).sort({ createdAt: -1 }).limit(1000);
         const rows = logs.map((log) => ({
@@ -2399,89 +3608,128 @@ router.get('/audit-logs/anomalies', requireRole('Admin', 'SuperAdmin', 'Regional
         const days = Number(req.query.days) || 30;
         const since = new Date();
         since.setDate(since.getDate() - days);
-
-        const logs = await AuditLog.find({
+        const baseMatch = {
             ...scope,
             createdAt: { $gte: since },
-        }).sort({ createdAt: -1 });
-
-        const deleteCountsByInstitution = new Map();
-        const failedAuthByActor = new Map();
-        const failedAuthByInstitution = new Map();
-        const updateBursts = new Map();
-        const riskByInstitution = new Map();
-
-        const addRisk = (institution, amount) => {
-            const key = institution || 'N/A';
-            riskByInstitution.set(key, (riskByInstitution.get(key) || 0) + amount);
         };
 
-        logs.forEach((log) => {
-            const institution = log.institution || 'N/A';
-            const dayKey = `${institution}|||${new Date(log.createdAt).toISOString().split('T')[0]}`;
+        const [deleteSpikeRows, failedAuthActorRows, failedAuthInstitutionRows, massUpdateRows] = await Promise.all([
+            AuditLog.aggregate([
+                { $match: { ...baseMatch, action: 'DELETE' } },
+                {
+                    $group: {
+                        _id: {
+                            institution: { $ifNull: ['$institution', 'N/A'] },
+                            date: {
+                                $dateToString: {
+                                    format: '%Y-%m-%d',
+                                    date: '$createdAt',
+                                },
+                            },
+                        },
+                        count: { $sum: 1 },
+                    },
+                },
+                { $match: { count: { $gte: 5 } } },
+                { $sort: { count: -1 } },
+                { $limit: 10 },
+            ]),
+            AuditLog.aggregate([
+                { $match: { ...baseMatch, action: 'AUTH', 'metadata.outcome': 'FAILED' } },
+                {
+                    $group: {
+                        _id: {
+                            actorKey: { $ifNull: ['$actorId', '$actorName'] },
+                            institution: { $ifNull: ['$institution', 'N/A'] },
+                        },
+                        actorName: { $first: '$actorName' },
+                        count: { $sum: 1 },
+                    },
+                },
+                { $match: { count: { $gte: 3 } } },
+                { $sort: { count: -1 } },
+                { $limit: 10 },
+            ]),
+            AuditLog.aggregate([
+                { $match: { ...baseMatch, action: 'AUTH', 'metadata.outcome': 'FAILED' } },
+                {
+                    $group: {
+                        _id: { institution: { $ifNull: ['$institution', 'N/A'] } },
+                        count: { $sum: 1 },
+                    },
+                },
+                { $match: { count: { $gte: 3 } } },
+                { $sort: { count: -1 } },
+                { $limit: 10 },
+            ]),
+            AuditLog.aggregate([
+                { $match: { ...baseMatch, action: { $in: ['UPDATE', 'STATUS_CHANGE'] } } },
+                {
+                    $group: {
+                        _id: {
+                            actorKey: { $ifNull: ['$actorId', '$actorName'] },
+                            institution: { $ifNull: ['$institution', 'N/A'] },
+                        },
+                        actorName: { $first: '$actorName' },
+                        count: { $sum: 1 },
+                    },
+                },
+                { $match: { count: { $gte: 20 } } },
+                { $sort: { count: -1 } },
+                { $limit: 10 },
+            ]),
+        ]);
 
-            if (log.action === 'DELETE') {
-                deleteCountsByInstitution.set(dayKey, (deleteCountsByInstitution.get(dayKey) || 0) + 1);
-                addRisk(institution, 3);
-            }
+        const deleteSpikes = deleteSpikeRows.map((entry) => ({
+            institution: entry._id.institution,
+            date: entry._id.date,
+            count: entry.count,
+            severity: entry.count >= 10 ? 'high' : 'medium',
+        }));
 
-            if (log.action === 'UPDATE' || log.action === 'STATUS_CHANGE') {
-                const actorKey = `${log.actorId || log.actorName}|||${institution}`;
-                updateBursts.set(actorKey, (updateBursts.get(actorKey) || 0) + 1);
-                addRisk(institution, 1);
-            }
+        const failedAuthActors = failedAuthActorRows.map((entry) => ({
+            actorName: entry.actorName || 'Unknown',
+            institution: entry._id.institution,
+            count: entry.count,
+        }));
 
-            if (log.action === 'AUTH' && log.metadata?.outcome === 'FAILED') {
-                const actorKey = log.actorId?.toString() || log.metadata?.email || log.actorName;
-                failedAuthByActor.set(actorKey, {
-                    actorName: log.actorName,
-                    institution,
-                    count: (failedAuthByActor.get(actorKey)?.count || 0) + 1,
-                });
-                failedAuthByInstitution.set(institution, (failedAuthByInstitution.get(institution) || 0) + 1);
-                addRisk(institution, 2);
-            }
+        const failedAuthInstitutions = failedAuthInstitutionRows.map((entry) => ({
+            institution: entry._id.institution,
+            count: entry.count,
+        }));
+
+        const massUpdates = massUpdateRows.map((entry) => ({
+            actorName: entry.actorName || 'Unknown',
+            institution: entry._id.institution,
+            count: entry.count,
+            severity: entry.count >= 40 ? 'high' : 'medium',
+        }));
+
+        const failedAuthInstitutionMap = new Map(failedAuthInstitutions.map((entry) => [entry.institution, entry.count]));
+        const deleteSpikeCountMap = new Map();
+        deleteSpikes.forEach((entry) => {
+            deleteSpikeCountMap.set(entry.institution, (deleteSpikeCountMap.get(entry.institution) || 0) + 1);
+        });
+        const massUpdateInstitutionMap = new Map();
+        massUpdates.forEach((entry) => {
+            massUpdateInstitutionMap.set(entry.institution, (massUpdateInstitutionMap.get(entry.institution) || 0) + entry.count);
         });
 
-        const deleteSpikes = [...deleteCountsByInstitution.entries()]
-            .filter(([, count]) => count >= 5)
-            .map(([key, count]) => {
-                const [institution, date] = key.split('|||');
-                return {
-                    institution,
-                    date,
-                    count,
-                    severity: count >= 10 ? 'high' : 'medium',
-                };
-            })
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 10);
-
-        const failedAuthActors = [...failedAuthByActor.values()]
-            .filter((entry) => entry.count >= 3)
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 10);
-
-        const massUpdates = [...updateBursts.entries()]
-            .filter(([, count]) => count >= 20)
-            .map(([key, count]) => {
-                const [actorName, institution] = key.split('|||');
-                return {
-                    actorName,
-                    institution,
-                    count,
-                    severity: count >= 40 ? 'high' : 'medium',
-                };
-            })
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 10);
-
-        const riskyInstitutions = [...riskByInstitution.entries()]
-            .map(([institution, score]) => ({
+        const riskyInstitutions = Array.from(
+            new Set([
+                ...failedAuthInstitutionMap.keys(),
+                ...deleteSpikeCountMap.keys(),
+                ...massUpdateInstitutionMap.keys(),
+            ])
+        )
+            .map((institution) => ({
                 institution,
-                score,
-                failedAuths: failedAuthByInstitution.get(institution) || 0,
-                deleteSpikes: deleteSpikes.filter((entry) => entry.institution === institution).length,
+                score:
+                    (failedAuthInstitutionMap.get(institution) || 0) * 2
+                    + (deleteSpikeCountMap.get(institution) || 0) * 3
+                    + (massUpdateInstitutionMap.get(institution) || 0),
+                failedAuths: failedAuthInstitutionMap.get(institution) || 0,
+                deleteSpikes: deleteSpikeCountMap.get(institution) || 0,
             }))
             .sort((a, b) => b.score - a.score)
             .slice(0, 10);
@@ -2490,11 +3738,7 @@ router.get('/audit-logs/anomalies', requireRole('Admin', 'SuperAdmin', 'Regional
             windowDays: days,
             deleteSpikes,
             failedAuthActors,
-            failedAuthInstitutions: [...failedAuthByInstitution.entries()]
-                .map(([institution, count]) => ({ institution, count }))
-                .filter((entry) => entry.count >= 3)
-                .sort((a, b) => b.count - a.count)
-                .slice(0, 10),
+            failedAuthInstitutions,
             massUpdates,
             riskyInstitutions,
         });
@@ -2509,6 +3753,7 @@ router.get('/audit-logs/anomalies', requireRole('Admin', 'SuperAdmin', 'Regional
 router.get('/monitoring-visits/export', async (req, res) => {
     try {
         const filter = await getFilter(req.user);
+        const systemSettings = await getOrCreateSystemSettings();
         const visits = await MonitoringVisit.find(filter)
             .populate({
                 path: 'learner',
@@ -2544,13 +3789,158 @@ router.get('/monitoring-visits/export', async (req, res) => {
 router.get('/monitoring-visits', async (req, res) => {
     try {
       const filter = await getFilter(req.user);
-      const visits = await MonitoringVisit.find(filter)
+      const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
+      const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
+      const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
+      const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+      const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+        ? Math.min(parsedPageSize, 100)
+        : 25;
+
+      // Search by learner name/trackingId
+      const search = (req.query.search || '').toString().trim();
+      let learnerIds = null;
+      if (search) {
+        const regex = new RegExp(search, 'i');
+        const matchingLearners = await Learner.find({
+          ...filter.institution ? { institution: filter.institution } : {},
+          $or: [{ name: regex }, { trackingId: regex }, { firstName: regex }, { lastName: regex }],
+        }).select('_id').lean();
+        learnerIds = matchingLearners.map(l => l._id);
+      }
+
+      // Build visit filter
+      const visitFilter = { ...filter };
+      if (learnerIds) visitFilter.learner = { $in: learnerIds };
+      if (req.query.visitType) visitFilter.visitType = req.query.visitType;
+      if (req.query.attendanceStatus) visitFilter.attendanceStatus = req.query.attendanceStatus;
+      if (req.query.gpsReviewStatus) visitFilter.gpsReviewStatus = req.query.gpsReviewStatus;
+
+      const visitsQuery = MonitoringVisit.find(visitFilter)
+        .select('visitDate visitType attendanceStatus performanceRating keyObservations issuesIdentified actionRequired locationVerified gpsReviewStatus gpsExceptionReason gpsReviewComment gpsReviewedAt distanceFromSite learner isDelegatedVisit delegatedFromInstitution createdAt updatedAt')
         .populate({
             path: 'learner',
-            populate: { path: 'placement' }
+            select: 'firstName middleName lastName name trackingId placement',
+            populate: { path: 'placement', select: 'location companyName' }
+        })
+        .sort({ visitDate: -1, createdAt: -1 });
+
+      if (usePagination) {
+        visitsQuery.skip((page - 1) * pageSize).limit(pageSize);
+      }
+
+      const [visits, total, stats] = await Promise.all([
+        visitsQuery.lean(),
+        usePagination ? MonitoringVisit.countDocuments(visitFilter) : Promise.resolve(null),
+        usePagination ? MonitoringVisit.aggregate([
+          { $match: visitFilter },
+          { $group: {
+            _id: null,
+            avgRating: { $avg: '$performanceRating' },
+            totalRoutine: { $sum: { $cond: [{ $eq: ['$visitType', 'Routine'] }, 1, 0] } },
+            totalUrgent: { $sum: { $cond: [{ $eq: ['$visitType', 'Urgent'] }, 1, 0] } },
+            totalEmergency: { $sum: { $cond: [{ $eq: ['$visitType', 'Emergency'] }, 1, 0] } },
+            totalFollowUp: { $sum: { $cond: [{ $eq: ['$visitType', 'Follow-up'] }, 1, 0] } },
+            gpsVerified: { $sum: { $cond: [{ $eq: ['$locationVerified', 'Verified'] }, 1, 0] } },
+            gpsUnverified: { $sum: { $cond: [{ $eq: ['$locationVerified', 'Unverified'] }, 1, 0] } },
+            pendingReview: { $sum: { $cond: [{ $eq: ['$gpsReviewStatus', 'PendingReview'] }, 1, 0] } },
+          }}
+        ]) : Promise.resolve(null),
+      ]);
+      const mappedVisits = visits.map((visit) => ({
+        ...visit,
+        learner: visit.learner ? {
+          ...visit.learner,
+          name: buildLearnerDisplayName(visit.learner) || visit.learner.name || 'Learner',
+        } : visit.learner,
+      }));
+
+      if (usePagination) {
+        const safeTotal = total || 0;
+        const s = stats?.[0] || {};
+        return res.json({
+          items: mappedVisits,
+          total: safeTotal,
+          page,
+          pageSize,
+          totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
+          stats: {
+            avgRating: s.avgRating ? Number(s.avgRating.toFixed(1)) : 0,
+            byType: { Routine: s.totalRoutine || 0, Urgent: s.totalUrgent || 0, Emergency: s.totalEmergency || 0, 'Follow-up': s.totalFollowUp || 0 },
+            gpsVerified: s.gpsVerified || 0,
+            gpsUnverified: s.gpsUnverified || 0,
+            pendingReview: s.pendingReview || 0,
+          },
         });
-      res.json(visits);
+      }
+
+      res.json(mappedVisits);
     } catch (error) {
+      res.status(500).json({ message: 'Server Error' });
+    }
+});
+
+router.get('/monitoring-visits/due', async (req, res) => {
+    try {
+      const filter = await getFilter(req.user);
+      const settings = await getOrCreateSystemSettings();
+      const now = new Date();
+
+      const activePlacements = await Placement.find({ ...filter, status: 'Active' })
+        .select('_id learner companyName location startDate endDate institution')
+        .populate('learner', 'firstName middleName lastName name trackingId program year')
+        .sort({ startDate: 1 })
+        .lean();
+
+      const learnerIds = activePlacements.map((placement) => placement.learner?._id).filter(Boolean);
+      const visits = learnerIds.length
+        ? await MonitoringVisit.find({ learner: { $in: learnerIds } }).select('learner visitDate visitType performanceRating').sort({ visitDate: -1 }).lean()
+        : [];
+
+      const latestVisitByLearner = new Map();
+      visits.forEach((visit) => {
+        const key = visit.learner?.toString();
+        if (!key) return;
+        const current = latestVisitByLearner.get(key);
+        if (!current || new Date(visit.visitDate) > new Date(current.visitDate)) {
+          latestVisitByLearner.set(key, visit);
+        }
+      });
+
+      const cadenceDays = settings.monitoringVisitCadenceDays || 30;
+      const cadenceMs = cadenceDays * 24 * 60 * 60 * 1000;
+      const dueVisits = activePlacements
+        .map((placement) => {
+          const learnerId = placement.learner?._id?.toString();
+          const latestVisit = learnerId ? latestVisitByLearner.get(learnerId) : null;
+          const baseline = latestVisit?.visitDate || placement.startDate;
+          const dueAt = baseline ? new Date(new Date(baseline).getTime() + cadenceMs) : null;
+          const overdueDays = dueAt ? Math.max(0, Math.floor((now.getTime() - dueAt.getTime()) / (24 * 60 * 60 * 1000))) : 0;
+          return {
+            placementId: placement._id,
+            learner: placement.learner ? {
+              _id: placement.learner._id,
+              name: buildLearnerDisplayName(placement.learner) || placement.learner.name || 'Learner',
+              trackingId: placement.learner.trackingId,
+              program: placement.learner.program,
+              year: placement.learner.year,
+            } : null,
+            companyName: placement.companyName,
+            location: placement.location,
+            cadenceDays,
+            lastVisitAt: latestVisit?.visitDate || null,
+            lastVisitType: latestVisit?.visitType || null,
+            dueAt,
+            overdue: Boolean(dueAt && dueAt < now),
+            overdueDays,
+          };
+        })
+        .filter((item) => item.overdue)
+        .sort((a, b) => b.overdueDays - a.overdueDays);
+
+      res.json({ items: dueVisits, total: dueVisits.length, cadenceDays });
+    } catch (error) {
+      console.error('Error fetching due monitoring visits:', error);
       res.status(500).json({ message: 'Server Error' });
     }
 });
@@ -2601,7 +3991,7 @@ const determineMonitoringVisitVerification = async ({ learnerId, submittedLocati
 
     if (locationVerified === 'Verified') {
         gpsReviewStatus = 'Verified';
-    } else if (!gpsExceptionReason?.trim()) {
+    } else if (!(submittedLocation?.lat && submittedLocation?.lng) && !gpsExceptionReason?.trim()) {
         return {
             error: 'A GPS exception reason is required when the visit is not GPS verified.',
         };
@@ -2938,6 +4328,75 @@ router.put('/monitoring-visits/:id/gps-review', requireRole('Admin', 'SuperAdmin
     }
 });
 
+router.post('/monitoring-visits/gps-review/bulk', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+    try {
+        const filter = await getFilter(req.user);
+        const { visitIds = [], decision, comment = '' } = req.body;
+        const ids = Array.isArray(visitIds) ? visitIds.filter(Boolean) : [];
+
+        if (!ids.length) {
+            return res.status(400).json({ message: 'Select at least one visit to review.' });
+        }
+        if (!['approve_exception', 'reject', 'mark_verified'].includes(decision)) {
+            return res.status(400).json({ message: 'Invalid GPS review decision' });
+        }
+        if (decision === 'reject' && !comment.trim()) {
+            return res.status(400).json({ message: 'A review comment is required when rejecting GPS verification.' });
+        }
+
+        const visits = await MonitoringVisit.find({ _id: { $in: ids }, ...filter });
+        const foundIds = new Set(visits.map((visit) => visit._id.toString()));
+        const notFound = ids.filter((id) => !foundIds.has(id.toString()));
+        const results = { updated: [], skipped: [] };
+
+        for (const visit of visits) {
+            if (decision === 'approve_exception') {
+                const evidenceCount = await Document.countDocuments({ monitoringVisit: visit._id });
+                if (!visit.gpsExceptionReason?.trim()) {
+                    results.skipped.push({ id: visit._id, reason: 'Missing GPS exception reason' });
+                    continue;
+                }
+                if (evidenceCount === 0) {
+                    results.skipped.push({ id: visit._id, reason: 'Missing supporting evidence' });
+                    continue;
+                }
+                visit.gpsReviewStatus = 'ExceptionApproved';
+            } else if (decision === 'reject') {
+                visit.gpsReviewStatus = 'Rejected';
+            } else {
+                if (visit.locationVerified !== 'Verified') {
+                    results.skipped.push({ id: visit._id, reason: 'Visit is not GPS verified' });
+                    continue;
+                }
+                visit.gpsReviewStatus = 'Verified';
+            }
+
+            visit.gpsReviewComment = comment;
+            visit.gpsReviewedAt = new Date();
+            visit.gpsReviewedBy = req.user._id;
+            await visit.save();
+            results.updated.push(visit._id);
+        }
+
+        notFound.forEach((id) => results.skipped.push({ id, reason: 'Visit not found or unauthorized' }));
+
+        await logAuditEvent({
+            req,
+            action: 'STATUS_CHANGE',
+            entityType: 'MonitoringVisit',
+            entityId: results.updated.map((id) => id.toString()).join(','),
+            summary: `Bulk GPS review updated ${results.updated.length} monitoring visit(s)`,
+            metadata: { decision, skipped: results.skipped.length },
+            changedFields: ['gpsReviewStatus', 'gpsReviewComment', 'gpsReviewedAt', 'gpsReviewedBy'],
+        });
+
+        res.json(results);
+    } catch (error) {
+        console.error('Error bulk reviewing monitoring visit GPS:', error);
+        res.status(500).json({ message: 'Error bulk reviewing monitoring visit GPS' });
+    }
+});
+
 router.delete('/monitoring-visits/:id', async (req, res) => {
     try {
         const filter = await getFilter(req.user);
@@ -2969,6 +4428,15 @@ router.delete('/monitoring-visits/:id', async (req, res) => {
 
 router.get('/dashboard/stats', async (req, res) => {
   try {
+    await runAutomaticLearnerProgression(req.user);
+    const cacheKey = getScopedCacheKey('dashboard-stats', req.user);
+    if (req.query.refresh !== 'true') {
+      const cached = readScopedCache(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+    }
+
     const filter = await getFilter(req.user);
     const systemSettings = await getOrCreateSystemSettings();
 
@@ -3127,7 +4595,7 @@ router.get('/dashboard/stats', async (req, res) => {
       };
     }
 
-    res.json({
+    const response = {
       totalLearners,
       placed: placedLearners,
       pending: pendingLearners,
@@ -3152,7 +4620,10 @@ router.get('/dashboard/stats', async (req, res) => {
       monthlyStats,
       totalVisits,
       institutionPerformance,
-    });
+    };
+
+    writeScopedCache(cacheKey, response);
+    res.json(response);
   } catch (error) {
     res.status(500).json({ message: 'Server Error', error });
   }
@@ -3434,13 +4905,17 @@ router.get('/dashboard/map-data', async (req, res) => {
 
 router.get('/search', async (req, res) => {
     try {
-        const { q } = req.query;
-        if (!q || q.length < 2) {
+        const rawQuery = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+        if (!rawQuery || rawQuery.length < 2) {
             return res.json({ learners: [], placements: [], institutions: [] });
         }
 
         const filter = await getFilter(req.user);
-        const searchRegex = new RegExp(q, 'i');
+        const escapedSearch = escapeRegex(rawQuery);
+        if (!escapedSearch) {
+            return res.json({ learners: [], placements: [], institutions: [] });
+        }
+        const searchRegex = new RegExp(escapedSearch, 'i');
 
         // Search Learners
         const learners = await Learner.find({
@@ -3480,28 +4955,237 @@ router.get('/search', async (req, res) => {
     }
 });
 
+router.get('/institutions/:id/summary', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+    try {
+        const institutionId = String(req.params.id || '').trim();
+        if (!mongoose.Types.ObjectId.isValid(institutionId)) {
+            return res.status(400).json({ message: 'Invalid institution id' });
+        }
+
+        const institution = await Institution.findById(institutionId)
+            .select('name code region district location category status gender calendarType programs createdAt updatedAt')
+            .lean();
+
+        if (!institution) {
+            return res.status(404).json({ message: 'Institution not found' });
+        }
+
+        if (req.user.role === 'RegionalAdmin' && institution.region !== req.user.region) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+
+        const institutionName = institution.name;
+        const fourteenDaysAgo = new Date();
+        fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+        const threeDaysAgo = new Date();
+        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+        const [
+            learnerCounts,
+            activePlacements,
+            monitoringVisitCount,
+            assessmentCount,
+            reportCount,
+            pendingReportCount,
+            latestReport,
+            userCounts,
+            topPrograms,
+            linkedPartners,
+            stalePendingLearners,
+            pendingAttendanceSignOff,
+            activePlacementsWithoutVisitsAgg,
+        ] = await Promise.all([
+            Learner.aggregate([
+                { $match: { institution: institutionName } },
+                {
+                    $group: {
+                        _id: null,
+                        totalLearners: { $sum: 1 },
+                        currentEnrolled: {
+                            $sum: {
+                                $cond: [
+                                    { $in: ['$academicStatus', ['Active', 'Graduating']] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
+                        graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
+                        placed: { $sum: { $cond: [{ $eq: ['$status', 'Placed'] }, 1, 0] } },
+                        completed: { $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] } },
+                        dropped: { $sum: { $cond: [{ $eq: ['$status', 'Dropped'] }, 1, 0] } },
+                    },
+                },
+            ]),
+            Placement.find({ institution: institutionName, status: 'Active' })
+                .select('_id learner companyName startDate endDate')
+                .lean(),
+            MonitoringVisit.countDocuments({ institution: institutionName }),
+            CompetencyAssessment.countDocuments({ institution: institutionName }),
+            SemesterReport.countDocuments({ institution: institutionName }),
+            SemesterReport.countDocuments({ institution: institutionName, status: { $in: ['Submitted', 'Regional_Approved'] } }),
+            SemesterReport.findOne({ institution: institutionName })
+                .sort({ updatedAt: -1 })
+                .select('semester academicYear status updatedAt')
+                .lean(),
+            User.aggregate([
+                { $match: { institution: institutionName } },
+                {
+                    $group: {
+                        _id: null,
+                        totalUsers: { $sum: 1 },
+                        activeUsers: { $sum: { $cond: [{ $eq: ['$status', 'Active'] }, 1, 0] } },
+                        admins: { $sum: { $cond: [{ $eq: ['$role', 'Admin'] }, 1, 0] } },
+                        managers: { $sum: { $cond: [{ $eq: ['$role', 'Manager'] }, 1, 0] } },
+                        staff: { $sum: { $cond: [{ $eq: ['$role', 'Staff'] }, 1, 0] } },
+                    },
+                },
+            ]),
+            Learner.aggregate([
+                { $match: { institution: institutionName } },
+                { $group: { _id: { $ifNull: ['$program', 'Unspecified'] }, count: { $sum: 1 } } },
+                { $project: { _id: 0, program: '$_id', count: 1 } },
+                { $sort: { count: -1, program: 1 } },
+                { $limit: 5 },
+            ]),
+            IndustryPartner.countDocuments({
+                linkedInstitutions: institutionName,
+                status: 'Active',
+                $or: [
+                    { approvalStatus: 'Approved' },
+                    { approvalStatus: { $exists: false } },
+                ],
+            }),
+            Learner.countDocuments({
+                institution: institutionName,
+                status: 'Pending',
+                createdAt: { $lte: fourteenDaysAgo },
+            }),
+            AttendanceLog.countDocuments({
+                institution: institutionName,
+                status: 'Pending',
+                createdAt: { $lte: threeDaysAgo },
+            }),
+            Placement.aggregate([
+                { $match: { institution: institutionName, status: 'Active', startDate: { $lte: fourteenDaysAgo } } },
+                {
+                    $lookup: {
+                        from: 'monitoringvisits',
+                        localField: 'learner',
+                        foreignField: 'learner',
+                        as: 'visits',
+                    },
+                },
+                { $match: { visits: { $eq: [] } } },
+                { $count: 'count' },
+            ]),
+        ]);
+
+        const learnerIds = activePlacements
+            .map((placement) => placement.learner)
+            .filter(Boolean);
+
+        const employerEvaluationCount = learnerIds.length > 0
+            ? await EmployerEvaluation.countDocuments({ learner: { $in: learnerIds } })
+            : 0;
+
+        const learnerSummary = learnerCounts[0] || {
+            totalLearners: 0,
+            currentEnrolled: 0,
+            graduating: 0,
+            graduated: 0,
+            placed: 0,
+            completed: 0,
+            dropped: 0,
+        };
+        const userSummary = userCounts[0] || {
+            totalUsers: 0,
+            activeUsers: 0,
+            admins: 0,
+            managers: 0,
+            staff: 0,
+        };
+
+        res.json({
+            institution,
+            summary: {
+                ...learnerSummary,
+                activePlacements: activePlacements.length,
+                monitoringVisits: monitoringVisitCount,
+                assessments: assessmentCount,
+                employerEvaluations: employerEvaluationCount,
+                linkedPartners,
+                totalUsers: userSummary.totalUsers,
+                activeUsers: userSummary.activeUsers,
+                admins: userSummary.admins,
+                managers: userSummary.managers,
+                staff: userSummary.staff,
+                totalReports: reportCount,
+                pendingReports: pendingReportCount,
+            },
+            topPrograms,
+            latestReport: latestReport
+                ? {
+                    semester: latestReport.semester,
+                    academicYear: latestReport.academicYear,
+                    status: latestReport.status,
+                    updatedAt: latestReport.updatedAt,
+                }
+                : null,
+            alerts: {
+                stalePendingLearners,
+                pendingAttendanceSignOff,
+                activePlacementsWithoutVisits: activePlacementsWithoutVisitsAgg[0]?.count || 0,
+            },
+        });
+    } catch (error) {
+        console.error('Error fetching institution summary:', error);
+        res.status(500).json({ message: 'Failed to fetch institution summary' });
+    }
+});
+
 // ==================== CALENDAR SYSTEM ====================
 
 router.get('/calendar/events', async (req, res) => {
     try {
         const filter = await getFilter(req.user);
+        const now = new Date();
+        const defaultStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const defaultEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        const rangeStart = req.query.start ? new Date(req.query.start) : defaultStart;
+        const rangeEnd = req.query.end ? new Date(req.query.end) : defaultEnd;
+
+        if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime()) || rangeStart > rangeEnd) {
+            return res.status(400).json({ message: 'Invalid calendar date range' });
+        }
         
         // 1. Learner Completions (from Placements)
-        const completions = await Placement.find(filter)
-            .populate('learner', 'name')
+        const completions = await Placement.find({
+            ...filter,
+            endDate: { $gte: rangeStart, $lte: rangeEnd },
+        })
+            .populate('learner', 'firstName middleName lastName name')
             .select('endDate companyName learner');
 
-        const completionEvents = completions.map(c => ({
-            id: `comp-${c._id}`,
-            title: `Completion: ${c.learner?.name || 'Learner'}`,
-            start: c.endDate,
-            type: 'completion',
-            description: `At ${c.companyName}`,
-            color: '#10B981'
-        }));
+        const completionEvents = completions.map(c => {
+            const learnerName = buildLearnerDisplayName(c.learner) || 'Learner';
+            return {
+                id: `comp-${c._id}`,
+                title: `Completion: ${learnerName}`,
+                start: c.endDate,
+                type: 'completion',
+                learnerName,
+                description: `At ${c.companyName}`,
+                color: '#10B981'
+            };
+        });
 
         // 2. Monitoring Visits
-        const visits = await MonitoringVisit.find(filter)
+        const visits = await MonitoringVisit.find({
+            ...filter,
+            visitDate: { $gte: rangeStart, $lte: rangeEnd },
+        })
             .populate('learner', 'name')
             .select('visitDate learner visitType');
 
@@ -3515,20 +5199,35 @@ router.get('/calendar/events', async (req, res) => {
         }));
 
         // 3. Academic Calendar Events (from HQ)
-        const academicEvents = await AcademicCalendar.find({ isActive: true });
-        const hqEvents = academicEvents.map(e => ({
+        const institutionCalendarType = req.user?.institution
+          ? await getInstitutionCalendarType(req.user.institution)
+          : null;
+        const academicEvents = await AcademicCalendar.find({
+          isActive: true,
+          startDate: { $lte: rangeEnd },
+          endDate: { $gte: rangeStart },
+        });
+        const visibleAcademicEvents = academicEvents.filter((event) => {
+          if (event.eventType !== 'WEL Window') return true;
+          if (!institutionCalendarType) return true;
+          return !event.institutionCalendarType || event.institutionCalendarType === 'All' || event.institutionCalendarType === institutionCalendarType;
+        });
+        const hqEvents = visibleAcademicEvents.map(e => ({
             id: `acad-${e._id}`,
             title: e.title,
             start: e.startDate,
             end: e.endDate,
             type: 'academic',
             eventType: e.eventType,
-            description: e.description || `${e.semester} — ${e.academicYear}`,
+            description: e.description || (e.eventType === 'WEL Window'
+              ? `${e.targetYearGroup} · ${e.institutionCalendarType} · ${e.semester} · ${e.academicYear}`
+              : `${e.semester} — ${e.academicYear}`),
             color: e.eventType === 'Semester Start' ? '#8B5CF6' :
                    e.eventType === 'Semester End' ? '#EC4899' :
                    e.eventType === 'Exam Period' ? '#EF4444' :
                    e.eventType === 'Holiday' ? '#10B981' :
-                   e.eventType === 'Deadline' ? '#F59E0B' : '#6B7280'
+                   e.eventType === 'Deadline' ? '#F59E0B' :
+                   e.eventType === 'WEL Window' ? '#2563EB' : '#6B7280'
         }));
 
         res.json([...completionEvents, ...visitEvents, ...hqEvents]);
@@ -3540,7 +5239,7 @@ router.get('/calendar/events', async (req, res) => {
 
 // ==================== ACADEMIC CALENDAR CRUD (HQ Only) ====================
 
-router.get('/academic-terms', requireRole('SuperAdmin'), async (req, res) => {
+router.get('/academic-terms', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'), async (req, res) => {
     try {
         const terms = await AcademicTerm.find()
             .populate('createdBy', 'name email')
@@ -3610,7 +5309,8 @@ router.put('/academic-terms/:id', requireRole('SuperAdmin'), async (req, res) =>
             await AcademicTerm.updateMany({ _id: { $ne: req.params.id }, isCurrent: true }, { $set: { isCurrent: false } });
         }
 
-        const updatedTerm = await AcademicTerm.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' })
+        const { name, academicYear, termType, startDate, endDate, status, isCurrent, notes } = req.body;
+        const updatedTerm = await AcademicTerm.findByIdAndUpdate(req.params.id, { name, academicYear, termType, startDate, endDate, status, isCurrent, notes }, { returnDocument: 'after' })
             .populate('createdBy', 'name email');
 
         await logAuditEvent({
@@ -3654,10 +5354,21 @@ router.delete('/academic-terms/:id', requireRole('SuperAdmin'), async (req, res)
 // List all academic calendar events
 router.get('/academic-calendar', async (req, res) => {
     try {
+        const institutionCalendarType = req.user?.institution
+          ? await getInstitutionCalendarType(req.user.institution)
+          : null;
         const events = await AcademicCalendar.find()
             .populate('createdBy', 'name email')
             .sort({ startDate: 1 });
-        res.json(events);
+        if (req.user.role === 'SuperAdmin' || req.user.role === 'RegionalAdmin' || !institutionCalendarType) {
+          return res.json(events);
+        }
+        res.json(events.filter((event) => (
+          event.eventType !== 'WEL Window'
+          || !event.institutionCalendarType
+          || event.institutionCalendarType === 'All'
+          || event.institutionCalendarType === institutionCalendarType
+        )));
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
@@ -3700,6 +5411,121 @@ router.delete('/academic-calendar/:id', async (req, res) => {
         res.json({ message: 'Event deleted' });
     } catch (error) {
         res.status(500).json({ message: 'Failed to delete event' });
+    }
+});
+
+router.post('/academic-calendar/bootstrap-wel-template', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const academicYear = req.body.academicYear || '2025/2026';
+        const templateWindows = [
+            {
+                title: 'Single Track Year 3 WEL Window',
+                description: 'Derived from the revised 2025/2026 academic calendar for single track institutions.',
+                startDate: new Date('2025-09-07'),
+                endDate: new Date('2025-12-12'),
+                eventType: 'WEL Window',
+                semester: 'Semester 1',
+                academicYear,
+                institutionCalendarType: 'Single Track',
+                targetYearGroup: 'Year 3',
+                totalWeeks: 11,
+                hoursPerDay: 5,
+                sourceLabel: 'Revised 2025-2026 Academic Calendar',
+            },
+            {
+                title: 'Single Track Year 2 WEL Window',
+                description: 'Derived from the revised 2025/2026 academic calendar for single track institutions.',
+                startDate: new Date('2026-03-16'),
+                endDate: new Date('2026-06-05'),
+                eventType: 'WEL Window',
+                semester: 'Semester 2',
+                academicYear,
+                institutionCalendarType: 'Single Track',
+                targetYearGroup: 'Year 2',
+                totalWeeks: 11,
+                hoursPerDay: 5,
+                sourceLabel: 'Revised 2025-2026 Academic Calendar',
+            },
+            {
+                title: 'Single Track Year 1 WEL Window',
+                description: 'Derived from the revised 2025/2026 academic calendar for single track institutions.',
+                startDate: new Date('2026-06-08'),
+                endDate: new Date('2026-07-31'),
+                eventType: 'WEL Window',
+                semester: 'Semester 2',
+                academicYear,
+                institutionCalendarType: 'Single Track',
+                targetYearGroup: 'Year 1',
+                totalWeeks: 10,
+                hoursPerDay: 5,
+                sourceLabel: 'Revised 2025-2026 Academic Calendar',
+            },
+            {
+                title: 'Transitional Year 2 WEL Window',
+                description: 'Derived from the revised 2025/2026 academic calendar for transitional institutions.',
+                startDate: new Date('2025-10-27'),
+                endDate: new Date('2026-01-30'),
+                eventType: 'WEL Window',
+                semester: 'Semester 1',
+                academicYear,
+                institutionCalendarType: 'Transitional',
+                targetYearGroup: 'Year 2',
+                totalWeeks: 12,
+                hoursPerDay: 5,
+                sourceLabel: 'Revised 2025-2026 Academic Calendar',
+            },
+            {
+                title: 'Transitional Year 3 WEL Window',
+                description: 'Derived from the revised 2025/2026 academic calendar for transitional institutions.',
+                startDate: new Date('2026-02-07'),
+                endDate: new Date('2026-03-30'),
+                eventType: 'WEL Window',
+                semester: 'Semester 1',
+                academicYear,
+                institutionCalendarType: 'Transitional',
+                targetYearGroup: 'Year 3',
+                totalWeeks: 7,
+                hoursPerDay: 5,
+                sourceLabel: 'Revised 2025-2026 Academic Calendar',
+            },
+            {
+                title: 'Transitional Year 1 WEL Window',
+                description: 'Derived from the revised 2025/2026 academic calendar for transitional institutions.',
+                startDate: new Date('2026-05-25'),
+                endDate: new Date('2026-08-14'),
+                eventType: 'WEL Window',
+                semester: 'Semester 2',
+                academicYear,
+                institutionCalendarType: 'Transitional',
+                targetYearGroup: 'Year 1',
+                totalWeeks: 12,
+                hoursPerDay: 5,
+                sourceLabel: 'Revised 2025-2026 Academic Calendar',
+            },
+        ];
+
+        const savedEvents = await Promise.all(templateWindows.map(async (window) => AcademicCalendar.findOneAndUpdate(
+            {
+                academicYear: window.academicYear,
+                eventType: window.eventType,
+                institutionCalendarType: window.institutionCalendarType,
+                targetYearGroup: window.targetYearGroup,
+            },
+            {
+                ...window,
+                createdBy: req.user._id,
+                isActive: true,
+            },
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+        )));
+
+        res.json({
+            message: `Seeded ${savedEvents.length} WEL schedule windows for ${academicYear}.`,
+            events: savedEvents,
+        });
+    } catch (error) {
+        console.error('Error seeding WEL calendar template:', error);
+        res.status(500).json({ message: 'Failed to seed WEL calendar template' });
     }
 });
 
@@ -3947,13 +5773,78 @@ router.get('/semester-reports', async (req, res) => {
         } else if (req.user.role !== 'SuperAdmin') {
             filter.institution = req.user.institution;
         }
-        const reports = await SemesterReport.find(filter)
+        const { status, institution, academicYear, page: requestedPage, pageSize: requestedPageSize } = req.query;
+        if (status) filter.status = status;
+        if (institution) filter.institution = institution;
+        if (academicYear) filter.academicYear = academicYear;
+
+        const parsedPage = Number.parseInt(String(requestedPage || ''), 10);
+        const parsedPageSize = Number.parseInt(String(requestedPageSize || ''), 10);
+        const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
+        const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+        const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+            ? Math.min(parsedPageSize, 100)
+            : 25;
+
+        const reportsQuery = SemesterReport.find(filter)
+            .select('institution semester academicYear periodStart periodEnd status generatedBy certifiedBy academicTerm createdAt metrics exceptions summary')
             .populate('generatedBy', 'name email')
-            .populate('reviewedByRegional', 'name email')
-            .populate('reviewedByHQ', 'name email')
             .populate('certifiedBy', 'name email')
             .populate('academicTerm')
             .sort({ createdAt: -1 });
+
+        if (usePagination) {
+            reportsQuery.skip((page - 1) * pageSize).limit(pageSize);
+        }
+
+        const academicYearOptionFilter = { ...filter };
+        delete academicYearOptionFilter.academicYear;
+
+        const [reports, total, allAcademicYears, statusCounts, lifecycleTotals] = await Promise.all([
+            reportsQuery.lean(),
+            usePagination ? SemesterReport.countDocuments(filter) : Promise.resolve(null),
+            usePagination ? SemesterReport.distinct('academicYear', academicYearOptionFilter) : Promise.resolve(null),
+            usePagination ? SemesterReport.aggregate([
+                { $match: filter },
+                { $group: { _id: '$status', count: { $sum: 1 } } },
+            ]) : Promise.resolve(null),
+            usePagination ? SemesterReport.aggregate([
+                { $match: filter },
+                {
+                    $group: {
+                        _id: null,
+                        currentEnrolled: { $sum: { $ifNull: ['$summary.currentEnrolled', 0] } },
+                        graduated: { $sum: { $ifNull: ['$summary.academicGraduated', 0] } },
+                    },
+                },
+            ]) : Promise.resolve(null),
+        ]);
+
+        if (usePagination) {
+            const countsByStatus = (statusCounts || []).reduce((acc, entry) => {
+                acc[entry._id] = entry.count;
+                return acc;
+            }, {});
+            const lifecycle = lifecycleTotals?.[0] || { currentEnrolled: 0, graduated: 0 };
+            const safeTotal = total || 0;
+            return res.json({
+                items: reports,
+                total: safeTotal,
+                page,
+                pageSize,
+                totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
+                academicYearOptions: (allAcademicYears || []).filter(Boolean).sort((a, b) => b.localeCompare(a)),
+                stats: {
+                    draftCount: countsByStatus.Draft || 0,
+                    certifiedCount: countsByStatus.Certified || 0,
+                    submittedCount: countsByStatus.Submitted || 0,
+                    approvedCount: countsByStatus.HQ_Approved || 0,
+                    currentEnrolled: lifecycle.currentEnrolled || 0,
+                    graduated: lifecycle.graduated || 0,
+                },
+            });
+        }
+
         res.json(reports);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
@@ -4247,7 +6138,7 @@ router.post('/assessments', async (req, res) => {
         // Automatically graduate learner
         let learnerName = 'A learner';
         if (req.body.learner) {
-            const updatedLearner = await Learner.findByIdAndUpdate(req.body.learner, { status: 'Completed' }, { new: true });
+            const updatedLearner = await Learner.findByIdAndUpdate(req.body.learner, { status: 'Completed' }, { returnDocument: 'after' });
             if (updatedLearner) learnerName = updatedLearner.name;
         }
 
@@ -4325,11 +6216,31 @@ router.delete('/assessments/:id', async (req, res) => {
 
 // ==================== LEARNERS ====================
 
+const buildLearnerDisplayName = (learner) => (
+  [learner?.lastName, learner?.middleName, learner?.firstName]
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+  || learner?.name
+  || ''
+);
+
 router.get('/learners', async (req, res) => {
   try {
+    await runAutomaticLearnerProgression(req.user);
     const filter = await getFilter(req.user);
     const query = { ...filter };
-    const { status, academicStatus, year, program, intakeAcademicYear, availableForPlacement } = req.query;
+    const {
+      status,
+      academicStatus,
+      year,
+      program,
+      intakeAcademicYear,
+      availableForPlacement,
+      page: requestedPage,
+      pageSize: requestedPageSize,
+      search,
+    } = req.query;
 
     if (status) query.status = status;
     if (academicStatus === 'CurrentEnrolled') query.academicStatus = { $in: ['Active', 'Graduating'] };
@@ -4337,24 +6248,67 @@ router.get('/learners', async (req, res) => {
     if (year) query.year = year;
     if (program) query.program = program;
     if (intakeAcademicYear) query.intakeAcademicYear = intakeAcademicYear;
+    if (search) {
+      const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (escapedSearch) {
+        const searchRegex = new RegExp(escapedSearch, 'i');
+        query.$or = [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { middleName: searchRegex },
+          { trackingId: searchRegex },
+          { indexNumber: searchRegex },
+          { program: searchRegex },
+        ];
+      }
+    }
 
-    let learners = await Learner.find(query)
-      .populate('placement')
-      .populate('owner', 'name role institution');
+    const parsedPage = Number.parseInt(String(requestedPage || ''), 10);
+    const parsedPageSize = Number.parseInt(String(requestedPageSize || ''), 10);
+    const usePagination = (Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize)) && availableForPlacement !== 'true';
+    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+      ? Math.min(parsedPageSize, 100)
+      : 25;
+
+    const learnersQuery = Learner.find(query)
+      .select('trackingId indexNumber name lastName firstName middleName gender dateOfBirth phone guardianContact program region year intakeAcademicYear graduationAcademicYear graduatedAt academicStatus status institution placement owner')
+      .sort({ createdAt: -1 });
+
+    if (usePagination) {
+      learnersQuery.skip((page - 1) * pageSize).limit(pageSize);
+    }
+
+    let learners = await learnersQuery.lean();
     const learnerIds = learners.map((learner) => learner._id);
     let activePlacementLearnerIds = new Set();
+    const learnerInstitutions = [...new Set(learners.map((learner) => learner.institution).filter(Boolean))];
+    const welWindowsByInstitution = new Map();
 
-    if (availableForPlacement === 'true' && learnerIds.length > 0) {
+    await Promise.all(learnerInstitutions.map(async (institutionName) => {
+      welWindowsByInstitution.set(
+        institutionName,
+        await getInstitutionWELWindows({ institutionName })
+      );
+    }));
+
+    if (learnerIds.length > 0) {
       const activePlacements = await Placement.find({
         learner: { $in: learnerIds },
         status: 'Active',
       }).select('learner');
 
       activePlacementLearnerIds = new Set(activePlacements.map((placement) => placement.learner.toString()));
+    }
+
+    if (availableForPlacement === 'true' && learnerIds.length > 0) {
       learners = learners.filter((learner) => {
-        const academicState = learner.academicStatus || 'Active';
-        if (!['Active', 'Graduating'].includes(academicState)) return false;
-        return !activePlacementLearnerIds.has(learner._id.toString());
+        const eligibility = buildPlacementEligibility({
+          learner,
+          hasActivePlacement: activePlacementLearnerIds.has(learner._id.toString()),
+          welWindows: welWindowsByInstitution.get(learner.institution) || [],
+        });
+        return eligibility.isEligible;
       });
     }
 
@@ -4365,11 +6319,240 @@ router.get('/learners', async (req, res) => {
       if (!documentsByLearner.has(key)) documentsByLearner.set(key, []);
       documentsByLearner.get(key).push(doc);
     });
-    res.json(learners.map((learner) => ({
-      ...learner.toObject(),
+
+    const items = learners.map((learner) => ({
+      ...learner,
+      name: buildLearnerDisplayName(learner),
       readiness: buildLearnerReadiness(learner, documentsByLearner.get(learner._id.toString()) || []),
+      placementEligibility: buildPlacementEligibility({
+        learner,
+        hasActivePlacement: activePlacementLearnerIds.has(learner._id.toString()),
+        welWindows: welWindowsByInstitution.get(learner.institution) || [],
+      }),
       hasActivePlacement: activePlacementLearnerIds.has(learner._id.toString()),
+    }));
+
+    if (usePagination) {
+      const [total, summaryCounts, intakeYearValues, programValues] = await Promise.all([
+        Learner.countDocuments(query),
+        Learner.aggregate([
+          { $match: query },
+          {
+            $group: {
+              _id: null,
+              year1: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ['$year', 'Year 1'] },
+                        { $ne: ['$academicStatus', 'Graduated'] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              year2: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ['$year', 'Year 2'] },
+                        { $ne: ['$academicStatus', 'Graduated'] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              year3: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ['$year', 'Year 3'] },
+                        { $ne: ['$academicStatus', 'Graduated'] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              graduated: {
+                $sum: {
+                  $cond: [
+                    { $eq: ['$academicStatus', 'Graduated'] },
+                    1,
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+        ]),
+        Learner.distinct('intakeAcademicYear', {
+          ...filter,
+          ...(search ? { $or: query.$or } : {}),
+          ...(status ? { status } : {}),
+          ...(academicStatus === 'CurrentEnrolled'
+            ? { academicStatus: { $in: ['Active', 'Graduating'] } }
+            : academicStatus
+              ? { academicStatus }
+              : {}),
+          ...(year ? { year } : {}),
+          ...(program ? { program } : {}),
+        }),
+        Learner.distinct('program', filter),
+      ]);
+
+      const summary = summaryCounts[0] || { year1: 0, year2: 0, year3: 0, graduated: 0 };
+      const availableIntakeYears = intakeYearValues.filter(Boolean).sort((a, b) => b.localeCompare(a));
+      const programOptions = programValues.filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+      return res.json({
+        items,
+        total,
+        page,
+        pageSize,
+        totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
+        summary,
+        availableIntakeYears,
+        programOptions,
+      });
+    }
+
+    res.json(items);
+  } catch (error) {
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+router.get('/learners/options', async (req, res) => {
+  try {
+    const filter = await getFilter(req.user);
+    const query = { ...filter };
+    const { status, academicStatus, year, program, search, institution, limit: requestedLimit } = req.query;
+
+    if (status) query.status = status;
+    if (academicStatus === 'CurrentEnrolled') query.academicStatus = { $in: ['Active', 'Graduating'] };
+    else if (academicStatus) query.academicStatus = academicStatus;
+    if (year) query.year = year;
+    if (program) query.program = program;
+    if (institution && (req.user.role === 'SuperAdmin' || req.user.role === 'RegionalAdmin')) {
+      query.institution = institution;
+    }
+    if (search) {
+      const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (escapedSearch) {
+        const searchRegex = new RegExp(escapedSearch, 'i');
+        query.$or = [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { middleName: searchRegex },
+          { trackingId: searchRegex },
+          { indexNumber: searchRegex },
+          { program: searchRegex },
+        ];
+      }
+    }
+
+    const parsedLimit = Number.parseInt(String(requestedLimit || ''), 10);
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 1000)
+      : 500;
+
+    const learners = await Learner.find(query)
+      .select('firstName lastName middleName trackingId institution region program year status academicStatus')
+      .sort({ lastName: 1, firstName: 1, middleName: 1, trackingId: 1 })
+      .limit(limit)
+      .lean();
+
+    res.json(learners.map((learner) => ({
+      ...learner,
+      name: buildLearnerDisplayName(learner),
     })));
+  } catch (error) {
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+router.get('/learners/placement-options', async (req, res) => {
+  try {
+    const filter = await getFilter(req.user);
+    const query = {
+      ...filter,
+      academicStatus: { $in: ['Active', 'Graduating'] },
+      status: { $ne: 'Dropped' },
+    };
+    const { search, limit: requestedLimit } = req.query;
+
+    if (search) {
+      const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (escapedSearch) {
+        const searchRegex = new RegExp(escapedSearch, 'i');
+        query.$or = [
+          { name: searchRegex },
+          { trackingId: searchRegex },
+          { indexNumber: searchRegex },
+          { program: searchRegex },
+        ];
+      }
+    }
+
+    const parsedLimit = Number.parseInt(String(requestedLimit || ''), 10);
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 1000)
+      : 500;
+
+    const learners = await Learner.find(query)
+      .select('firstName lastName name trackingId phone program year academicStatus status institution region')
+      .sort({ program: 1, name: 1 })
+      .limit(limit)
+      .lean();
+
+    const learnerIds = learners.map((learner) => learner._id);
+    const learnerInstitutions = [...new Set(learners.map((learner) => learner.institution).filter(Boolean))];
+    const welWindowsByInstitution = new Map();
+
+    await Promise.all(learnerInstitutions.map(async (institutionName) => {
+      welWindowsByInstitution.set(
+        institutionName,
+        await getInstitutionWELWindows({ institutionName })
+      );
+    }));
+
+    let activePlacementLearnerIds = new Set();
+    if (learnerIds.length > 0) {
+      const activePlacements = await Placement.find({
+        learner: { $in: learnerIds },
+        status: 'Active',
+      }).select('learner').lean();
+
+      activePlacementLearnerIds = new Set(activePlacements.map((placement) => placement.learner.toString()));
+    }
+
+    const items = learners
+      .map((learner) => {
+        const placementEligibility = buildPlacementEligibility({
+          learner,
+          hasActivePlacement: activePlacementLearnerIds.has(learner._id.toString()),
+          welWindows: welWindowsByInstitution.get(learner.institution) || [],
+        });
+
+        return {
+          ...learner,
+          readiness: buildLearnerReadiness(learner),
+          placementEligibility,
+          hasActivePlacement: activePlacementLearnerIds.has(learner._id.toString()),
+        };
+      })
+      .filter((learner) => learner.placementEligibility?.isEligible);
+
+    res.json(items);
   } catch (error) {
     res.status(500).json({ message: 'Server Error' });
   }
@@ -4486,9 +6669,16 @@ router.get('/learners/:id', async (req, res) => {
     }
 
     const documents = await Document.find({ learner: learner._id }).select('category');
+    const hasActivePlacement = await Placement.exists({ learner: learner._id, status: 'Active' });
+    const welWindows = await getInstitutionWELWindows({ institutionName: learner.institution });
     res.json({
       ...learner.toObject(),
       readiness: buildLearnerReadiness(learner, documents),
+      placementEligibility: buildPlacementEligibility({
+        learner,
+        hasActivePlacement: Boolean(hasActivePlacement),
+        welWindows,
+      }),
       age: calculateAgeYears(learner.dateOfBirth),
       isUnder18: isLearnerUnder18(learner),
     });
@@ -4830,11 +7020,17 @@ router.get('/learners/:id/profile', async (req, res) => {
         employerEvaluationId: evaluation?._id || null,
       };
     });
+    const welWindows = await getInstitutionWELWindows({ institutionName: learner.institution });
 
     // 3. Aggregate and Return
     res.json({
       learner,
       readiness: buildLearnerReadiness(learner, documents),
+      placementEligibility: buildPlacementEligibility({
+        learner,
+        hasActivePlacement: placements.some((placement) => placement.status === 'Active'),
+        welWindows,
+      }),
       placements: placements.map((placement) => ({
         ...placement.toObject(),
         operationalReadiness: buildPlacementOperationalReadiness(placement),
@@ -5392,7 +7588,17 @@ router.get('/learners/:id/progress', async (req, res) => {
 router.get('/learners/progress/bulk', async (req, res) => {
   try {
     const filter = await getFilter(req.user);
-    const { program, year, status, academicStatus, intakeAcademicYear } = req.query;
+    const {
+      program,
+      year,
+      status,
+      academicStatus,
+      intakeAcademicYear,
+      search,
+      risk,
+      page: requestedPage,
+      pageSize: requestedPageSize,
+    } = req.query;
 
     // Build query
     const query = { ...filter };
@@ -5402,6 +7608,24 @@ router.get('/learners/progress/bulk', async (req, res) => {
     if (academicStatus === 'CurrentEnrolled') query.academicStatus = { $in: ['Active', 'Graduating'] };
     else if (academicStatus) query.academicStatus = academicStatus;
     if (intakeAcademicYear) query.intakeAcademicYear = intakeAcademicYear;
+    if (search) {
+      const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (escapedSearch) {
+        const searchRegex = new RegExp(escapedSearch, 'i');
+        query.$or = [
+          { name: searchRegex },
+          { trackingId: searchRegex },
+          { program: searchRegex },
+        ];
+      }
+    }
+
+    const parsedPage = Number.parseInt(String(requestedPage || ''), 10);
+    const parsedPageSize = Number.parseInt(String(requestedPageSize || ''), 10);
+    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+      ? Math.min(parsedPageSize, 100)
+      : 25;
 
     // Fetch learners
     const learners = await Learner.find(query)
@@ -5419,13 +7643,53 @@ router.get('/learners/progress/bulk', async (req, res) => {
     const institutions = [...new Set(learners.map(l => l.institution))];
     const semesterReports = await SemesterReport.find({ institution: { $in: institutions } });
 
+    const placementsByLearner = new Map();
+    placements.forEach((placement) => {
+      const key = placement.learner?.toString();
+      if (!key) return;
+      if (!placementsByLearner.has(key)) placementsByLearner.set(key, []);
+      placementsByLearner.get(key).push(placement);
+    });
+
+    const visitsByLearner = new Map();
+    visits.forEach((visit) => {
+      const key = visit.learner?.toString();
+      if (!key) return;
+      if (!visitsByLearner.has(key)) visitsByLearner.set(key, []);
+      visitsByLearner.get(key).push(visit);
+    });
+
+    const assessmentsByLearner = new Map();
+    assessments.forEach((assessment) => {
+      const key = assessment.learner?.toString();
+      if (!key) return;
+      if (!assessmentsByLearner.has(key)) assessmentsByLearner.set(key, []);
+      assessmentsByLearner.get(key).push(assessment);
+    });
+
+    const evaluationsByLearner = new Map();
+    evaluations.forEach((evaluation) => {
+      const key = evaluation.learner?.toString();
+      if (!key) return;
+      if (!evaluationsByLearner.has(key)) evaluationsByLearner.set(key, []);
+      evaluationsByLearner.get(key).push(evaluation);
+    });
+
+    const reportsByInstitution = new Map();
+    semesterReports.forEach((report) => {
+      const key = report.institution;
+      if (!key) return;
+      if (!reportsByInstitution.has(key)) reportsByInstitution.set(key, []);
+      reportsByInstitution.get(key).push(report);
+    });
+
     // Calculate progress for each learner
-    const progressSummary = learners.map(learner => {
-      const learnerPlacements = placements.filter(p => p.learner.toString() === learner._id.toString());
-      const learnerVisits = visits.filter(v => v.learner.toString() === learner._id.toString());
-      const learnerAssessments = assessments.filter(a => a.learner.toString() === learner._id.toString());
-      const learnerEvaluations = evaluations.filter(e => e.learner.toString() === learner._id.toString());
-      const learnerReports = semesterReports.filter(r => r.institution === learner.institution);
+    let progressSummary = learners.map(learner => {
+      const learnerPlacements = placementsByLearner.get(learner._id.toString()) || [];
+      const learnerVisits = visitsByLearner.get(learner._id.toString()) || [];
+      const learnerAssessments = assessmentsByLearner.get(learner._id.toString()) || [];
+      const learnerEvaluations = evaluationsByLearner.get(learner._id.toString()) || [];
+      const learnerReports = reportsByInstitution.get(learner.institution) || [];
 
       const progress = calculateLearnerProgress(
         learner,
@@ -5463,6 +7727,10 @@ router.get('/learners/progress/bulk', async (req, res) => {
         },
       };
     });
+
+    if (risk === 'at-risk') {
+      progressSummary = progressSummary.filter((item) => item.progress.atRisk);
+    }
 
     // Aggregate statistics
     const stats = {
@@ -5517,8 +7785,32 @@ router.get('/learners/progress/bulk', async (req, res) => {
       }))
       .sort((a, b) => b.intakeAcademicYear.localeCompare(a.intakeAcademicYear));
 
+    const ownershipSummary = {
+      assignedCount: progressSummary.filter((item) => Boolean(item.learner.owner?._id)).length,
+      unassignedCount: progressSummary.filter((item) => !item.learner.owner?._id).length,
+      atRiskOwnedCount: progressSummary.filter((item) => item.progress.atRisk && item.learner.owner?._id).length,
+    };
+
+    const intakeAcademicYearOptions = Array.from(
+      new Set(progressSummary.map((item) => item.learner.intakeAcademicYear).filter(Boolean))
+    ).sort((a, b) => b.localeCompare(a));
+
+    const programOptions = Array.from(
+      new Set(learners.map((l) => l.program).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b));
+
+    const total = progressSummary.length;
+    const pagedLearners = progressSummary.slice((page - 1) * pageSize, page * pageSize);
+
     res.json({
-      learners: progressSummary,
+      learners: pagedLearners,
+      total,
+      page,
+      pageSize,
+      totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
+      intakeAcademicYearOptions,
+      programOptions,
+      ownershipSummary,
       stats,
     });
   } catch (error) {
@@ -5528,6 +7820,234 @@ router.get('/learners/progress/bulk', async (req, res) => {
 });
 
 // ==================== PLACEMENTS ====================
+
+router.get('/learners/graduated/export', async (req, res) => {
+  try {
+    const filter = await getFilter(req.user);
+    const query = {
+      ...filter,
+      academicStatus: 'Graduated',
+    };
+
+    if (req.query.intakeAcademicYear) query.intakeAcademicYear = req.query.intakeAcademicYear;
+    if (req.query.program) query.program = req.query.program;
+    if (req.query.search) {
+      const searchRegex = new RegExp(req.query.search, 'i');
+      query.$or = [
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { middleName: searchRegex },
+        { trackingId: searchRegex },
+        { indexNumber: searchRegex },
+        { program: searchRegex },
+        { graduationAcademicYear: searchRegex },
+      ];
+    }
+
+    const learners = await Learner.find(query).sort({ graduatedAt: -1, updatedAt: -1 });
+    const learnerIds = learners.map((learner) => learner._id);
+
+    const [placements, assessments, evaluations, visits] = await Promise.all([
+      Placement.find({ learner: { $in: learnerIds } }).select('learner status companyName startDate endDate').lean(),
+      CompetencyAssessment.find({ learner: { $in: learnerIds } }).select('learner overallScore assessmentDate').lean(),
+      EmployerEvaluation.find({ learner: { $in: learnerIds } }).select('learner overallScore evaluationDate wouldHire').lean(),
+      MonitoringVisit.find({ learner: { $in: learnerIds } }).select('learner visitDate').lean(),
+    ]);
+
+    const placementsByLearner = new Map();
+    placements.forEach((placement) => {
+      const key = placement.learner?.toString();
+      if (!key) return;
+      if (!placementsByLearner.has(key)) placementsByLearner.set(key, []);
+      placementsByLearner.get(key).push(placement);
+    });
+
+    const assessmentsByLearner = new Map();
+    assessments.forEach((assessment) => {
+      const key = assessment.learner?.toString();
+      if (!key) return;
+      if (!assessmentsByLearner.has(key)) assessmentsByLearner.set(key, []);
+      assessmentsByLearner.get(key).push(assessment);
+    });
+
+    const evaluationsByLearner = new Map();
+    evaluations.forEach((evaluation) => {
+      const key = evaluation.learner?.toString();
+      if (!key) return;
+      if (!evaluationsByLearner.has(key)) evaluationsByLearner.set(key, []);
+      evaluationsByLearner.get(key).push(evaluation);
+    });
+
+    const visitsByLearner = new Map();
+    visits.forEach((visit) => {
+      const key = visit.learner?.toString();
+      if (!key) return;
+      visitsByLearner.set(key, (visitsByLearner.get(key) || 0) + 1);
+    });
+
+    const mappedData = learners.map((learner) => {
+      const learnerPlacements = placementsByLearner.get(learner._id.toString()) || [];
+      const learnerAssessments = assessmentsByLearner.get(learner._id.toString()) || [];
+      const learnerEvaluations = evaluationsByLearner.get(learner._id.toString()) || [];
+      const latestPlacement = learnerPlacements
+        .slice()
+        .sort((a, b) => new Date(b.endDate || b.startDate || 0).getTime() - new Date(a.endDate || a.startDate || 0).getTime())[0] || null;
+      const latestEvaluation = learnerEvaluations
+        .slice()
+        .sort((a, b) => new Date(b.evaluationDate || 0).getTime() - new Date(a.evaluationDate || 0).getTime())[0] || null;
+      const avgAssessmentScore = learnerAssessments.length > 0
+        ? (learnerAssessments.reduce((sum, assessment) => sum + (assessment.overallScore || 0), 0) / learnerAssessments.length).toFixed(2)
+        : 'N/A';
+
+      return {
+        'Learner Name': learner.name,
+        'Tracking ID': learner.trackingId || 'N/A',
+        'Index Number': learner.indexNumber || 'N/A',
+        'Institution': learner.institution || 'N/A',
+        'Program': learner.program || 'N/A',
+        'Final Study Year': learner.year || 'N/A',
+        'Intake Academic Year': learner.intakeAcademicYear || 'N/A',
+        'Academic Status': learner.academicStatus || 'Graduated',
+        'WEL Status': learner.status || 'Pending',
+        'Graduation Academic Year': learner.graduationAcademicYear || 'N/A',
+        'Graduated At': learner.graduatedAt ? new Date(learner.graduatedAt).toLocaleDateString() : 'Not recorded',
+        'Placement Cycles': learnerPlacements.length,
+        'Completed Placements': learnerPlacements.filter((placement) => placement.status === 'Completed').length,
+        'Terminated Placements': learnerPlacements.filter((placement) => placement.status === 'Terminated').length,
+        'Latest Placement Company': latestPlacement?.companyName || 'N/A',
+        'Latest Placement Status': latestPlacement?.status || 'N/A',
+        'Assessments Recorded': learnerAssessments.length,
+        'Average Assessment Score': avgAssessmentScore,
+        'Employer Evaluations': learnerEvaluations.length,
+        'Latest Employer Score': latestEvaluation?.overallScore ?? 'N/A',
+        'Latest Employer Hire Decision': latestEvaluation ? (latestEvaluation.wouldHire ? 'Would Hire' : 'Would Not Hire') : 'N/A',
+        'Monitoring Visits Logged': visitsByLearner.get(learner._id.toString()) || 0,
+      };
+    });
+
+    const json2csvParser = new Parser();
+    const csv = json2csvParser.parse(mappedData);
+
+    res.header('Content-Type', 'text/csv');
+    res.attachment('Graduated_Learners_Archive_Export.csv');
+    return res.send(csv);
+  } catch (error) {
+    console.error('Graduated learner export error:', error);
+    res.status(500).json({ message: 'Error exporting graduated learners', error: error.message });
+  }
+});
+
+router.get('/learners/graduated/annual-report', async (req, res) => {
+  try {
+    const filter = await getFilter(req.user);
+    const query = {
+      ...filter,
+      academicStatus: 'Graduated',
+    };
+
+    if (req.query.graduationAcademicYear) query.graduationAcademicYear = req.query.graduationAcademicYear;
+    if (req.query.program) query.program = req.query.program;
+
+    const learners = await Learner.find(query).select(
+      'program graduationAcademicYear status graduatedAt institution'
+    ).lean();
+
+    const learnerIds = learners.map((learner) => learner._id);
+    const [placements, assessments, evaluations] = await Promise.all([
+      Placement.find({ learner: { $in: learnerIds } }).select('learner status').lean(),
+      CompetencyAssessment.find({ learner: { $in: learnerIds } }).select('learner overallScore').lean(),
+      EmployerEvaluation.find({ learner: { $in: learnerIds } }).select('learner overallScore wouldHire').lean(),
+    ]);
+
+    const placementsByLearner = new Map();
+    placements.forEach((placement) => {
+      const key = placement.learner?.toString();
+      if (!key) return;
+      if (!placementsByLearner.has(key)) placementsByLearner.set(key, []);
+      placementsByLearner.get(key).push(placement);
+    });
+
+    const assessmentsByLearner = new Map();
+    assessments.forEach((assessment) => {
+      const key = assessment.learner?.toString();
+      if (!key) return;
+      if (!assessmentsByLearner.has(key)) assessmentsByLearner.set(key, []);
+      assessmentsByLearner.get(key).push(assessment);
+    });
+
+    const evaluationsByLearner = new Map();
+    evaluations.forEach((evaluation) => {
+      const key = evaluation.learner?.toString();
+      if (!key) return;
+      if (!evaluationsByLearner.has(key)) evaluationsByLearner.set(key, []);
+      evaluationsByLearner.get(key).push(evaluation);
+    });
+
+    const grouped = new Map();
+    learners.forEach((learner) => {
+      const graduationYear = learner.graduationAcademicYear || 'Unspecified';
+      const program = learner.program || 'Unspecified';
+      const key = `${graduationYear}::${program}`;
+      const learnerPlacements = placementsByLearner.get(learner._id.toString()) || [];
+      const learnerAssessments = assessmentsByLearner.get(learner._id.toString()) || [];
+      const learnerEvaluations = evaluationsByLearner.get(learner._id.toString()) || [];
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          graduationYear,
+          program,
+          totalGraduates: 0,
+          completedWEL: 0,
+          terminatedPlacements: 0,
+          assessedLearners: 0,
+          totalAssessmentScore: 0,
+          evaluatedLearners: 0,
+          hirePositiveCount: 0,
+        });
+      }
+
+      const row = grouped.get(key);
+      row.totalGraduates += 1;
+      if (learner.status === 'Completed') row.completedWEL += 1;
+      if (learnerPlacements.some((placement) => placement.status === 'Terminated')) row.terminatedPlacements += 1;
+      if (learnerAssessments.length > 0) {
+        row.assessedLearners += 1;
+        row.totalAssessmentScore += learnerAssessments.reduce((sum, assessment) => sum + (assessment.overallScore || 0), 0) / learnerAssessments.length;
+      }
+      if (learnerEvaluations.length > 0) {
+        row.evaluatedLearners += 1;
+        const latestEvaluation = learnerEvaluations[learnerEvaluations.length - 1];
+        if (latestEvaluation?.wouldHire) row.hirePositiveCount += 1;
+      }
+    });
+
+    const mappedData = Array.from(grouped.values())
+      .sort((a, b) => b.graduationYear.localeCompare(a.graduationYear) || a.program.localeCompare(b.program))
+      .map((row) => ({
+        'Graduation Academic Year': row.graduationYear,
+        'Program': row.program,
+        'Total Graduates': row.totalGraduates,
+        'Completed WEL': row.completedWEL,
+        'Completed WEL Rate (%)': row.totalGraduates > 0 ? Math.round((row.completedWEL / row.totalGraduates) * 100) : 0,
+        'Graduates With Terminated Placement History': row.terminatedPlacements,
+        'Assessed Graduates': row.assessedLearners,
+        'Average Assessment Score': row.assessedLearners > 0 ? (row.totalAssessmentScore / row.assessedLearners).toFixed(2) : 'N/A',
+        'Evaluated Graduates': row.evaluatedLearners,
+        'Would Hire Count': row.hirePositiveCount,
+        'Would Hire Rate (%)': row.evaluatedLearners > 0 ? Math.round((row.hirePositiveCount / row.evaluatedLearners) * 100) : 0,
+      }));
+
+    const json2csvParser = new Parser();
+    const csv = json2csvParser.parse(mappedData);
+
+    res.header('Content-Type', 'text/csv');
+    res.attachment('Graduated_Learners_Annual_Report.csv');
+    return res.send(csv);
+  } catch (error) {
+    console.error('Graduated learner annual report error:', error);
+    res.status(500).json({ message: 'Error exporting graduated learner annual report', error: error.message });
+  }
+});
 
 router.get('/placements/export', async (req, res) => {
   try {
@@ -5570,11 +8090,58 @@ router.get('/placements/export', async (req, res) => {
 router.get('/placements', async (req, res) => {
   try {
     const filter = await getPlacementScope(req.user);
-    const placements = await Placement.find(filter)
-      .populate('learner')
+    const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
+    const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
+    const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
+    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+      ? Math.min(parsedPageSize, 100)
+      : 25;
+
+    // Status filter
+    if (req.query.status && ['Active', 'Completed', 'Terminated'].includes(req.query.status)) {
+      filter.status = req.query.status;
+    }
+
+    // Search filter — match learner name/trackingId or company name
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const searchRegex = new RegExp(req.query.search.trim(), 'i');
+      const matchingLearnerIds = await Learner.find({
+        $or: [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { name: searchRegex },
+          { trackingId: searchRegex },
+        ],
+      }).select('_id').lean();
+
+      const learnerIdList = matchingLearnerIds.map((l) => l._id);
+
+      filter.$or = [
+        { companyName: searchRegex },
+        { location: searchRegex },
+        ...(learnerIdList.length > 0 ? [{ learner: { $in: learnerIdList } }] : []),
+      ];
+    }
+
+    const placementsQuery = Placement.find(filter)
+      .select('learner trackingId academicYear companyName partner sector location supervisorName supervisorPhone supervisorEmail startDate endDate status closedAt closedBy closureReason closureNote owner institution coordinates placementRegion delegate delegatedAt delegatedBy delegateInstitution createdAt updatedAt')
+      .populate('learner', 'name trackingId')
       .populate('owner', 'name role institution')
       .populate('partner', 'name')
-      .populate('delegate', 'name role institution');
+      .populate('delegate', 'name role institution')
+      .populate('closedBy', 'name role')
+      .sort({ startDate: -1, createdAt: -1 });
+
+    if (usePagination) {
+      placementsQuery.skip((page - 1) * pageSize).limit(pageSize);
+    }
+
+
+    const [placements, total] = await Promise.all([
+      placementsQuery.lean(),
+      usePagination ? Placement.countDocuments(filter) : Promise.resolve(null),
+    ]);
 
     const placementIds = placements.map((placement) => placement._id);
     const learnerIds = placements.map((p) => p.learner?._id).filter(Boolean);
@@ -5667,14 +8234,30 @@ router.get('/placements', async (req, res) => {
     const learnerDocCounts = new Map();
     const supportDocCounts = new Map();
     const evaluationDocCounts = new Map();
+    const evidenceIdsByPlacement = new Map();
+    const placementIdsByLearner = new Map();
+    placements.forEach((placement) => {
+      if (!placement.learner?._id) return;
+      const key = placement.learner._id.toString();
+      if (!placementIdsByLearner.has(key)) placementIdsByLearner.set(key, []);
+      placementIdsByLearner.get(key).push(placement._id.toString());
+    });
+
     directDocuments.forEach((doc) => {
       if (doc.placement) {
         const key = doc.placement.toString();
         directPlacementDocCounts.set(key, (directPlacementDocCounts.get(key) || 0) + 1);
+        if (!evidenceIdsByPlacement.has(key)) evidenceIdsByPlacement.set(key, new Set());
+        evidenceIdsByPlacement.get(key).add(doc._id.toString());
       }
       if (doc.learner) {
         const key = doc.learner.toString();
         learnerDocCounts.set(key, (learnerDocCounts.get(key) || 0) + 1);
+        const linkedPlacements = placementIdsByLearner.get(key) || [];
+        linkedPlacements.forEach((placementId) => {
+          if (!evidenceIdsByPlacement.has(placementId)) evidenceIdsByPlacement.set(placementId, new Set());
+          evidenceIdsByPlacement.get(placementId).add(doc._id.toString());
+        });
       }
       if (doc.supportTicket) {
         const key = doc.supportTicket.toString();
@@ -5699,9 +8282,7 @@ router.get('/placements', async (req, res) => {
       }
     });
 
-    res.json(
-      placements.map((placement) => {
-        const placementJson = placement.toObject();
+    const items = placements.map((placement) => {
         const pid = placement._id.toString();
         const lid = placement.learner?._id?.toString();
         const partnerId = placement.partner?._id?.toString();
@@ -5715,18 +8296,9 @@ router.get('/placements', async (req, res) => {
         const evaluationEvidenceCount = placementEvaluations.reduce((sum, evaluationId) => sum + (evaluationDocCounts.get(evaluationId) || 0), 0);
         const learnerEvidenceCount = lid ? (learnerDocCounts.get(lid) || 0) : 0;
         const placementEvidenceCount = directPlacementDocCounts.get(pid) || 0;
-        const uniqueEvidenceIds = new Set(
-          directDocuments
-            .filter((doc) =>
-              doc.placement?.toString() === pid
-              || (lid && doc.learner?.toString() === lid)
-              || placementSupportTickets.includes(doc.supportTicket?.toString())
-              || placementEvaluations.includes(doc.employerEvaluation?.toString())
-            )
-            .map((doc) => doc._id.toString())
-        );
+        const uniqueEvidenceIds = evidenceIdsByPlacement.get(pid) || new Set();
 
-        const healthScore = calculatePlacementHealth(placementJson, {
+        const healthScore = calculatePlacementHealth(placement, {
           attendanceLogs: attendanceByPlacement.get(pid) || [],
           visits: lid ? (visitsByLearner.get(lid) || []) : [],
           assessments: lid ? (assessmentsByLearner.get(lid) || []) : [],
@@ -5734,11 +8306,11 @@ router.get('/placements', async (req, res) => {
         });
 
         return {
-          ...placementJson,
+          ...placement,
           messageCount: stats?.messageCount || 0,
           lastMessageAt: stats?.lastMessageAt || null,
           unreadMessageCount: stats?.unreadCount || 0,
-          operationalReadiness: buildPlacementOperationalReadiness(placementJson),
+          operationalReadiness: buildPlacementOperationalReadiness(placement),
           evidenceCount: uniqueEvidenceIds.size,
           evidenceBreakdown: {
             placement: placementEvidenceCount,
@@ -5748,8 +8320,20 @@ router.get('/placements', async (req, res) => {
           },
           healthScore,
         };
-      })
-    );
+      });
+
+    if (usePagination) {
+      const safeTotal = total || 0;
+      return res.json({
+        items,
+        total: safeTotal,
+        page,
+        pageSize,
+        totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
+      });
+    }
+
+    res.json(items);
   } catch (error) {
     console.error('Error fetching placements:', error);
     res.status(500).json({ message: 'Server Error' });
@@ -6001,6 +8585,45 @@ router.post('/placements', async (req, res) => {
             return res.status(400).json({ message: 'At least one learner must be selected' });
         }
 
+        const selectedLearners = await Learner.find({ _id: { $in: learnerIds } }).select('name year academicStatus institution');
+        if (selectedLearners.length !== learnerIds.length) {
+            return res.status(404).json({ message: 'One or more selected learners could not be found.' });
+        }
+
+        const activePlacements = await Placement.find({
+            learner: { $in: learnerIds },
+            status: 'Active',
+        }).select('learner');
+        const activePlacementLearnerIds = new Set(activePlacements.map((placement) => placement.learner.toString()));
+        const welWindowsByInstitution = new Map();
+
+        await Promise.all([...new Set(selectedLearners.map((item) => item.institution).filter(Boolean))].map(async (institutionName) => {
+            welWindowsByInstitution.set(
+                institutionName,
+                await getInstitutionWELWindows({
+                    institutionName,
+                    academicYear: placementAcademicYear,
+                })
+            );
+        }));
+
+        const blockedLearners = selectedLearners
+            .map((learnerDoc) => ({
+                learnerDoc,
+                eligibility: buildPlacementEligibility({
+                    learner: learnerDoc,
+                    hasActivePlacement: activePlacementLearnerIds.has(learnerDoc._id.toString()),
+                    welWindows: welWindowsByInstitution.get(learnerDoc.institution) || [],
+                }),
+            }))
+            .filter((entry) => !entry.eligibility.isEligible);
+
+        if (blockedLearners.length > 0) {
+            return res.status(400).json({
+                message: blockedLearners.map((entry) => `${entry.learnerDoc.name}: ${entry.eligibility.reason}`).join(' | '),
+            });
+        }
+
         const readinessCheck = await assertLearnersReadyForPlacement(learnerIds, req.user.institution);
         if (!readinessCheck.ok) {
             return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
@@ -6022,7 +8645,7 @@ router.post('/placements', async (req, res) => {
             const updatedLearner = await Learner.findByIdAndUpdate(placement.learner, { 
                 status: 'Placed',
                 placement: placement._id
-            }, { new: true });
+            }, { returnDocument: 'after' });
             
             if (req.body.partner) {
                 notifyUsers({
@@ -6053,14 +8676,50 @@ router.post('/placements', async (req, res) => {
     }
 });
 
+function applyPlacementClosureMetadata(existingPlacement, payload, user) {
+    const nextPayload = { ...payload };
+    const previousStatus = existingPlacement?.status;
+    const nextStatus = nextPayload.status ?? previousStatus;
+    const isClosingTransition = previousStatus === 'Active' && ['Completed', 'Terminated'].includes(nextStatus);
+    const isStatusSwitchBetweenClosedStates = ['Completed', 'Terminated'].includes(previousStatus) && ['Completed', 'Terminated'].includes(nextStatus) && previousStatus !== nextStatus;
+    const isReopening = ['Completed', 'Terminated'].includes(previousStatus) && nextStatus === 'Active';
+
+    if (isClosingTransition || isStatusSwitchBetweenClosedStates) {
+        nextPayload.closedAt = nextPayload.closedAt || new Date();
+        nextPayload.closedBy = nextPayload.closedBy || user?._id;
+        if (!Object.prototype.hasOwnProperty.call(nextPayload, 'closureReason')) {
+            nextPayload.closureReason = nextStatus === 'Completed' ? 'Placement completed' : 'Placement terminated';
+        }
+    }
+
+    if (isReopening) {
+        nextPayload.closedAt = null;
+        nextPayload.closedBy = null;
+        nextPayload.closureReason = '';
+        nextPayload.closureNote = '';
+    }
+
+    return nextPayload;
+}
+
 router.put('/placements/:id', async (req, res) => {
     try {
         const existingPlacement = await Placement.findById(req.params.id);
-        const payload = { ...req.body };
+        if (!existingPlacement) {
+            return res.status(404).json({ message: 'Placement not found' });
+        }
+        const payload = applyPlacementClosureMetadata(existingPlacement, req.body, req.user);
         if (!payload.academicYear && payload.startDate) {
             payload.academicYear = resolveAcademicYearFromDate(payload.startDate);
         }
         const updatedPlacement = await Placement.findByIdAndUpdate(req.params.id, payload, { returnDocument: 'after' });
+        if (updatedPlacement && req.body.status && req.body.status !== existingPlacement.status) {
+            if (req.body.status === 'Completed') {
+                await Learner.findByIdAndUpdate(updatedPlacement.learner, { status: 'Completed' });
+            } else if (req.body.status === 'Active') {
+                await Learner.findByIdAndUpdate(updatedPlacement.learner, { status: 'Placed' });
+            }
+        }
         if (updatedPlacement && existingPlacement) {
             await logAuditEvent({
                 req,
@@ -6363,8 +9022,37 @@ router.get('/attendance-logs', async (req, res) => {
 
 router.post('/attendance-logs', async (req, res) => {
     try {
-        const { learner: learnerId, entryType, periodStart, periodEnd, hoursWorked, tasksCompleted, notes } = req.body;
-        const validationError = validateAttendancePayload({ entryType, periodStart, periodEnd, hoursWorked });
+        const {
+            learner: learnerId,
+            entryType,
+            periodStart,
+            periodEnd,
+            startTime,
+            endTime,
+            hoursWorked,
+            tasksCompleted,
+            skillsDemonstrated,
+            notes,
+            learnerSignatureName,
+            facilitatorComment,
+            facilitatorName,
+            facilitatorSignatureName,
+            facilitatorSignedAt,
+        } = req.body;
+        const validationError = validateAttendancePayload({
+            entryType,
+            periodStart,
+            periodEnd,
+            startTime,
+            endTime,
+            hoursWorked,
+            tasksCompleted,
+            skillsDemonstrated,
+            learnerSignatureName,
+            facilitatorName,
+            facilitatorSignatureName,
+            facilitatorSignedAt,
+        });
         if (validationError) {
             return res.status(400).json({ message: validationError });
         }
@@ -6417,12 +9105,21 @@ router.post('/attendance-logs', async (req, res) => {
             entryType,
             periodStart,
             periodEnd,
+            startTime: startTime || '',
+            endTime: endTime || '',
             hoursWorked,
             tasksCompleted,
+            skillsDemonstrated: skillsDemonstrated || '',
             notes: notes || '',
+            learnerSignatureName: learnerSignatureName || learner.name,
+            facilitatorComment: facilitatorComment || '',
+            facilitatorName: facilitatorName || req.user.name,
+            facilitatorSignatureName: facilitatorSignatureName || req.user.name,
+            facilitatorSignedAt: facilitatorSignedAt || new Date(),
             submittedBy: req.user._id,
             submittedSource: req.user.role === 'IndustryPartner' ? 'Partner' : 'Institution',
             status: req.user.role === 'IndustryPartner' ? 'SignedOff' : 'Pending',
+            supervisorSignatureName: req.user.role === 'IndustryPartner' ? (req.user.name || '') : '',
             signedOffBy: req.user.role === 'IndustryPartner' ? req.user._id : undefined,
             signedOffAt: req.user.role === 'IndustryPartner' ? new Date() : undefined,
         });
@@ -6495,12 +9192,40 @@ router.put('/attendance-logs/:id', async (req, res) => {
                 currentRecord: attendanceLog.toObject(),
                 clientPayload: requestBody,
                 clientUpdatedAt,
-                fields: ['entryType', 'periodStart', 'periodEnd', 'hoursWorked', 'tasksCompleted', 'notes'],
+                fields: ['entryType', 'periodStart', 'periodEnd', 'startTime', 'endTime', 'hoursWorked', 'tasksCompleted', 'skillsDemonstrated', 'notes', 'learnerSignatureName', 'facilitatorComment', 'facilitatorName', 'facilitatorSignatureName', 'facilitatorSignedAt'],
             }));
         }
 
-        const { entryType, periodStart, periodEnd, hoursWorked, tasksCompleted, notes } = requestBody;
-        const validationError = validateAttendancePayload({ entryType, periodStart, periodEnd, hoursWorked });
+        const {
+            entryType,
+            periodStart,
+            periodEnd,
+            startTime,
+            endTime,
+            hoursWorked,
+            tasksCompleted,
+            skillsDemonstrated,
+            notes,
+            learnerSignatureName,
+            facilitatorComment,
+            facilitatorName,
+            facilitatorSignatureName,
+            facilitatorSignedAt,
+        } = requestBody;
+        const validationError = validateAttendancePayload({
+            entryType,
+            periodStart,
+            periodEnd,
+            startTime,
+            endTime,
+            hoursWorked,
+            tasksCompleted,
+            skillsDemonstrated,
+            learnerSignatureName,
+            facilitatorName,
+            facilitatorSignatureName,
+            facilitatorSignedAt,
+        });
         if (validationError) {
             return res.status(400).json({ message: validationError });
         }
@@ -6509,11 +9234,20 @@ router.put('/attendance-logs/:id', async (req, res) => {
         attendanceLog.entryType = entryType;
         attendanceLog.periodStart = periodStart;
         attendanceLog.periodEnd = periodEnd;
+        attendanceLog.startTime = startTime || '';
+        attendanceLog.endTime = endTime || '';
         attendanceLog.hoursWorked = hoursWorked;
         attendanceLog.tasksCompleted = tasksCompleted;
+        attendanceLog.skillsDemonstrated = skillsDemonstrated || '';
         attendanceLog.notes = notes || '';
+        attendanceLog.learnerSignatureName = learnerSignatureName || attendanceLog.learnerSignatureName || '';
+        attendanceLog.facilitatorComment = facilitatorComment || '';
+        attendanceLog.facilitatorName = facilitatorName || attendanceLog.facilitatorName || req.user.name || '';
+        attendanceLog.facilitatorSignatureName = facilitatorSignatureName || attendanceLog.facilitatorSignatureName || req.user.name || '';
+        attendanceLog.facilitatorSignedAt = facilitatorSignedAt || attendanceLog.facilitatorSignedAt || new Date();
         attendanceLog.status = 'Pending';
         attendanceLog.supervisorComment = '';
+        attendanceLog.supervisorSignatureName = '';
         attendanceLog.signedOffAt = undefined;
         attendanceLog.signedOffBy = undefined;
         if (req.user.role === 'IndustryPartner') {
@@ -6596,6 +9330,7 @@ router.put('/attendance-logs/:id/sign-off', requireRole('IndustryPartner'), asyn
         const before = attendanceLog.toObject();
         attendanceLog.status = 'SignedOff';
         attendanceLog.supervisorComment = req.body.supervisorComment || '';
+        attendanceLog.supervisorSignatureName = req.body.supervisorSignatureName || req.user.name || '';
         attendanceLog.signedOffAt = new Date();
         attendanceLog.signedOffBy = req.user._id;
         await attendanceLog.save();
@@ -6652,6 +9387,7 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
         const before = attendanceLog.toObject();
         attendanceLog.status = 'Rejected';
         attendanceLog.supervisorComment = req.body.supervisorComment || '';
+        attendanceLog.supervisorSignatureName = req.body.supervisorSignatureName || req.user.name || '';
         attendanceLog.signedOffAt = new Date();
         attendanceLog.signedOffBy = req.user._id;
         await attendanceLog.save();
@@ -6690,6 +9426,253 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
 
 // ==================== USERS (Admin/SuperAdmin only) ====================
 
+router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+    try {
+        const filter = await getFilter(req.user);
+        const {
+            role,
+            status,
+            institution,
+            region,
+            q,
+            page: requestedPage,
+            pageSize: requestedPageSize,
+        } = req.query;
+
+        if (role) filter.role = role;
+        if (status) filter.status = status;
+        if (institution) filter.institution = institution;
+        if (region) filter.region = region;
+        if (q) {
+            const escapedSearch = String(q).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            if (escapedSearch) {
+                const searchRegex = new RegExp(escapedSearch, 'i');
+                filter.$or = [
+                    { name: searchRegex },
+                    { email: searchRegex },
+                    { institution: searchRegex },
+                    { region: searchRegex },
+                ];
+            }
+        }
+
+        const parsedPage = Number.parseInt(String(requestedPage || ''), 10);
+        const parsedPageSize = Number.parseInt(String(requestedPageSize || ''), 10);
+        const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+        const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+            ? Math.min(parsedPageSize, 50)
+            : 12;
+
+        const [total, users] = await Promise.all([
+            User.countDocuments(filter),
+            User.find(filter)
+                .populate('partnerId', 'name')
+                .populate('linkedLearners', 'name trackingId institution')
+                .sort({ createdAt: -1, name: 1 })
+                .skip((page - 1) * pageSize)
+                .limit(pageSize),
+        ]);
+
+        const items = await attachUserAuditSummaries(users);
+        res.json({
+            items,
+            total,
+            page,
+            pageSize,
+            totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
+        });
+    } catch (error) {
+        console.error('Error fetching user registry:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+});
+
+router.get('/users/governance/overview', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const parsedAnomalyPage = Number.parseInt(String(req.query.anomalyPage || ''), 10);
+        const parsedDormantPage = Number.parseInt(String(req.query.dormantPage || ''), 10);
+        const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
+        const anomalyPage = Number.isFinite(parsedAnomalyPage) && parsedAnomalyPage > 0 ? parsedAnomalyPage : 1;
+        const dormantPage = Number.isFinite(parsedDormantPage) && parsedDormantPage > 0 ? parsedDormantPage : 1;
+        const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0 ? Math.min(parsedPageSize, 25) : 6;
+
+        const users = await User.find({})
+            .populate('partnerId', 'name')
+            .populate('linkedLearners', 'name trackingId institution');
+        const enrichedUsers = await attachUserAuditSummaries(users);
+
+        const roleCounts = enrichedUsers.reduce((acc, entry) => {
+            acc[entry.role] = (acc[entry.role] || 0) + 1;
+            return acc;
+        }, {});
+
+        const riskyAccounts = enrichedUsers.filter((entry) =>
+            (entry.auditSummary?.failedLoginCount ?? 0) >= 5
+            || (['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(entry.role) && entry.status === 'Inactive')
+            || (entry.auditSummary?.recentSensitiveActions?.length ?? 0) >= 3
+        );
+
+        const dormantPrivilegedAccounts = enrichedUsers
+            .filter((entry) => ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(entry.role) && entry.status === 'Active')
+            .filter((entry) => {
+                if (!entry.lastLoginAt) return true;
+                return (Date.now() - new Date(entry.lastLoginAt).getTime()) / (1000 * 60 * 60 * 24) >= 45;
+            })
+            .sort((a, b) => {
+                const aTime = a.lastLoginAt ? new Date(a.lastLoginAt).getTime() : 0;
+                const bTime = b.lastLoginAt ? new Date(b.lastLoginAt).getTime() : 0;
+                return aTime - bTime;
+            });
+
+        const regionStats = Object.values(enrichedUsers.reduce((acc, entry) => {
+            const region = entry.effectiveRegion || 'Unassigned';
+            if (!acc[region]) {
+                acc[region] = { region, totalUsers: 0, privilegedUsers: 0, invitedUsers: 0 };
+            }
+            acc[region].totalUsers += 1;
+            if (['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(entry.role)) acc[region].privilegedUsers += 1;
+            if (entry.lifecycleStatus?.code === 'Invited') acc[region].invitedUsers += 1;
+            return acc;
+        }, {})).sort((a, b) => b.totalUsers - a.totalUsers);
+
+        const anomalyStart = (anomalyPage - 1) * pageSize;
+        const dormantStart = (dormantPage - 1) * pageSize;
+
+        res.json({
+            totalUsers: enrichedUsers.length,
+            roleCounts,
+            regionStats,
+            riskyAccounts: {
+                items: riskyAccounts.slice(anomalyStart, anomalyStart + pageSize),
+                total: riskyAccounts.length,
+                page: anomalyPage,
+                totalPages: riskyAccounts.length > 0 ? Math.ceil(riskyAccounts.length / pageSize) : 0,
+            },
+            dormantPrivilegedAccounts: {
+                items: dormantPrivilegedAccounts.slice(dormantStart, dormantStart + pageSize),
+                total: dormantPrivilegedAccounts.length,
+                page: dormantPage,
+                totalPages: dormantPrivilegedAccounts.length > 0 ? Math.ceil(dormantPrivilegedAccounts.length / pageSize) : 0,
+            },
+        });
+    } catch (error) {
+        console.error('Error fetching user governance overview:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+});
+
+router.get('/users/regional-oversight', requireRole('RegionalAdmin'), async (req, res) => {
+    try {
+        const filter = await getFilter(req.user);
+        const users = await User.find(filter).select('name email role status institution region invitationSentAt inviteAcceptedAt lastLoginAt passwordChangeRequired resetPasswordExpires');
+        const enrichedUsers = users.map((entry) => withUserLifecycleMeta(entry)).map((entry) => ({
+            ...entry,
+            effectiveRegion: entry.region || '',
+        }));
+
+        const grouped = new Map();
+        enrichedUsers.forEach((entry) => {
+            const institution = entry.institution || 'Unassigned';
+            const current = grouped.get(institution) || {
+                institution,
+                totalUsers: 0,
+                activeUsers: 0,
+                admins: 0,
+                invited: 0,
+                passwordResetsPending: 0,
+                adminDetails: [],
+            };
+
+            current.totalUsers += 1;
+            if (entry.status === 'Active') current.activeUsers += 1;
+            if (entry.role === 'Admin') {
+                if (entry.status === 'Active') current.admins += 1;
+                current.adminDetails.push({
+                    _id: entry._id,
+                    name: entry.name,
+                    email: entry.email,
+                    status: entry.status,
+                });
+            }
+            if (entry.lifecycleStatus?.code === 'Invited') current.invited += 1;
+            if (entry.lifecycleStatus?.code === 'ResetPending' || entry.lifecycleStatus?.code === 'PasswordChangeRequired') {
+                current.passwordResetsPending += 1;
+            }
+
+            grouped.set(institution, current);
+        });
+
+        const institutions = Array.from(grouped.values()).sort((a, b) => a.institution.localeCompare(b.institution));
+        res.json({
+            visibleUsers: enrichedUsers.length,
+            institutions,
+            summary: {
+                institutions: institutions.length,
+                institutionsMissingAdmin: institutions.filter((entry) => entry.admins === 0).length,
+                invitedUsers: institutions.reduce((sum, entry) => sum + entry.invited, 0),
+                passwordResetsPending: institutions.reduce((sum, entry) => sum + entry.passwordResetsPending, 0),
+            },
+        });
+    } catch (error) {
+        console.error('Error fetching regional user oversight:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+});
+
+router.get('/users/institution-team-overview', requireRole('Admin'), async (req, res) => {
+    try {
+        const filter = await getFilter(req.user);
+        const users = await User.find(filter)
+            .populate('partnerId', 'name')
+            .populate('linkedLearners', 'name trackingId institution');
+        const enrichedUsers = await attachUserAuditSummaries(users);
+        const teamUsers = enrichedUsers.filter((entry) => ['Admin', 'Manager', 'Staff', 'Guardian'].includes(entry.role));
+        const managers = teamUsers.filter((entry) => entry.role === 'Manager');
+        const guardians = teamUsers.filter((entry) => entry.role === 'Guardian');
+        const pendingInvites = teamUsers.filter((entry) => ['Invited', 'ResetPending', 'PasswordChangeRequired'].includes(entry.lifecycleStatus?.code || ''));
+        const suspended = teamUsers.filter((entry) => entry.status === 'Inactive');
+        const workloadOwners = teamUsers
+            .filter((entry) => entry.role !== 'Admin' && entry.role !== 'Guardian')
+            .map((entry) => ({
+                ...entry,
+                totalAssigned: (entry.workloadSummary?.learnersOwned ?? 0) + (entry.workloadSummary?.activePlacementsOwned ?? 0),
+            }))
+            .sort((a, b) => b.totalAssigned - a.totalAssigned);
+
+        const suspendCandidates = teamUsers.filter((entry) => entry.status === 'Active' && ['Manager', 'Staff', 'Guardian'].includes(entry.role));
+        const reassignmentCandidates = teamUsers
+            .filter((entry) => ['Manager', 'Staff'].includes(entry.role))
+            .filter((entry) =>
+                (entry.workloadSummary?.learnersOwned ?? 0) > 0
+                || (entry.workloadSummary?.activePlacementsOwned ?? 0) > 0
+                || entry.role === 'Manager'
+                || entry.role === 'Staff'
+            )
+            .sort((a, b) => {
+                const aAssignments = (a.workloadSummary?.learnersOwned ?? 0) + (a.workloadSummary?.activePlacementsOwned ?? 0);
+                const bAssignments = (b.workloadSummary?.learnersOwned ?? 0) + (b.workloadSummary?.activePlacementsOwned ?? 0);
+                return bAssignments - aAssignments || a.name.localeCompare(b.name);
+            });
+
+        res.json({
+            summary: {
+                teamMembers: teamUsers.length,
+                managers: managers.length,
+                guardians: guardians.length,
+                pendingInvites: pendingInvites.length,
+                suspended: suspended.length,
+            },
+            teamUsers,
+            workloadOwners: workloadOwners.slice(0, 8),
+            suspendCandidates,
+            reassignmentCandidates,
+        });
+    } catch (error) {
+        console.error('Error fetching institution team overview:', error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+});
+
 router.get('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const filter = await getFilter(req.user);
@@ -6719,12 +9702,14 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
         req.body = validation.normalized;
         const { role } = req.body;
 
-        let generatedPassword = null;
-
         if (!password) {
-            // Generate an 8-character random password
-            generatedPassword = crypto.randomBytes(4).toString('hex');
-            req.body.password = generatedPassword;
+            if (!isMailerConfigured()) {
+                return res.status(503).json({ message: 'SMTP must be configured to create users without an explicit password' });
+            }
+            if (!req.body.email) {
+                return res.status(400).json({ message: 'Email is required to send an account setup link' });
+            }
+            req.body.password = crypto.randomBytes(24).toString('hex');
         }
 
         const newUser = new User({
@@ -6741,16 +9726,15 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
             after: newUser,
         });
         
+        if (!password) {
+            await issueSetupLink(newUser);
+        }
+
         const populatedUser = await User.findById(newUser._id)
           .populate('partnerId', 'name')
           .populate('linkedLearners', 'name trackingId institution');
 
-        const userJson = populatedUser.toJSON();
-        if (generatedPassword) {
-            userJson.defaultPassword = generatedPassword;
-        }
-
-        res.status(201).json(withUserLifecycleMeta(userJson));
+        res.status(201).json(withUserLifecycleMeta(populatedUser));
     } catch (error) {
         console.error("Error creating user:", error);
         if (error.code === 11000) {
@@ -6854,16 +9838,10 @@ router.post('/users/:id/send-setup-link', requireRole('Admin', 'SuperAdmin', 'Re
             return res.status(403).json({ message: 'Forbidden: Access denied' });
         }
 
-        const rawToken = crypto.randomBytes(20).toString('hex');
-        targetUser.resetPasswordToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-        targetUser.resetPasswordExpires = Date.now() + 3600000;
-        targetUser.passwordChangeRequired = true;
-        targetUser.invitationSentAt = new Date();
-        await targetUser.save();
-
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-        const resetUrl = `${frontendUrl}/reset-password/${rawToken}`;
-        await sendPasswordResetEmail(targetUser.email, resetUrl);
+        if (!isMailerConfigured()) {
+            return res.status(503).json({ message: 'SMTP must be configured before setup links can be sent' });
+        }
+        await issueSetupLink(targetUser);
 
         await logAuditEvent({
             req,
@@ -7021,7 +9999,7 @@ router.get('/institutions', requireRole('SuperAdmin', 'RegionalAdmin'), async (r
             // SuperAdmin can filter by region via query param
             filter.region = req.query.region;
         }
-        const institutions = await Institution.find(filter).sort({ name: 1 });
+        const institutions = await Institution.find(filter).sort({ name: 1 }).lean();
         res.json(institutions);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
@@ -7052,7 +10030,8 @@ router.post('/institutions', requireRole('SuperAdmin'), async (req, res) => {
 router.put('/institutions/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
         const existingInstitution = await Institution.findById(req.params.id);
-        const updatedInstitution = await Institution.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
+        const { name, code, region, district, location, category, status, gender, calendarType, programs } = req.body;
+        const updatedInstitution = await Institution.findByIdAndUpdate(req.params.id, { name, code, region, district, location, category, status, gender, calendarType, programs }, { returnDocument: 'after' });
         if (updatedInstitution && existingInstitution) {
             await logAuditEvent({
                 req,
@@ -7093,9 +10072,18 @@ router.delete('/institutions/:id', requireRole('SuperAdmin'), async (req, res) =
 
 router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const filter = await getFilter(req.user);
-        const instFilter = Object.keys(filter).length > 0 ? { name: filter.institution } : {};
-        const supportScope = await getSupportTicketScope(req.user);
+        const cacheKey = getScopedCacheKey('admin-overview', req.user);
+        if (req.query.refresh !== 'true') {
+            const cached = readScopedCache(cacheKey);
+            if (cached) {
+                return res.json(cached);
+            }
+        }
+
+	        const filter = await getFilter(req.user);
+	        const systemSettings = await getOrCreateSystemSettings();
+	        const instFilter = Object.keys(filter).length > 0 ? { name: filter.institution } : {};
+	        const supportScope = await getSupportTicketScope(req.user);
         const auditScope = await getAuditLogScope(req.user);
         const attendanceScope = await buildAttendanceScope(req.user);
         const sevenDaysAgo = new Date();
@@ -7106,6 +10094,16 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
         threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
         const now = new Date();
         const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const getSemesterNumber = (date) => (date.getMonth() < 6 ? 1 : 2);
+        const getSemesterKey = (date) => `${date.getFullYear()}-S${getSemesterNumber(date)}`;
+        const getSemesterLabel = (date) => `S${getSemesterNumber(date)} ${date.getFullYear()}`;
+        const shiftSemester = (date, offset) => {
+            const currentSemesterIndex = date.getFullYear() * 2 + (getSemesterNumber(date) - 1);
+            const targetSemesterIndex = currentSemesterIndex + offset;
+            const year = Math.floor(targetSemesterIndex / 2);
+            const semester = (targetSemesterIndex % 2) + 1;
+            return new Date(year, semester === 1 ? 0 : 6, 1);
+        };
 
         // Aggregate stats per institution
         const institutionStats = await Learner.aggregate([
@@ -7181,12 +10179,13 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
             { $sort: { totalLearners: -1 } }
         ]);
 
-        const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const sparklineMonthStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+        const currentSemesterStart = new Date(now.getFullYear(), now.getMonth() < 6 ? 0 : 6, 1);
+        const nextSemesterStart = shiftSemester(currentSemesterStart, 1);
+        const previousSemesterStart = shiftSemester(currentSemesterStart, -1);
+        const sparklineSemesterStart = shiftSemester(currentSemesterStart, -3);
 
-        const monthlyRegionalPlacements = await Placement.aggregate([
-            { $match: { ...filter, createdAt: { $gte: previousMonthStart } } },
+        const semesterRegionalPlacements = await Placement.aggregate([
+            { $match: { ...filter, createdAt: { $gte: previousSemesterStart, $lt: nextSemesterStart } } },
             {
                 $lookup: {
                     from: 'learners',
@@ -7199,38 +10198,57 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
             {
                 $project: {
                     region: '$learnerDoc.region',
-                    monthBucket: {
-                        $cond: [
-                            { $gte: ['$createdAt', currentMonthStart] },
-                            'current',
-                            'previous'
-                        ]
+                    semesterBucket: {
+                        $switch: {
+                            branches: [
+                                {
+                                    case: {
+                                        $and: [
+                                            { $gte: ['$createdAt', currentSemesterStart] },
+                                            { $lt: ['$createdAt', nextSemesterStart] }
+                                        ]
+                                    },
+                                    then: 'current'
+                                },
+                                {
+                                    case: {
+                                        $and: [
+                                            { $gte: ['$createdAt', previousSemesterStart] },
+                                            { $lt: ['$createdAt', currentSemesterStart] }
+                                        ]
+                                    },
+                                    then: 'previous'
+                                }
+                            ],
+                            default: 'outside'
+                        }
                     }
                 }
             },
+            { $match: { semesterBucket: { $ne: 'outside' } } },
             {
                 $group: {
-                    _id: { region: '$region', monthBucket: '$monthBucket' },
+                    _id: { region: '$region', semesterBucket: '$semesterBucket' },
                     count: { $sum: 1 }
                 }
             }
         ]);
 
-        const regionalPlacementMovement = monthlyRegionalPlacements.reduce((acc, item) => {
+        const regionalPlacementMovement = semesterRegionalPlacements.reduce((acc, item) => {
             const region = item._id.region || 'Unknown';
             if (!acc[region]) {
-                acc[region] = { currentMonthPlacements: 0, previousMonthPlacements: 0 };
+                acc[region] = { currentSemesterPlacements: 0, previousSemesterPlacements: 0 };
             }
-            if (item._id.monthBucket === 'current') {
-                acc[region].currentMonthPlacements = item.count;
+            if (item._id.semesterBucket === 'current') {
+                acc[region].currentSemesterPlacements = item.count;
             } else {
-                acc[region].previousMonthPlacements = item.count;
+                acc[region].previousSemesterPlacements = item.count;
             }
             return acc;
         }, {});
 
         const regionalPlacementTrendRaw = await Placement.aggregate([
-            { $match: { ...filter, createdAt: { $gte: sparklineMonthStart } } },
+            { $match: { ...filter, createdAt: { $gte: sparklineSemesterStart, $lt: nextSemesterStart } } },
             {
                 $lookup: {
                     from: 'learners',
@@ -7245,7 +10263,13 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
                     _id: {
                         region: '$learnerDoc.region',
                         year: { $year: '$createdAt' },
-                        month: { $month: '$createdAt' }
+                        semester: {
+                            $cond: [
+                                { $lte: [{ $month: '$createdAt' }, 6] },
+                                1,
+                                2
+                            ]
+                        }
                     },
                     count: { $sum: 1 }
                 }
@@ -7257,40 +10281,40 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
             if (!acc[region]) {
                 acc[region] = {};
             }
-            acc[region][`${item._id.year}-${item._id.month}`] = item.count;
+            acc[region][`${item._id.year}-S${item._id.semester}`] = item.count;
             return acc;
         }, {});
 
         const regionalStats = regionalStatsBase
             .map((regionStat) => {
                 const movement = regionalPlacementMovement[regionStat.region || 'Unknown'] || {
-                    currentMonthPlacements: 0,
-                    previousMonthPlacements: 0,
+                    currentSemesterPlacements: 0,
+                    previousSemesterPlacements: 0,
                 };
-                const monthOverMonthDelta = movement.currentMonthPlacements - movement.previousMonthPlacements;
-                const monthOverMonthPercent = movement.previousMonthPlacements > 0
-                    ? Math.round((monthOverMonthDelta / movement.previousMonthPlacements) * 100)
-                    : (movement.currentMonthPlacements > 0 ? 100 : 0);
-                const needsIntervention = regionStat.placementRate < 45 || regionStat.completionRate < 20 || monthOverMonthDelta < 0;
+                const semesterOverSemesterDelta = movement.currentSemesterPlacements - movement.previousSemesterPlacements;
+                const semesterOverSemesterPercent = movement.previousSemesterPlacements > 0
+                    ? Math.round((semesterOverSemesterDelta / movement.previousSemesterPlacements) * 100)
+                    : (movement.currentSemesterPlacements > 0 ? 100 : 0);
+                const needsIntervention = regionStat.placementRate < 45 || regionStat.completionRate < 20 || semesterOverSemesterDelta < 0;
                 const interventionReasons = [];
                 if (regionStat.placementRate < 45) interventionReasons.push('Low placement rate');
                 if (regionStat.completionRate < 20) interventionReasons.push('Low completion rate');
-                if (monthOverMonthDelta < 0) interventionReasons.push('Placements falling month-over-month');
+                if (semesterOverSemesterDelta < 0) interventionReasons.push('Placements falling semester-on-semester');
 
                 return {
                     ...regionStat,
-                    currentMonthPlacements: movement.currentMonthPlacements,
-                    previousMonthPlacements: movement.previousMonthPlacements,
-                    monthOverMonthDelta,
-                    monthOverMonthPercent,
-                    movementDirection: monthOverMonthDelta > 0 ? 'up' : monthOverMonthDelta < 0 ? 'down' : 'flat',
+                    currentSemesterPlacements: movement.currentSemesterPlacements,
+                    previousSemesterPlacements: movement.previousSemesterPlacements,
+                    semesterOverSemesterDelta,
+                    semesterOverSemesterPercent,
+                    movementDirection: semesterOverSemesterDelta > 0 ? 'up' : semesterOverSemesterDelta < 0 ? 'down' : 'flat',
                     needsIntervention,
                     interventionReasons,
-                    sparkline: Array.from({ length: 6 }, (_, offset) => {
-                        const d = new Date(now.getFullYear(), now.getMonth() - (5 - offset), 1);
-                        const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+                    sparkline: Array.from({ length: 4 }, (_, offset) => {
+                        const d = shiftSemester(currentSemesterStart, offset - 3);
+                        const key = getSemesterKey(d);
                         return {
-                            month: monthNames[d.getMonth()],
+                            period: getSemesterLabel(d),
                             count: regionalPlacementTrend[regionStat.region || 'Unknown']?.[key] || 0,
                         };
                     }),
@@ -7309,88 +10333,6 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
             totalUsers = await User.countDocuments();
         }
         const totalLearners = await Learner.countDocuments(filter);
-        const [academicActiveLearners, academicGraduatingLearners, academicGraduatedLearners, academicDroppedLearners] = await Promise.all([
-            Learner.countDocuments({ ...filter, academicStatus: 'Active' }),
-            Learner.countDocuments({ ...filter, academicStatus: 'Graduating' }),
-            Learner.countDocuments({ ...filter, academicStatus: 'Graduated' }),
-            Learner.countDocuments({ ...filter, academicStatus: 'Dropped' }),
-        ]);
-        const cohortBreakdown = await Learner.aggregate([
-            { $match: filter },
-            {
-                $group: {
-                    _id: { $ifNull: ['$intakeAcademicYear', 'Unspecified'] },
-                    totalLearners: { $sum: 1 },
-                    currentEnrolled: {
-                        $sum: {
-                            $cond: [
-                                { $in: ['$academicStatus', ['Active', 'Graduating']] },
-                                1,
-                                0,
-                            ],
-                        },
-                    },
-                    graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
-                    graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
-                    dropped: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Dropped'] }, 1, 0] } },
-                    placed: { $sum: { $cond: [{ $eq: ['$status', 'Placed'] }, 1, 0] } },
-                    completed: { $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] } },
-                    regions: { $addToSet: '$region' },
-                    institutions: { $addToSet: '$institution' },
-                },
-            },
-            { $sort: { _id: -1 } },
-        ]);
-        const regionalCohortBreakdown = await Learner.aggregate([
-            { $match: filter },
-            {
-                $group: {
-                    _id: {
-                        region: { $ifNull: ['$region', 'Unknown'] },
-                        intakeAcademicYear: { $ifNull: ['$intakeAcademicYear', 'Unspecified'] },
-                    },
-                    totalLearners: { $sum: 1 },
-                    currentEnrolled: {
-                        $sum: {
-                            $cond: [
-                                { $in: ['$academicStatus', ['Active', 'Graduating']] },
-                                1,
-                                0,
-                            ],
-                        },
-                    },
-                    graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
-                    graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
-                    institutions: { $addToSet: '$institution' },
-                },
-            },
-            { $sort: { '_id.intakeAcademicYear': -1, '_id.region': 1 } },
-        ]);
-        const institutionCohortBreakdown = await Learner.aggregate([
-            { $match: filter },
-            {
-                $group: {
-                    _id: {
-                        institution: { $ifNull: ['$institution', 'Unknown'] },
-                        intakeAcademicYear: { $ifNull: ['$intakeAcademicYear', 'Unspecified'] },
-                    },
-                    region: { $first: '$region' },
-                    totalLearners: { $sum: 1 },
-                    currentEnrolled: {
-                        $sum: {
-                            $cond: [
-                                { $in: ['$academicStatus', ['Active', 'Graduating']] },
-                                1,
-                                0,
-                            ],
-                        },
-                    },
-                    graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
-                    graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
-                },
-            },
-            { $sort: { '_id.intakeAcademicYear': -1, '_id.institution': 1 } },
-        ]);
         const totalPlacements = await Placement.countDocuments(filter);
         const totalVisits = await MonitoringVisit.countDocuments(filter);
         // Semester Report filter scoped by institution names
@@ -7400,97 +10342,6 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
         const partnerFilter = req.user.role === 'RegionalAdmin' ? { region: req.user.region } : {};
         const totalPartners = await IndustryPartner.countDocuments(partnerFilter);
         const partnersDetails = await IndustryPartner.find(partnerFilter).sort({ createdAt: -1 });
-
-        // Overall placement rate
-        const placedLearners = await Learner.countDocuments({ ...filter, status: 'Placed' });
-        const overallPlacementRate = totalLearners > 0
-            ? Math.round((placedLearners / totalLearners) * 100)
-            : 0;
-
-        // Placement trend — last 12 months
-        const twelveMonthsAgo = new Date();
-        twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
-        twelveMonthsAgo.setDate(1);
-        twelveMonthsAgo.setHours(0, 0, 0, 0);
-
-        const placementTrend = await Placement.aggregate([
-            { $match: { ...filter, createdAt: { $gte: twelveMonthsAgo } } },
-            { $group: {
-                _id: { 
-                    year: { $year: '$createdAt' }, 
-                    month: { $month: '$createdAt' } 
-                },
-                count: { $sum: 1 }
-            }},
-            { $sort: { '_id.year': 1, '_id.month': 1 } },
-            { $project: {
-                _id: 0,
-                year: '$_id.year',
-                month: '$_id.month',
-                count: 1
-            }}
-        ]);
-
-        // Fill in missing months with 0
-        const filledTrend = [];
-        for (let i = 11; i >= 0; i--) {
-            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            const year = d.getFullYear();
-            const month = d.getMonth() + 1;
-            const found = placementTrend.find(p => p.year === year && p.month === month);
-            filledTrend.push({
-                name: monthNames[month - 1],
-                year,
-                month,
-                count: found ? found.count : 0
-            });
-        }
-        // Gender distribution
-        const genderDistribution = await Learner.aggregate([
-            { $match: filter },
-            { $group: { _id: '$gender', count: { $sum: 1 } } },
-            { $project: { _id: 0, gender: { $ifNull: ['$_id', 'Unknown'] }, count: 1 } },
-            { $sort: { count: -1 } }
-        ]);
-
-        // Trade/Program distribution
-        const programDistribution = await Learner.aggregate([
-            { $match: filter },
-            { $group: { _id: '$program', count: { $sum: 1 } } },
-            { $project: { _id: 0, program: { $ifNull: ['$_id', 'Unknown'] }, count: 1 } },
-            { $sort: { count: -1 } }
-        ]);
-
-        // Average time to placement (in days)
-        const avgTimePipeline = await Placement.aggregate([
-            { $match: filter },
-            { $lookup: {
-                from: 'learners',
-                localField: 'learner',
-                foreignField: '_id',
-                as: 'learnerDoc'
-            }},
-            { $unwind: '$learnerDoc' },
-            { $project: {
-                daysToPlace: {
-                    $divide: [
-                        { $subtract: ['$createdAt', '$learnerDoc.createdAt'] },
-                        1000 * 60 * 60 * 24 // ms to days
-                    ]
-                }
-            }},
-            { $group: { _id: null, avgDays: { $avg: '$daysToPlace' } } }
-        ]);
-        const avgTimeToPlacement = avgTimePipeline.length > 0
-            ? Math.round(avgTimePipeline[0].avgDays)
-            : 0;
-
-        // Report approval pipeline — count per status
-        const reportPipeline = await SemesterReport.aggregate([
-            { $match: reportFilter },
-            { $group: { _id: '$status', count: { $sum: 1 } } },
-            { $project: { _id: 0, status: '$_id', count: 1 } }
-        ]);
 
         // Pending reports needing action from this user's role
         const pendingReports = req.user.role === 'RegionalAdmin'
@@ -7745,6 +10596,390 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
             };
         }
 
+        const [
+            academicActiveLearners,
+            academicGraduatingLearners,
+            academicGraduatedLearners,
+            academicDroppedLearners,
+            intakeCohortsRaw,
+            regionalCohortBreakdown,
+            institutionCohortBreakdown,
+            placementTrendRaw,
+            genderDistributionRaw,
+            programDistribution,
+            learnersForProgress,
+            activePlacementsForQuality,
+        ] = await Promise.all([
+            Learner.countDocuments({ ...filter, academicStatus: 'Active' }),
+            Learner.countDocuments({ ...filter, academicStatus: 'Graduating' }),
+            Learner.countDocuments({ ...filter, academicStatus: 'Graduated' }),
+            Learner.countDocuments({ ...filter, academicStatus: 'Dropped' }),
+            Learner.aggregate([
+                { $match: filter },
+                {
+                    $group: {
+                        _id: { $ifNull: ['$intakeAcademicYear', 'Unspecified'] },
+                        totalLearners: { $sum: 1 },
+                        currentEnrolled: {
+                            $sum: {
+                                $cond: [
+                                    { $in: ['$academicStatus', ['Active', 'Graduating']] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
+                        graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
+                        dropped: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Dropped'] }, 1, 0] } },
+                        placed: { $sum: { $cond: [{ $eq: ['$status', 'Placed'] }, 1, 0] } },
+                        completed: { $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] } },
+                        regions: { $addToSet: '$region' },
+                        institutions: { $addToSet: '$institution' },
+                    },
+                },
+                { $sort: { _id: -1 } },
+            ]),
+            Learner.aggregate([
+                { $match: filter },
+                {
+                    $group: {
+                        _id: { region: '$region', intakeAcademicYear: { $ifNull: ['$intakeAcademicYear', 'Unspecified'] } },
+                        totalLearners: { $sum: 1 },
+                        currentEnrolled: {
+                            $sum: {
+                                $cond: [
+                                    { $in: ['$academicStatus', ['Active', 'Graduating']] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
+                        graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
+                        institutions: { $addToSet: '$institution' },
+                    },
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        region: '$_id.region',
+                        intakeAcademicYear: '$_id.intakeAcademicYear',
+                        totalLearners: 1,
+                        currentEnrolled: 1,
+                        graduating: 1,
+                        graduated: 1,
+                        institutionCount: { $size: '$institutions' },
+                    },
+                },
+                { $sort: { intakeAcademicYear: -1, region: 1 } },
+            ]),
+            Learner.aggregate([
+                { $match: filter },
+                {
+                    $group: {
+                        _id: {
+                            institution: '$institution',
+                            region: '$region',
+                            intakeAcademicYear: { $ifNull: ['$intakeAcademicYear', 'Unspecified'] },
+                        },
+                        totalLearners: { $sum: 1 },
+                        currentEnrolled: {
+                            $sum: {
+                                $cond: [
+                                    { $in: ['$academicStatus', ['Active', 'Graduating']] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
+                        graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
+                    },
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        institution: '$_id.institution',
+                        region: '$_id.region',
+                        intakeAcademicYear: '$_id.intakeAcademicYear',
+                        totalLearners: 1,
+                        currentEnrolled: 1,
+                        graduating: 1,
+                        graduated: 1,
+                    },
+                },
+                { $sort: { intakeAcademicYear: -1, institution: 1 } },
+            ]),
+            Placement.aggregate([
+                {
+                    $match: {
+                        ...filter,
+                        createdAt: {
+                            $gte: new Date(now.getFullYear(), now.getMonth() - 11, 1),
+                        },
+                    },
+                },
+                {
+                    $group: {
+                        _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+                        count: { $sum: 1 },
+                    },
+                },
+                { $sort: { '_id.year': 1, '_id.month': 1 } },
+            ]),
+            Learner.aggregate([
+                { $match: filter },
+                { $group: { _id: { $ifNull: ['$gender', 'Unspecified'] }, count: { $sum: 1 } } },
+                { $project: { _id: 0, gender: '$_id', count: 1 } },
+                { $sort: { count: -1, gender: 1 } },
+            ]),
+            Learner.aggregate([
+                { $match: filter },
+                { $group: { _id: { $ifNull: ['$program', 'Unspecified'] }, count: { $sum: 1 } } },
+                { $project: { _id: 0, program: '$_id', count: 1 } },
+                { $sort: { count: -1, program: 1 } },
+                { $limit: 10 },
+            ]),
+            Learner.find(filter)
+                .select('firstName lastName middleName trackingId status academicStatus program year intakeAcademicYear institution owner createdAt')
+                .populate('owner', 'name role institution'),
+            Placement.find({ ...filter, status: 'Active' }).select('_id learner startDate endDate'),
+        ]);
+
+        const learnerIdsForProgress = learnersForProgress.map((learner) => learner._id);
+        const progressInstitutions = Array.from(new Set(learnersForProgress.map((learner) => learner.institution).filter(Boolean)));
+        const activePlacementIdsForQuality = activePlacementsForQuality.map((placement) => placement._id);
+        const activeLearnerIdsForQuality = activePlacementsForQuality.map((placement) => placement.learner);
+        const [placementsForProgress, visitsForProgress, assessmentsForProgress, evaluationsForProgress, reportsForProgress] = learnerIdsForProgress.length > 0
+            ? await Promise.all([
+                Placement.find({ learner: { $in: learnerIdsForProgress } }).select('learner trackingId companyName partner sector location supervisorName supervisorPhone supervisorEmail startDate endDate status institution coordinates createdAt'),
+                MonitoringVisit.find({ learner: { $in: learnerIdsForProgress } }).select('learner visitDate performanceRating attendanceStatus locationVerified gpsReviewStatus createdAt'),
+                CompetencyAssessment.find({ learner: { $in: learnerIdsForProgress } }).select('learner assessmentDate overallScore institution createdAt'),
+                EmployerEvaluation.find({ learner: { $in: learnerIdsForProgress } }).select('learner overallScore wouldHire evaluationDate createdAt'),
+                SemesterReport.find({ institution: { $in: progressInstitutions } }).select('institution semester academicYear status createdAt'),
+            ])
+            : [[], [], [], [], []];
+
+        const learnerProgressSummary = buildLearnerProgressSummary(
+            learnersForProgress,
+            placementsForProgress,
+            visitsForProgress,
+            assessmentsForProgress,
+            evaluationsForProgress,
+            reportsForProgress
+        );
+
+        const intakeCohorts = intakeCohortsRaw.map((cohort) => withCohortRiskMeta({
+            intakeAcademicYear: cohort._id,
+            totalLearners: cohort.totalLearners,
+            currentEnrolled: cohort.currentEnrolled,
+            graduating: cohort.graduating,
+            graduated: cohort.graduated,
+            dropped: cohort.dropped,
+            placed: cohort.placed,
+            completed: cohort.completed,
+            regionCount: cohort.regions?.length || 0,
+            institutionCount: cohort.institutions?.length || 0,
+        }));
+
+        const placementTrend = [];
+        for (let i = 11; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const year = d.getFullYear();
+            const month = d.getMonth() + 1;
+            const found = placementTrendRaw.find((entry) => entry._id.year === year && entry._id.month === month);
+            placementTrend.push({
+                name: monthNames[month - 1],
+                year,
+                month,
+                count: found ? found.count : 0,
+            });
+        }
+
+        const overallPlacementRate = totalLearners > 0
+            ? Math.round((((institutionStats.reduce((sum, item) => sum + item.placed + item.completed, 0)) / totalLearners) * 100))
+            : 0;
+        const academicSummary = {
+            currentEnrolled: academicActiveLearners + academicGraduatingLearners,
+            active: academicActiveLearners,
+            graduating: academicGraduatingLearners,
+            graduated: academicGraduatedLearners,
+            dropped: academicDroppedLearners,
+        };
+        let learnerQualitySummary = {
+            activeLearnerCount: activePlacementsForQuality.length,
+            overdueAttendanceRate: 0,
+            monitoringCoverageRate: 0,
+            gpsVerifiedRate: 0,
+            avgVisitRating: 0,
+            assessmentCompletionRate: 0,
+            avgAssessmentScore: 0,
+            employerEvaluationCoverageRate: 0,
+            avgEmployerScore: 0,
+            wouldHireRate: 0,
+            assessmentScoreTrend: [],
+            employerOutcomeTrend: [],
+        };
+
+        if (activePlacementsForQuality.length > 0) {
+            const [
+                attendanceLogsForQuality,
+                visitsForQuality,
+                assessmentsForQuality,
+                evaluationsForQuality,
+            ] = await Promise.all([
+                AttendanceLog.find({ placement: { $in: activePlacementIdsForQuality } }).select('placement periodEnd status'),
+                MonitoringVisit.find({ learner: { $in: activeLearnerIdsForQuality } }).select('learner visitDate performanceRating locationVerified gpsReviewStatus'),
+                CompetencyAssessment.find({ learner: { $in: activeLearnerIdsForQuality } }).select('learner assessmentDate overallScore'),
+                EmployerEvaluation.find({ learner: { $in: activeLearnerIdsForQuality } }).select('learner evaluationDate overallScore wouldHire'),
+            ]);
+
+            const latestAttendanceByPlacement = new Map();
+            attendanceLogsForQuality.forEach((log) => {
+                const key = log.placement?.toString();
+                if (!key) return;
+                const current = latestAttendanceByPlacement.get(key);
+                if (!current || new Date(log.periodEnd) > new Date(current.periodEnd)) {
+                    latestAttendanceByPlacement.set(key, log);
+                }
+            });
+
+            const latestVisitByLearner = new Map();
+            visitsForQuality.forEach((visit) => {
+                const key = visit.learner?.toString();
+                if (!key) return;
+                const current = latestVisitByLearner.get(key);
+                if (!current || new Date(visit.visitDate) > new Date(current.visitDate)) {
+                    latestVisitByLearner.set(key, visit);
+                }
+            });
+
+            const latestAssessmentByLearner = new Map();
+            assessmentsForQuality.forEach((assessment) => {
+                const key = assessment.learner?.toString();
+                if (!key) return;
+                const current = latestAssessmentByLearner.get(key);
+                if (!current || new Date(assessment.assessmentDate) > new Date(current.assessmentDate)) {
+                    latestAssessmentByLearner.set(key, assessment);
+                }
+            });
+
+            const latestEvaluationByLearner = new Map();
+            evaluationsForQuality.forEach((evaluation) => {
+                const key = evaluation.learner?.toString();
+                if (!key) return;
+                const current = latestEvaluationByLearner.get(key);
+                if (!current || new Date(evaluation.evaluationDate) > new Date(current.evaluationDate)) {
+                    latestEvaluationByLearner.set(key, evaluation);
+                }
+            });
+
+            const nowTime = Date.now();
+            let overdueAttendanceCount = 0;
+            let monitoringCoveredCount = 0;
+            let gpsVerifiedCount = 0;
+            let visitRatingTotal = 0;
+            let visitRatingCount = 0;
+            let assessmentCompleteCount = 0;
+            let assessmentScoreTotal = 0;
+            let assessmentScoreCount = 0;
+            let evaluationCompleteCount = 0;
+            let evaluationScoreTotal = 0;
+            let evaluationScoreCount = 0;
+            let wouldHirePositiveCount = 0;
+
+            activePlacementsForQuality.forEach((placement) => {
+                const learnerId = placement.learner?.toString();
+                if (!learnerId) return;
+
+                const latestAttendance = latestAttendanceByPlacement.get(placement._id.toString());
+                const latestVisit = latestVisitByLearner.get(learnerId);
+                const latestAssessment = latestAssessmentByLearner.get(learnerId);
+                const latestEvaluation = latestEvaluationByLearner.get(learnerId);
+
+                const attendanceDueAt = latestAttendance
+                    ? new Date(new Date(latestAttendance.periodEnd).getTime() + systemSettings.attendanceCadenceDays * 24 * 60 * 60 * 1000)
+                    : placement.startDate
+                        ? new Date(new Date(placement.startDate).getTime() + systemSettings.attendanceCadenceDays * 24 * 60 * 60 * 1000)
+                        : null;
+                const monitoringDueAt = latestVisit
+                    ? new Date(new Date(latestVisit.visitDate).getTime() + systemSettings.monitoringVisitCadenceDays * 24 * 60 * 60 * 1000)
+                    : placement.startDate
+                        ? new Date(new Date(placement.startDate).getTime() + systemSettings.monitoringVisitCadenceDays * 24 * 60 * 60 * 1000)
+                        : null;
+
+                if (attendanceDueAt && attendanceDueAt.getTime() < nowTime) overdueAttendanceCount += 1;
+                if (!monitoringDueAt || monitoringDueAt.getTime() >= nowTime) monitoringCoveredCount += 1;
+                if (latestVisit && ['Verified', 'ExceptionApproved'].includes(latestVisit.gpsReviewStatus || '')) gpsVerifiedCount += 1;
+                if (typeof latestVisit?.performanceRating === 'number') {
+                    visitRatingTotal += latestVisit.performanceRating;
+                    visitRatingCount += 1;
+                }
+                if (latestAssessment) {
+                    assessmentCompleteCount += 1;
+                    assessmentScoreTotal += latestAssessment.overallScore || 0;
+                    assessmentScoreCount += 1;
+                }
+                if (latestEvaluation) {
+                    evaluationCompleteCount += 1;
+                    evaluationScoreTotal += latestEvaluation.overallScore || 0;
+                    evaluationScoreCount += 1;
+                    if (latestEvaluation.wouldHire) wouldHirePositiveCount += 1;
+                }
+            });
+
+            const trendMonthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const buildMonthlyTrend = (items, dateKey, scoreKey, extraMapper) => {
+                const trend = [];
+                for (let i = 5; i >= 0; i--) {
+                    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                    const year = d.getFullYear();
+                    const month = d.getMonth();
+                    const monthItems = items.filter((item) => {
+                        const itemDate = item[dateKey] ? new Date(item[dateKey]) : null;
+                        return itemDate && itemDate.getFullYear() === year && itemDate.getMonth() === month;
+                    });
+                    const scoreValues = monthItems
+                        .map((item) => item[scoreKey])
+                        .filter((value) => typeof value === 'number');
+                    trend.push({
+                        name: trendMonthNames[month],
+                        count: monthItems.length,
+                        avgScore: scoreValues.length > 0
+                            ? Math.round((scoreValues.reduce((sum, value) => sum + value, 0) / scoreValues.length) * 10) / 10
+                            : 0,
+                        ...(extraMapper ? extraMapper(monthItems) : {}),
+                    });
+                }
+                return trend;
+            };
+
+            learnerQualitySummary = {
+                activeLearnerCount: activePlacementsForQuality.length,
+                overdueAttendanceRate: Math.round((overdueAttendanceCount / activePlacementsForQuality.length) * 100),
+                monitoringCoverageRate: Math.round((monitoringCoveredCount / activePlacementsForQuality.length) * 100),
+                gpsVerifiedRate: Math.round((gpsVerifiedCount / activePlacementsForQuality.length) * 100),
+                avgVisitRating: visitRatingCount > 0 ? Math.round((visitRatingTotal / visitRatingCount) * 10) / 10 : 0,
+                assessmentCompletionRate: Math.round((assessmentCompleteCount / activePlacementsForQuality.length) * 100),
+                avgAssessmentScore: assessmentScoreCount > 0 ? Math.round((assessmentScoreTotal / assessmentScoreCount) * 10) / 10 : 0,
+                employerEvaluationCoverageRate: Math.round((evaluationCompleteCount / activePlacementsForQuality.length) * 100),
+                avgEmployerScore: evaluationScoreCount > 0 ? Math.round((evaluationScoreTotal / evaluationScoreCount) * 10) / 10 : 0,
+                wouldHireRate: evaluationCompleteCount > 0 ? Math.round((wouldHirePositiveCount / evaluationCompleteCount) * 100) : 0,
+                assessmentScoreTrend: buildMonthlyTrend(assessmentsForQuality, 'assessmentDate', 'overallScore'),
+                employerOutcomeTrend: buildMonthlyTrend(
+                    evaluationsForQuality,
+                    'evaluationDate',
+                    'overallScore',
+                    (monthItems) => ({
+                        wouldHireRate: monthItems.length > 0
+                            ? Math.round((monthItems.filter((item) => item.wouldHire).length / monthItems.length) * 100)
+                            : 0,
+                    })
+                ),
+            };
+        }
+
         const userScope = req.user.role === 'RegionalAdmin'
             ? {
                 $or: [
@@ -7812,63 +11047,29 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
                 ],
             }));
 
-        res.json({
+        const response = {
             totalUsers,
             totalLearners,
             totalPlacements,
             totalVisits,
             totalReports,
             totalPartners,
+            overallPlacementRate,
             partnersDetails,
-            academicSummary: {
-                currentEnrolled: academicActiveLearners + academicGraduatingLearners,
-                active: academicActiveLearners,
-                graduating: academicGraduatingLearners,
-                graduated: academicGraduatedLearners,
-                dropped: academicDroppedLearners,
-            },
-            intakeCohorts: cohortBreakdown.map((cohort) => withCohortRiskMeta({
-                intakeAcademicYear: cohort._id,
-                totalLearners: cohort.totalLearners,
-                currentEnrolled: cohort.currentEnrolled,
-                graduating: cohort.graduating,
-                graduated: cohort.graduated,
-                dropped: cohort.dropped,
-                placed: cohort.placed,
-                completed: cohort.completed,
-                regionCount: cohort.regions.filter(Boolean).length,
-                institutionCount: cohort.institutions.filter(Boolean).length,
-            })),
-            regionalCohortBreakdown: regionalCohortBreakdown.map((cohort) => ({
-                region: cohort._id.region,
-                intakeAcademicYear: cohort._id.intakeAcademicYear,
-                totalLearners: cohort.totalLearners,
-                currentEnrolled: cohort.currentEnrolled,
-                graduating: cohort.graduating,
-                graduated: cohort.graduated,
-                institutionCount: cohort.institutions.filter(Boolean).length,
-            })),
-            institutionCohortBreakdown: institutionCohortBreakdown.map((cohort) => ({
-                institution: cohort._id.institution,
-                region: cohort.region || 'Unknown',
-                intakeAcademicYear: cohort._id.intakeAcademicYear,
-                totalLearners: cohort.totalLearners,
-                currentEnrolled: cohort.currentEnrolled,
-                graduating: cohort.graduating,
-                graduated: cohort.graduated,
-            })),
             totalInstitutions: institutions.length,
             institutions: institutions.map(i => i.name),
             institutionDetails: institutions,
             institutionStats,
             regionalStats,
-            overallPlacementRate,
-            placementTrend: filledTrend,
-            genderDistribution,
+            academicSummary,
+            intakeCohorts,
+            regionalCohortBreakdown,
+            institutionCohortBreakdown,
+            placementTrend,
+            genderDistribution: genderDistributionRaw,
             programDistribution,
-            avgTimeToPlacement,
-            pendingReports,
-            reportPipeline,
+            learnerProgressSummary,
+            learnerQualitySummary,
             approvalInbox: {
                 pendingCount: pendingReports,
                 overdueCount: overdueApprovals,
@@ -7945,8 +11146,12 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
                 upcomingDeadlines,
                 ...deadlineRisk,
             },
-        });
+        };
+
+        writeScopedCache(cacheKey, response);
+        res.json(response);
     } catch (error) {
+        console.error('Error fetching admin overview:', error);
         res.status(500).json({ message: 'Server Error', error });
     }
 });
@@ -7955,13 +11160,124 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
 
 router.get('/industry-partners', async (req, res) => {
     try {
+        const includeAll = req.query.includeAll === '1' || req.query.includeAll === 'true';
+        const searchQuery = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+        const approvalStatus = typeof req.query.approvalStatus === 'string' ? req.query.approvalStatus.trim() : '';
+        const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
+        const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
+        const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
+        const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+        const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+            ? Math.min(parsedPageSize, 100)
+            : 24;
         let filter = {};
         if (req.user.role === 'RegionalAdmin') {
             filter.region = req.user.region;
         } else if (req.user.role === 'Admin' || req.user.role === 'Manager') {
             filter.linkedInstitutions = req.user.institution;
         }
-        const partners = await IndustryPartner.find(filter).sort({ name: 1 });
+
+        const summaryFilter = { ...filter };
+
+        if (!includeAll) {
+            filter.$or = [
+                { approvalStatus: 'Approved' },
+                { approvalStatus: { $exists: false } },
+            ];
+            filter.status = 'Active';
+        }
+
+        if (approvalStatus && includeAll) {
+            if (approvalStatus === 'Approved') {
+                filter.$or = [
+                    { approvalStatus: 'Approved' },
+                    { approvalStatus: { $exists: false } },
+                ];
+            } else {
+                filter.approvalStatus = approvalStatus;
+            }
+        }
+
+        if (searchQuery) {
+            const escapedSearch = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const searchRegex = new RegExp(escapedSearch, 'i');
+            filter.$and = [
+                ...(filter.$and || []),
+                {
+                    $or: [
+                        { name: searchRegex },
+                        { sector: searchRegex },
+                        { region: searchRegex },
+                        { location: searchRegex },
+                        { contactPerson: searchRegex },
+                        { contactEmail: searchRegex },
+                    ],
+                },
+            ];
+        }
+
+        const partnersQuery = IndustryPartner.find(filter)
+            .populate('addedBy', 'name role institution region')
+            .populate('approvalReviewedBy', 'name role')
+            .sort({ createdAt: -1, name: 1 });
+
+        if (usePagination) {
+            partnersQuery.skip((page - 1) * pageSize).limit(pageSize);
+        }
+
+        const [partners, total, summaryCounts] = await Promise.all([
+            partnersQuery.lean(),
+            usePagination ? IndustryPartner.countDocuments(filter) : Promise.resolve(null),
+            usePagination && includeAll
+                ? IndustryPartner.aggregate([
+                    { $match: summaryFilter },
+                    {
+                        $group: {
+                            _id: null,
+                            total: { $sum: 1 },
+                            pending: {
+                                $sum: {
+                                    $cond: [{ $eq: ['$approvalStatus', 'PendingHQApproval'] }, 1, 0],
+                                },
+                            },
+                            approved: {
+                                $sum: {
+                                    $cond: [
+                                        {
+                                            $or: [
+                                                { $eq: ['$approvalStatus', 'Approved'] },
+                                                { $not: ['$approvalStatus'] },
+                                            ],
+                                        },
+                                        1,
+                                        0,
+                                    ],
+                                },
+                            },
+                            rejected: {
+                                $sum: {
+                                    $cond: [{ $eq: ['$approvalStatus', 'Rejected'] }, 1, 0],
+                                },
+                            },
+                        },
+                    },
+                ])
+                : Promise.resolve(null),
+        ]);
+
+        if (usePagination) {
+            const summary = summaryCounts?.[0] || { total: 0, pending: 0, approved: 0, rejected: 0 };
+            const safeTotal = total || 0;
+            return res.json({
+                items: partners,
+                total: safeTotal,
+                page,
+                pageSize,
+                totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
+                summary,
+            });
+        }
+
         res.json(partners);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
@@ -7981,7 +11297,9 @@ router.get('/industry-partners/search', async (req, res) => {
              }
         }
         
-        const partners = await IndustryPartner.find(filter).limit(10);
+        const partners = await IndustryPartner.find(filter)
+            .select('name sector region status approvalStatus totalSlots usedSlots')
+            .limit(10);
         res.json(partners);
     } catch (error) {
         res.status(500).json({ message: 'Search Error' });
@@ -7994,6 +11312,9 @@ router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), asyn
         
         const partner = await IndustryPartner.findById(req.params.id);
         if (!partner) return res.status(404).json({ message: 'Partner not found' });
+        if ((partner.approvalStatus && partner.approvalStatus !== 'Approved') || partner.status !== 'Active') {
+            return res.status(409).json({ message: 'Only approved active partners can be linked to institutions' });
+        }
         
         if (!partner.linkedInstitutions.includes(req.user.institution)) {
             partner.linkedInstitutions.push(req.user.institution);
@@ -8017,8 +11338,14 @@ router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), asyn
 
 router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'), async (req, res) => {
     try {
+        const approvalStatus = req.user.role === 'SuperAdmin' ? 'Approved' : 'PendingHQApproval';
         const newPartner = new IndustryPartner({
             ...req.body,
+            approvalStatus,
+            approvalRequestedAt: new Date(),
+            approvalReviewedAt: approvalStatus === 'Approved' ? new Date() : undefined,
+            approvalReviewedBy: approvalStatus === 'Approved' ? req.user._id : undefined,
+            approvalComment: approvalStatus === 'Approved' ? 'Created directly by HQ' : '',
             addedBy: req.user._id
         });
         
@@ -8032,9 +11359,20 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
             action: 'CREATE',
             entityType: 'IndustryPartner',
             entityId: newPartner._id,
-            summary: `Created industry partner ${newPartner.name}`,
+            summary: approvalStatus === 'Approved'
+                ? `Created and approved industry partner ${newPartner.name}`
+                : `Submitted industry partner ${newPartner.name} for HQ approval`,
             after: newPartner,
+            metadata: { approvalStatus },
         });
+
+        if (approvalStatus === 'PendingHQApproval') {
+            await notifyHQOfPartnerSubmission({
+                partner: newPartner,
+                sender: req.user,
+            });
+        }
+
         res.status(201).json(newPartner);
     } catch (error) {
         if (error.code === 11000) return res.status(400).json({ message: 'Company name already exists! Please search and link the existing partner instead.' });
@@ -8042,10 +11380,81 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
     }
 });
 
+router.put('/industry-partners/:id/hq-approve', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const partner = await IndustryPartner.findById(req.params.id);
+        if (!partner) return res.status(404).json({ message: 'Partner not found' });
+
+        const before = partner.toObject();
+        partner.approvalStatus = 'Approved';
+        partner.approvalReviewedAt = new Date();
+        partner.approvalReviewedBy = req.user._id;
+        partner.approvalComment = req.body?.approvalComment || '';
+        await partner.save();
+
+        await logAuditEvent({
+            req,
+            action: 'UPDATE',
+            entityType: 'IndustryPartner',
+            entityId: partner._id,
+            summary: `Approved industry partner ${partner.name}`,
+            before,
+            after: partner,
+            metadata: { approvalAction: 'Approved' },
+        });
+
+        const populatedPartner = await IndustryPartner.findById(partner._id)
+            .populate('addedBy', 'name role institution region')
+            .populate('approvalReviewedBy', 'name role');
+        res.json(populatedPartner);
+    } catch (error) {
+        console.error('Error approving industry partner:', error);
+        res.status(500).json({ message: 'Error approving partner' });
+    }
+});
+
+router.put('/industry-partners/:id/hq-reject', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const partner = await IndustryPartner.findById(req.params.id);
+        if (!partner) return res.status(404).json({ message: 'Partner not found' });
+
+        const before = partner.toObject();
+        partner.approvalStatus = 'Rejected';
+        partner.approvalReviewedAt = new Date();
+        partner.approvalReviewedBy = req.user._id;
+        partner.approvalComment = req.body?.approvalComment || '';
+        await partner.save();
+
+        await logAuditEvent({
+            req,
+            action: 'UPDATE',
+            entityType: 'IndustryPartner',
+            entityId: partner._id,
+            summary: `Rejected industry partner ${partner.name}`,
+            before,
+            after: partner,
+            metadata: { approvalAction: 'Rejected' },
+        });
+
+        const populatedPartner = await IndustryPartner.findById(partner._id)
+            .populate('addedBy', 'name role institution region')
+            .populate('approvalReviewedBy', 'name role');
+        res.json(populatedPartner);
+    } catch (error) {
+        console.error('Error rejecting industry partner:', error);
+        res.status(500).json({ message: 'Error rejecting partner' });
+    }
+});
+
 router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const existingPartner = await IndustryPartner.findById(req.params.id);
-        const updatedPartner = await IndustryPartner.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' });
+        const { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions } = req.body;
+        const updatedPartner = await IndustryPartner.findByIdAndUpdate(
+            req.params.id,
+            { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions },
+            { returnDocument: 'after' }
+        );
         if (updatedPartner && existingPartner) {
             await logAuditEvent({
                 req,
@@ -8089,17 +11498,22 @@ router.post('/industry-partners/:id/create-account', requireRole('SuperAdmin', '
         const partner = await IndustryPartner.findById(req.params.id);
         if (!partner) return res.status(404).json({ message: 'Partner not found' });
         if (!partner.contactEmail) return res.status(400).json({ message: 'Partner has no contact email' });
+        if (!isMailerConfigured()) {
+            return res.status(503).json({ message: 'SMTP must be configured before partner accounts can be provisioned securely' });
+        }
+        if ((partner.approvalStatus && partner.approvalStatus !== 'Approved') || partner.status !== 'Active') {
+            return res.status(409).json({ message: 'Only approved active partners can get portal accounts' });
+        }
 
         const existingUser = await User.findOne({ email: partner.contactEmail });
         if (existingUser) {
             return res.status(400).json({ message: 'Account already exists for this email' });
         }
 
-        const defaultPassword = 'Partner123!';
         const newUser = new User({
             name: partner.contactPerson,
             email: partner.contactEmail,
-            password: defaultPassword,
+            password: crypto.randomBytes(24).toString('hex'),
             role: 'IndustryPartner',
             phone: partner.contactPhone,
             institution: 'N/A',
@@ -8107,6 +11521,7 @@ router.post('/industry-partners/:id/create-account', requireRole('SuperAdmin', '
         });
 
         await newUser.save();
+        await issueSetupLink(newUser);
         await logAuditEvent({
             req,
             action: 'CREATE',
@@ -8116,7 +11531,7 @@ router.post('/industry-partners/:id/create-account', requireRole('SuperAdmin', '
             after: newUser,
             metadata: { partnerId: partner._id },
         });
-        res.json({ message: 'Account created successfully', defaultPassword });
+        res.json(withUserLifecycleMeta(newUser));
     } catch (error) {
         res.status(500).json({ message: 'Error creating partner account', error: error.message });
     }
@@ -8126,11 +11541,21 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
     try {
         const partnerId = getPartnerId(req.user);
         const settings = await getOrCreateSystemSettings();
-        const placements = await Placement.find({ partner: partnerId })
-            .populate('learner')
+        const placementFilter = { partner: partnerId };
+        if (req.query.status) {
+            placementFilter.status = req.query.status;
+        } else if (req.query.mode === 'archived') {
+            placementFilter.status = { $in: ['Completed', 'Terminated'] };
+        }
+
+        const placements = await Placement.find(placementFilter)
+            .select('learner trackingId academicYear companyName partner sector location supervisorName supervisorPhone supervisorEmail partnerSupervisor startDate endDate status closedAt closedBy closureReason closureNote owner institution createdAt updatedAt')
+            .populate('learner', 'firstName lastName middleName name trackingId program year')
             .populate('owner', 'name role institution')
             .populate('partnerSupervisor', 'name email phone')
-            .sort({ startDate: -1 });
+            .populate('closedBy', 'name role')
+            .sort({ startDate: -1 })
+            .lean();
 
         const placementIds = placements.map((placement) => placement._id);
         const learnerIds = placements.map((placement) => placement.learner?._id).filter(Boolean);
@@ -8193,7 +11618,6 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
         const agreementsByPlacement = new Map(agreements.map((agreement) => [agreement.placement.toString(), agreement]));
 
         res.json(placements.map((placement) => {
-            const placementJson = placement.toObject();
             const unread = unreadByPlacement.get(placement._id.toString());
             const latestAttendance = attendanceByPlacement.get(placement._id.toString());
             const evaluation = placement.learner?._id ? evaluationsByLearner.get(placement.learner._id.toString()) : null;
@@ -8209,13 +11633,17 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
                     : null;
 
             return {
-                ...placementJson,
+                ...placement,
+                learner: placement.learner ? {
+                    ...placement.learner,
+                    name: buildLearnerDisplayName(placement.learner),
+                } : null,
                 institutionOwner: placement.owner || null,
                 partnerSupervisor: placement.partnerSupervisor || null,
                 assignedToCurrentSupervisor: placement.partnerSupervisor
                     ? placement.partnerSupervisor._id.toString() === req.user._id.toString()
                     : false,
-                operationalReadiness: buildPlacementOperationalReadiness(placementJson),
+                operationalReadiness: buildPlacementOperationalReadiness(placement),
                 unreadMessageCount: unread?.unreadCount || 0,
                 lastMessageAt: unread?.lastMessageAt || null,
                 latestAttendance: latestAttendance || null,
@@ -8227,6 +11655,14 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
                 evaluation,
                 evaluationHistory,
                 openSupportCount: (supportByPlacement.get(placement._id.toString()) || []).length,
+                closureMeta: placement.closedAt || placement.closedBy || placement.closureReason || placement.closureNote
+                    ? {
+                        closedAt: placement.closedAt || null,
+                        closedBy: placement.closedBy || null,
+                        closureReason: placement.closureReason || '',
+                        closureNote: placement.closureNote || '',
+                    }
+                    : null,
                 agreementSummary: buildPlacementAgreementSummary({
                     placement,
                     learner: placement.learner,
@@ -8786,10 +12222,16 @@ router.get('/evaluations/learner/:learnerId', async (req, res) => {
 router.get('/placement-requests', async (req, res) => {
     try {
         const filter = await getFilter(req.user);
-        const requests = await PlacementRequest.find(filter)
+        const archivedOnly = req.query.archived === 'true';
+        const includeArchived = req.query.includeArchived === 'true';
+        const requests = await PlacementRequest.find({
+            ...filter,
+            ...buildArchiveQueryFilter({ includeArchived, archivedOnly }),
+        })
             .populate('partner', 'name sector region totalSlots usedSlots')
             .populate('learners', 'firstName lastName trackingId')
             .populate('submittedBy', 'name')
+            .populate('reviewedByInstitution', 'name')
             .sort({ createdAt: -1 });
         res.json(requests);
     } catch (error) {
@@ -8799,12 +12241,65 @@ router.get('/placement-requests', async (req, res) => {
 
 router.post('/placement-requests', async (req, res) => {
     try {
-        const { partner, learners, program, requestedSlots, startDate, endDate } = req.body;
+        const {
+            partner,
+            learners,
+            program,
+            requestedSlots,
+            startDate,
+            endDate,
+            sourceType,
+            selfSourcedHost,
+        } = req.body;
         const readinessCheck = await assertLearnersReadyForPlacement(learners, req.user.institution);
         if (!readinessCheck.ok) {
             return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
         }
-        
+
+        const normalizedSourceType = sourceType === 'LearnerFound' ? 'LearnerFound' : 'InstitutionFound';
+
+        if (normalizedSourceType === 'LearnerFound') {
+            if (!selfSourcedHost?.companyName?.trim() || !selfSourcedHost?.sector?.trim() || !selfSourcedHost?.location?.trim()) {
+                return res.status(400).json({ message: 'Learner-sourced placements require company name, sector, and location.' });
+            }
+
+            const newRequest = new PlacementRequest({
+                institution: req.user.institution,
+                learners,
+                program,
+                requestedSlots,
+                startDate,
+                endDate,
+                submittedBy: req.user._id,
+                sourceType: 'LearnerFound',
+                selfSourcedHost: {
+                    companyName: selfSourcedHost.companyName?.trim() || '',
+                    sector: selfSourcedHost.sector?.trim() || '',
+                    location: selfSourcedHost.location?.trim() || '',
+                    tradeArea: selfSourcedHost.tradeArea?.trim() || '',
+                    town: selfSourcedHost.town?.trim() || '',
+                    contactPerson: selfSourcedHost.contactPerson?.trim() || '',
+                    contactPhone: selfSourcedHost.contactPhone?.trim() || '',
+                    contactEmail: selfSourcedHost.contactEmail?.trim() || '',
+                    notes: selfSourcedHost.notes?.trim() || '',
+                },
+                status: 'SelfSourced_Submitted',
+            });
+
+            await newRequest.save();
+            await logAuditEvent({
+                req,
+                action: 'CREATE',
+                entityType: 'PlacementRequest',
+                entityId: newRequest._id,
+                summary: `Submitted learner-sourced placement lead for ${requestedSlots} learner(s)`,
+                after: newRequest,
+                metadata: { sourceType: 'LearnerFound' },
+            });
+
+            return res.status(201).json(newRequest);
+        }
+
         // Prevent requesting more slots than available
         const partnerDoc = await IndustryPartner.findById(partner);
         if (!partnerDoc) return res.status(404).json({ message: 'Partner not found' });
@@ -8831,6 +12326,7 @@ router.post('/placement-requests', async (req, res) => {
                 startDate,
                 endDate,
                 submittedBy: req.user._id,
+                sourceType: 'InstitutionFound',
                 status: 'Placed'
             });
             await newRequest.save();
@@ -8904,6 +12400,140 @@ router.post('/placement-requests', async (req, res) => {
         }
     } catch (error) {
         res.status(500).json({ message: 'Error processing placement' });
+    }
+});
+
+router.put('/placement-requests/:id/self-source-status', async (req, res) => {
+    try {
+        const filter = await getFilter(req.user);
+        const request = await PlacementRequest.findOne({ _id: req.params.id, ...filter });
+        if (!request) return res.status(404).json({ message: 'Placement request not found' });
+        if (isArchivedRecord(request)) {
+            return res.status(409).json({ message: 'Archived placement requests cannot be reviewed.' });
+        }
+        if (request.sourceType !== 'LearnerFound') {
+            return res.status(400).json({ message: 'Only learner-sourced placement leads can use this review workflow' });
+        }
+        if (!['Admin', 'Manager', 'Staff', 'RegionalAdmin', 'SuperAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'You do not have permission to review learner-sourced placement leads' });
+        }
+
+        const { status, verificationNotes, rejectionReason } = req.body;
+        if (!['Under_Verification', 'Approved', 'Rejected'].includes(status)) {
+            return res.status(400).json({ message: 'Invalid learner-sourced placement status' });
+        }
+
+        request.status = status;
+        request.verificationNotes = verificationNotes?.trim?.() || request.verificationNotes || '';
+        request.reviewedByInstitution = req.user._id;
+        request.verifiedAt = new Date();
+        request.institutionComment = request.verificationNotes;
+        if (status === 'Rejected') {
+            request.rejectionReason = rejectionReason?.trim?.() || request.rejectionReason || 'Rejected during institution verification';
+        } else {
+            request.rejectionReason = '';
+        }
+
+        await request.save();
+        await logAuditEvent({
+            req,
+            action: 'UPDATE',
+            entityType: 'PlacementRequest',
+            entityId: request._id,
+            summary: `Updated learner-sourced placement lead to ${status}`,
+            after: request,
+            metadata: { sourceType: request.sourceType, status },
+        });
+
+        res.json(request);
+    } catch (error) {
+        console.error('Error updating learner-sourced placement lead:', error);
+        res.status(500).json({ message: 'Error updating learner-sourced placement lead' });
+    }
+});
+
+router.post('/placement-requests/:id/convert', async (req, res) => {
+    try {
+        const filter = await getFilter(req.user);
+        const request = await PlacementRequest.findOne({ _id: req.params.id, ...filter })
+            .populate('learners', 'name trackingId')
+            .lean();
+        if (!request) return res.status(404).json({ message: 'Placement request not found' });
+        if (isArchivedRecord(request)) {
+            return res.status(409).json({ message: 'Archived placement requests cannot be converted.' });
+        }
+        if (request.sourceType !== 'LearnerFound') {
+            return res.status(400).json({ message: 'Only learner-sourced placement leads can be converted this way' });
+        }
+        if (request.status !== 'Approved') {
+            return res.status(400).json({ message: 'Only approved learner-sourced placement leads can be converted to placements' });
+        }
+
+        const readinessCheck = await assertLearnersReadyForPlacement(
+            (request.learners || []).map((learner) => learner._id?.toString?.() || learner.toString()),
+            request.institution
+        );
+        if (!readinessCheck.ok) {
+            return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
+        }
+
+        const placementAcademicYear = request.startDate
+            ? resolveAcademicYearFromDate(request.startDate)
+            : await resolveCurrentAcademicYear();
+
+        const createdPlacements = await Placement.insertMany(
+            (request.learners || []).map((learner) => ({
+                learner: learner._id,
+                academicYear: placementAcademicYear,
+                companyName: request.selfSourcedHost?.companyName || 'Learner-Sourced Placement',
+                startDate: request.startDate,
+                endDate: request.endDate,
+                sector: request.selfSourcedHost?.sector || request.program,
+                location: request.selfSourcedHost?.location || request.selfSourcedHost?.town || 'Not specified',
+                supervisorName: request.selfSourcedHost?.contactPerson || '',
+                supervisorPhone: request.selfSourcedHost?.contactPhone || '',
+                supervisorEmail: request.selfSourcedHost?.contactEmail || '',
+                institution: request.institution,
+                status: 'Active',
+            }))
+        );
+
+        for (const placement of createdPlacements) {
+            await Learner.findByIdAndUpdate(placement.learner, {
+                status: 'Placed',
+                placement: placement._id,
+            });
+        }
+
+        const updatedRequest = await PlacementRequest.findByIdAndUpdate(
+            request._id,
+            {
+                status: 'Converted',
+                convertedPlacementIds: createdPlacements.map((placement) => placement._id),
+                reviewedByInstitution: req.user._id,
+                verifiedAt: new Date(),
+            },
+            { returnDocument: 'after' }
+        )
+            .populate('partner', 'name sector region totalSlots usedSlots')
+            .populate('learners', 'firstName lastName trackingId')
+            .populate('submittedBy', 'name')
+            .populate('reviewedByInstitution', 'name');
+
+        await logAuditEvent({
+            req,
+            action: 'CREATE',
+            entityType: 'Placement',
+            entityId: createdPlacements.map((placement) => placement._id).join(','),
+            summary: `Converted learner-sourced placement lead into ${createdPlacements.length} placement(s)`,
+            metadata: { placementRequestId: request._id, learnerCount: createdPlacements.length, sourceType: 'LearnerFound' },
+            after: createdPlacements,
+        });
+
+        res.json(updatedRequest);
+    } catch (error) {
+        console.error('Error converting learner-sourced placement lead:', error);
+        res.status(500).json({ message: 'Error converting learner-sourced placement lead' });
     }
 });
 

@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { DocumentList } from "@/components/DocumentList"
 import { useParams, useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, MapPin, Phone, Mail, Award, Clock, FileSignature, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Paperclip, Camera, Loader2, Edit2, Activity, ClipboardCheck, AlertTriangle } from "lucide-react"
+import { ArrowLeft, MapPin, Phone, Mail, Award, Clock, FileSignature, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Camera, Loader2, Edit2, Activity, ClipboardCheck, AlertTriangle, Archive, ChevronRight, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { format } from "date-fns"
@@ -29,25 +28,216 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner"
 import { downloadPlacementAgreementPdf } from "@/lib/placementAgreementPdf"
 
+type UserSummary = {
+  _id: string
+  name: string
+  email?: string
+  role?: string
+  institution?: string
+}
+
+type LearnerStatus = "Pending" | "Placed" | "Completed" | "Dropped"
+type AcademicStatus = "Active" | "Graduating" | "Graduated" | "Dropped"
+type LearnerGender = "Male" | "Female" | "Other"
+
+const normalizeLearnerGender = (gender?: string): LearnerGender => {
+  if (gender === "Female" || gender === "Other") return gender
+  return "Male"
+}
+
+interface LearnerProfileRecord {
+  _id: string
+  name: string
+  lastName?: string
+  firstName?: string
+  middleName?: string
+  gender?: "Male" | "Female" | "Other" | string
+  dateOfBirth?: string | null
+  phone?: string
+  guardianContact?: string
+  indexNumber: string
+  trackingId: string
+  institution: string
+  program: string
+  year: string
+  intakeAcademicYear?: string
+  academicStatus?: AcademicStatus
+  status: LearnerStatus
+  owner?: UserSummary | null
+  profilePicture?: string
+  region?: string
+}
+
+interface PlacementAgreementSummary {
+  employerSigned?: boolean
+  employerSignerName?: string
+  employerBusinessName?: string
+  employerSignatureName?: string
+  employerSignedAt?: string | null
+  learnerSigned?: boolean
+  learnerSignerName?: string
+  learnerSignatureName?: string
+  learnerSignedAt?: string | null
+}
+
+interface PlacementRecord {
+  _id: string
+  companyName: string
+  partnerName?: string
+  sector?: string
+  location?: string
+  supervisorName?: string
+  supervisorPhone?: string
+  supervisorEmail?: string
+  startDate?: string | null
+  endDate?: string | null
+  status: "Active" | "Completed" | "Terminated" | string
+  owner?: UserSummary | null
+  agreementSummary?: PlacementAgreementSummary | null
+}
+
+interface PlacementHistoryRecord extends PlacementRecord {
+  placementId: string
+  cycleNumber: number
+  academicYear?: string
+}
+
+interface MonitoringVisitRecord {
+  _id: string
+  visitDate: string
+  visitType: string
+  status?: string
+  visitorName?: string
+  visitorPosition?: string
+  location?: string
+  attendanceStatus?: string
+  performanceRating?: number
+  keyObservations?: string
+  issuesIdentified?: string
+  actionRequired?: string
+  feedback?: string
+  observations?: string
+  recommendations?: string
+}
+
+interface SemesterReportRecord {
+  _id: string
+  semester: string
+  academicYear: string
+  status: string
+  summary?: {
+    totalLearners?: number
+    placed?: number
+  }
+}
+
+interface AssessmentRecord {
+  _id?: string
+  learner?: string | { _id: string; name?: string }
+  assessmentDate: string
+  assessmentType: "Oral" | "Practical" | string
+  technicalSkills?: string
+  softSkills?: string
+  professionalism?: number
+  problemSolving?: number
+  overallScore?: number
+  assessorName?: string
+  recommendations?: string
+}
+
+interface EmployerEvaluationRecord {
+  _id: string
+  evaluationDate: string
+  partner?: { _id?: string; name?: string } | null
+  evaluatorName?: string
+  evaluatorPosition?: string
+  overallScore?: number
+  wouldHire?: boolean
+  strengths?: string
+  areasForImprovement?: string
+  additionalComments?: string
+  metrics?: {
+    punctualityAndAttendance?: number
+    technicalSkills?: number
+    abilityToLearn?: number
+    teamworkAndCommunication?: number
+    initiativeAndProblemSolving?: number
+  }
+}
+
+interface SupportTicketRecord {
+  _id: string
+  subject: string
+  category?: string
+  priority?: string
+  status?: string
+  description?: string
+  assignedTo?: UserSummary | null
+  escalatedTo?: UserSummary | null
+  slaStatus?: { hasBreach?: boolean }
+}
+
+interface ActivePlacementManagement {
+  attendance?: {
+    latestAt?: string | null
+    dueAt?: string | null
+    overdue?: boolean
+    pendingSignOffCount?: number
+  }
+  monitoring?: {
+    latestAt?: string | null
+    dueAt?: string | null
+    overdue?: boolean
+    visitCount?: number
+  }
+  assessments?: {
+    complete?: boolean
+    latestAt?: string | null
+    dueAt?: string | null
+    overdue?: boolean
+    summary?: string
+  }
+  evaluations?: {
+    complete?: boolean
+    latestAt?: string | null
+    dueAt?: string | null
+    overdue?: boolean
+  }
+  blockers?: {
+    totalOpen?: number
+    escalated?: number
+    items?: SupportTicketRecord[]
+  }
+}
+
+interface EvidenceTimelineItem {
+  _id: string
+  fileName: string
+  sourceType: string
+  sourceLabel?: string
+  category?: string
+  url: string
+  createdAt: string
+  uploadedBy?: UserSummary | null
+}
+
+interface PlacementReadiness {
+  isReadyForPlacement: boolean
+  missingFields: string[]
+  missingDocuments: string[]
+}
+
 interface ProfileData {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  learner: any
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  placements: any[]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  visits: any[]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  semesterReports: any[]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  assessments: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  evaluations: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  activePlacementManagement?: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  evidenceTimeline?: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  placementHistory?: any[];
+  learner: LearnerProfileRecord
+  placements: PlacementRecord[]
+  visits: MonitoringVisitRecord[]
+  semesterReports: SemesterReportRecord[]
+  assessments: AssessmentRecord[]
+  evaluations: EmployerEvaluationRecord[]
+  activePlacementManagement?: ActivePlacementManagement
+  evidenceTimeline?: EvidenceTimelineItem[]
+  placementHistory?: PlacementHistoryRecord[]
+  readiness?: PlacementReadiness
   guardianConsent?: {
     requiresConsent: boolean
     hasDateOfBirth: boolean
@@ -69,6 +259,21 @@ interface ProfileData {
     phone?: string
     status: string
   }>;
+  placementEligibility?: {
+    isEligible: boolean
+    reason: string
+    allowedWindowStatus?: string | null
+    calendarType?: string | null
+    yearGroup?: string
+    schedule?: {
+      semester?: string
+      academicYear?: string
+      startDate?: string
+      endDate?: string
+      totalWeeks?: number | null
+      institutionCalendarType?: string | null
+    } | null
+  }
 }
 
 interface ProgressData {
@@ -84,7 +289,7 @@ interface ProgressData {
 export default function LearnerProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { authFetch, token, user } = useAuth()
+  const { authFetch, user } = useAuth()
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [data, setData] = useState<ProfileData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -95,18 +300,19 @@ export default function LearnerProfile() {
   const [supportOpen, setSupportOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [learnerAgreementOpen, setLearnerAgreementOpen] = useState(false)
+  const [assessmentPreview, setAssessmentPreview] = useState<AssessmentRecord | null>(null)
+  const [evaluationPreview, setEvaluationPreview] = useState<EmployerEvaluationRecord | null>(null)
+  const [visitPreview, setVisitPreview] = useState<MonitoringVisitRecord | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [ownerCandidates, setOwnerCandidates] = useState<Array<{ _id: string; name: string; role: string; institution?: string }>>([])
   const [learnerOwnerDraft, setLearnerOwnerDraft] = useState("")
   const [placementOwnerDrafts, setPlacementOwnerDrafts] = useState<Record<string, string>>({})
   const [savingLearnerOwner, setSavingLearnerOwner] = useState(false)
   const [savingPlacementOwners, setSavingPlacementOwners] = useState<Record<string, boolean>>({})
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [documents, setDocuments] = useState<any[]>([])
-  const [docsLoading, setDocsLoading] = useState(true)
   const [profilePicUploading, setProfilePicUploading] = useState(false)
   const [progress, setProgress] = useState<ProgressData | null>(null)
   const [progressLoading, setProgressLoading] = useState(true)
+  const [showAllEvidence, setShowAllEvidence] = useState(false)
   const [supportDraft, setSupportDraft] = useState({
     subject: "",
     category: "Workflow",
@@ -125,9 +331,8 @@ export default function LearnerProfile() {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const res = await fetch(`/api/documents/profile-picture/${id}`, {
+      const res = await authFetch(`/api/documents/profile-picture/${id}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
         body: formData,
       })
       const payload = await res.json().catch(() => ({}))
@@ -151,24 +356,10 @@ export default function LearnerProfile() {
       setData(profileData)
     } catch (err) {
       console.error(err)
+      toast.error("Failed to load learner profile")
       setError("Failed to load learner profile. They may not exist or you do not have permission.")
     } finally {
       setLoading(false)
-    }
-  }, [id, authFetch])
-
-  const fetchDocuments = useCallback(async () => {
-    if (!id) return
-    try {
-      const res = await authFetch(`/api/documents?learnerId=${id}`)
-      if (res.ok) {
-        const docs = await res.json()
-        setDocuments(docs)
-      }
-    } catch (err) {
-      console.error('Error fetching documents:', err)
-    } finally {
-      setDocsLoading(false)
     }
   }, [id, authFetch])
 
@@ -182,6 +373,7 @@ export default function LearnerProfile() {
       }
     } catch (err) {
       console.error('Error fetching progress:', err)
+      toast.error('Failed to load progress data')
     } finally {
       setProgressLoading(false)
     }
@@ -189,9 +381,8 @@ export default function LearnerProfile() {
 
   useEffect(() => {
     fetchProfile()
-    fetchDocuments()
     fetchProgress()
-  }, [fetchProfile, fetchDocuments, fetchProgress, refreshKey])
+  }, [fetchProfile, fetchProgress, refreshKey])
 
   useEffect(() => {
     authFetch('/api/ownership/users')
@@ -202,6 +393,7 @@ export default function LearnerProfile() {
       .then(setOwnerCandidates)
       .catch((error) => {
         console.error('Error fetching ownership candidates:', error)
+        toast.error('Failed to load ownership candidates')
       })
   }, [authFetch])
 
@@ -210,7 +402,7 @@ export default function LearnerProfile() {
     setLearnerOwnerDraft(data.learner.owner?._id || "__unassigned")
     setPlacementOwnerDrafts(
       Object.fromEntries(
-        (data.placements || []).map((placement: any) => [placement._id, placement.owner?._id || "__unassigned"])
+        (data.placements || []).map((placement) => [placement._id, placement.owner?._id || "__unassigned"])
       )
     )
   }, [data])
@@ -228,7 +420,7 @@ export default function LearnerProfile() {
       lastName: learner.lastName || '',
       firstName: learner.firstName || '',
       middleName: learner.middleName || '',
-      gender: learner.gender || 'Male',
+      gender: normalizeLearnerGender(learner.gender),
       dateOfBirth: learner.dateOfBirth || '',
       phone: learner.phone || '',
       guardianContact: learner.guardianContact || '',
@@ -279,11 +471,16 @@ export default function LearnerProfile() {
   const evidenceTimeline = data.evidenceTimeline || []
   const linkedGuardians = data.linkedGuardians || []
   const guardianConsent = data.guardianConsent
-  const readiness = (data as ProfileData & { readiness?: { isReadyForPlacement: boolean; missingFields: string[]; missingDocuments: string[] } }).readiness
-  const canManageOwnership = ['Admin', 'Manager', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '')
-  const canManageGuardians = ['Admin', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '')
+  const readiness = data.readiness
+  const placementEligibility = data.placementEligibility
+  const isGraduatedArchive = learner.academicStatus === 'Graduated'
+  const canManageOwnership = ['Admin', 'Manager', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && !isGraduatedArchive
+  const canManageGuardians = ['Admin', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && !isGraduatedArchive
   const activePlacement = placements.find((placement) => placement.status === 'Active') || null
-  const canInitiatePlacement = !activePlacement && ['Active', 'Graduating'].includes(learner.academicStatus || 'Active')
+  const canInitiatePlacement = !isGraduatedArchive
+    && !activePlacement
+    && ['Active', 'Graduating'].includes(learner.academicStatus || 'Active')
+    && placementEligibility?.isEligible !== false
   const activeAgreementSummary = activePlacement?.agreementSummary || null
 
   const formatMissingField = (field: string) => {
@@ -441,6 +638,13 @@ export default function LearnerProfile() {
 
   return (
     <div className="h-full flex-1 flex-col p-4 md:p-8 space-y-8 overflow-y-auto">
+      {/* Breadcrumb */}
+      <nav className="flex items-center gap-1.5 text-sm text-gray-400 font-medium px-1">
+        <button onClick={() => navigate('/learners')} className="hover:text-gray-700 transition-colors">Learner Register</button>
+        <ChevronRight className="h-3.5 w-3.5" />
+        <span className="text-gray-700 font-bold truncate max-w-[200px]">{learner.name}</span>
+      </nav>
+
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -451,7 +655,7 @@ export default function LearnerProfile() {
           {/* Profile Avatar */}
           <button
             onClick={() => avatarInputRef.current?.click()}
-            disabled={profilePicUploading}
+            disabled={profilePicUploading || isGraduatedArchive}
             className="relative h-16 w-16 md:h-20 md:w-20 rounded-2xl overflow-hidden shadow-lg border-2 border-white shrink-0 group cursor-pointer"
           >
             <input
@@ -474,22 +678,30 @@ export default function LearnerProfile() {
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               {profilePicUploading ? (
                 <Loader2 className="h-6 w-6 text-white animate-spin" />
-              ) : (
+              ) : !isGraduatedArchive ? (
                 <Camera className="h-6 w-6 text-white" />
-              )}
+              ) : null}
+              {isGraduatedArchive ? (
+                <Archive className="h-6 w-6 text-white" />
+              ) : null}
             </div>
           </button>
 
           <div>
-            <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+            <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
               {learner.name}
+            </h2>
+            <div className="flex flex-wrap items-center gap-2 mt-1.5">
               <Badge className={`${getStatusColor(learner.status)} border-0 text-white`}>{learner.status}</Badge>
+              <Badge variant="outline" className={`${learner.academicStatus === 'Graduated' ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : learner.academicStatus === 'Dropped' ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                {learner.academicStatus || 'Active'}
+              </Badge>
               {learner.dateOfBirth ? (
                 <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">
                   DOB: {format(new Date(learner.dateOfBirth), 'PP')}
                 </Badge>
               ) : null}
-            </h2>
+            </div>
             <div className="flex items-center gap-4 text-muted-foreground mt-1 text-sm font-medium">
               <span className="flex items-center gap-1"><Bookmark className="h-4 w-4" /> {learner.program} ({learner.year})</span>
               <span className="flex items-center gap-1 font-mono text-[#FFB800] bg-[#FFB800]/10 px-2 rounded-md">{learner.trackingId}</span>
@@ -498,10 +710,12 @@ export default function LearnerProfile() {
         </div>
         
         {/* Quick Actions */}
-        <div className="flex flex-wrap items-center gap-2 mt-4 md:mt-0">
-            <Button onClick={() => setEditOpen(true)} variant="outline" className="rounded-xl border-gray-200 text-gray-700 bg-white hover:bg-gray-50">
-                <Edit2 className="mr-2 h-4 w-4" /> Edit Profile
-            </Button>
+        <div data-help-id="learner-profile-actions" className="flex flex-wrap items-center gap-2 mt-4 md:mt-0">
+            {!isGraduatedArchive ? (
+              <Button onClick={() => setEditOpen(true)} variant="outline" className="rounded-xl border-gray-200 text-gray-700 bg-white hover:bg-gray-50">
+                  <Edit2 className="mr-2 h-4 w-4" /> Edit Profile
+              </Button>
+            ) : null}
             {canInitiatePlacement && (
                 <Button
                     onClick={() => setPlacementOpen(true)}
@@ -535,8 +749,17 @@ export default function LearnerProfile() {
         </div>
       </div>
 
+      {isGraduatedArchive ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+          <h3 className="font-black text-emerald-900">Graduated learner archive</h3>
+          <p className="text-sm text-emerald-800 mt-1">
+            This profile is in read-only archive mode. Historical placements, visits, assessments, evaluations, and supporting records remain available, but live operational actions are disabled.
+          </p>
+        </div>
+      ) : null}
+
       {canInitiatePlacement && readiness && !readiness.isReadyForPlacement && (
-        <div className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5">
+        <div data-help-id="learner-profile-readiness" className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
           <h3 className="font-black text-amber-900">Placement readiness incomplete</h3>
           <p className="text-sm text-amber-800 mt-1">
             Complete intake details before this learner can be placed.
@@ -547,7 +770,22 @@ export default function LearnerProfile() {
         </div>
       )}
 
-      <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+      {!isGraduatedArchive && !activePlacement && placementEligibility && !placementEligibility.isEligible ? (
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
+          <h3 className="font-black text-blue-900">WEL cohort window not open for this learner</h3>
+          <p className="text-sm text-blue-800 mt-1">{placementEligibility.reason}</p>
+          {placementEligibility.schedule ? (
+            <p className="text-sm font-semibold text-blue-900 mt-3">
+              {placementEligibility.schedule.institutionCalendarType || placementEligibility.calendarType || 'Institution calendar'} · {placementEligibility.yearGroup || learner.year} · {placementEligibility.schedule.semester || 'Scheduled window'}
+              {placementEligibility.schedule.startDate ? ` · ${format(new Date(placementEligibility.schedule.startDate), 'PP')}` : ''}
+              {placementEligibility.schedule.endDate ? ` to ${format(new Date(placementEligibility.schedule.endDate), 'PP')}` : ''}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {canManageOwnership && (
+      <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h3 className="font-black text-lg text-gray-900">Operational Ownership</h3>
@@ -587,7 +825,7 @@ export default function LearnerProfile() {
               <p className="text-sm text-gray-500">No placement records yet.</p>
             ) : (
               <div className="space-y-3">
-                {placements.map((placement: any) => (
+                {placements.map((placement) => (
                   <div key={placement._id} className="rounded-2xl border border-gray-100 bg-white p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -630,15 +868,16 @@ export default function LearnerProfile() {
           </div>
         </div>
       </div>
+      )}
 
       {activePlacementManagement && (
-        <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+        <div data-help-id="learner-profile-management" className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
             <div>
               <h3 className="font-black text-lg text-gray-900">Active Placement Management</h3>
               <p className="text-sm text-gray-500">Track due dates, cadence, completion, and active blockers for this learner.</p>
             </div>
-            <Button onClick={() => setSupportOpen(true)} variant="outline" className="rounded-xl border-red-200 text-red-700 bg-red-50 hover:bg-red-100">
+            <Button data-help-id="learner-profile-open-blocker" onClick={() => setSupportOpen(true)} variant="outline" className="rounded-xl border-red-200 text-red-700 bg-red-50 hover:bg-red-100">
               <AlertTriangle className="mr-2 h-4 w-4" />
               Report Blocker
             </Button>
@@ -723,7 +962,7 @@ export default function LearnerProfile() {
 
             {(activePlacementManagement.blockers?.items || []).length > 0 ? (
               <div className="mt-4 space-y-3">
-                {activePlacementManagement.blockers.items.map((ticket: any) => (
+                {(activePlacementManagement.blockers?.items || []).map((ticket) => (
                   <div key={ticket._id} className="rounded-2xl border border-red-100 bg-white p-4">
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                       <div>
@@ -746,12 +985,12 @@ export default function LearnerProfile() {
       )}
 
       {/* Lifecycle Progress Bar */}
-      <div className="bg-white rounded-[2rem] p-6 px-10 shadow-xl border border-gray-100">
+      <div className="bg-white rounded-2xl p-6 px-10 shadow-xl border border-gray-100">
          <LifecycleProgressBar currentStage={currentStage} />
       </div>
 
       {/* Progress Section with Tabs */}
-      <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+      <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
         <div className="flex items-center gap-2 mb-6">
           <Activity className="h-5 w-5 text-emerald-500" />
           <h3 className="font-bold text-lg text-gray-900">Learner Progress Tracker</h3>
@@ -804,7 +1043,13 @@ export default function LearnerProfile() {
                 </div>
               </div>
             ) : (
-              <p className="text-center text-gray-500 py-8">Unable to load progress data</p>
+              <div className="flex flex-col items-center justify-center py-8 gap-3">
+                <AlertTriangle className="h-8 w-8 text-gray-300" />
+                <p className="text-sm text-gray-500 font-medium">Unable to load progress data</p>
+                <Button variant="outline" size="sm" className="rounded-xl" onClick={() => { setProgressLoading(true); fetchProgress() }}>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" /> Retry
+                </Button>
+              </div>
             )}
           </TabsContent>
           <TabsContent value="timeline" className="mt-6">
@@ -828,7 +1073,7 @@ export default function LearnerProfile() {
                     <p className="text-center text-gray-500 py-6">No operational evidence has been attached yet.</p>
                   ) : (
                     <div className="space-y-3">
-                      {evidenceTimeline.slice(0, 10).map((item: any) => (
+                      {evidenceTimeline.slice(0, showAllEvidence ? undefined : 10).map((item) => (
                         <div key={item._id} className="rounded-2xl bg-white border border-gray-100 p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                           <div>
                             <div className="flex flex-wrap items-center gap-2">
@@ -853,12 +1098,28 @@ export default function LearnerProfile() {
                           </div>
                         </div>
                       ))}
+                      {evidenceTimeline.length > 10 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="w-full text-gray-500 hover:text-gray-700 font-bold"
+                          onClick={() => setShowAllEvidence(prev => !prev)}
+                        >
+                          {showAllEvidence ? 'Show Less' : `Show All ${evidenceTimeline.length} Files`}
+                        </Button>
+                      )}
                     </div>
                   )}
                 </div>
               </div>
             ) : (
-              <p className="text-center text-gray-500 py-8">Unable to load timeline</p>
+              <div className="flex flex-col items-center justify-center py-8 gap-3">
+                <AlertTriangle className="h-8 w-8 text-gray-300" />
+                <p className="text-sm text-gray-500 font-medium">Unable to load timeline</p>
+                <Button variant="outline" size="sm" className="rounded-xl" onClick={() => { setProgressLoading(true); fetchProgress() }}>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" /> Retry
+                </Button>
+              </div>
             )}
           </TabsContent>
           <TabsContent value="placement" className="mt-6">
@@ -879,7 +1140,7 @@ export default function LearnerProfile() {
         {/* Left Column: Bio & placements */}
         <div className="lg:col-span-1 space-y-6">
             {/* Bio Card */}
-            <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100 relative overflow-hidden">
+            <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#FFB800]/5 rounded-bl-[100px] -z-10" />
                 <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><UserCircle2 className="h-5 w-5 text-gray-400"/> Biodata</h3>
                 <div className="space-y-4">
@@ -1002,7 +1263,7 @@ export default function LearnerProfile() {
             </div>
 
             {/* Placement History Card */}
-            <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+            <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                 <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="font-bold text-lg flex items-center gap-2"><MapPin className="h-5 w-5 text-indigo-400"/> Placement History</h3>
@@ -1028,7 +1289,7 @@ export default function LearnerProfile() {
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        {placementHistory.map((p: any) => (
+                        {placementHistory.map((p) => (
                             <div key={p.placementId} className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100/50">
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
@@ -1060,7 +1321,7 @@ export default function LearnerProfile() {
         <div className="lg:col-span-2 space-y-6">
             
             {/* Assessments */}
-            <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+            <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="font-bold text-lg flex items-center gap-2"><Award className="h-5 w-5 text-emerald-500"/> Competency Assessments</h3>
                     {(currentStage === 'Placed' || currentStage === 'Monitored') && (
@@ -1082,7 +1343,7 @@ export default function LearnerProfile() {
                 ) : (
                     <div className="space-y-4">
                         {assessments.map((a, i) => (
-                            <div key={i} className="flex flex-col md:flex-row gap-4 p-4 border border-gray-50 rounded-2xl bg-emerald-50/30">
+                            <button key={i} type="button" onClick={() => setAssessmentPreview(a)} className="w-full text-left flex flex-col md:flex-row gap-4 p-4 border border-gray-50 rounded-2xl bg-emerald-50/30 hover:bg-emerald-50 transition-colors">
                                 <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-2">
                                         <Badge variant="outline" className="text-emerald-700 bg-emerald-100/50 border-emerald-200">{a.assessmentType}</Badge>
@@ -1098,14 +1359,14 @@ export default function LearnerProfile() {
                                         <div className="text-[10px] uppercase font-bold text-gray-400">Score</div>
                                     </div>
                                 </div>
-                            </div>
+                            </button>
                         ))}
                     </div>
                 )}
             </div>
 
             {/* Employer Evaluations */}
-            <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100 mt-6 lg:mt-0 lg:col-span-2">
+            <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100 mt-6 lg:mt-0 lg:col-span-2">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="font-bold text-lg flex items-center gap-2"><Briefcase className="h-5 w-5 text-purple-500"/> Employer Evaluations</h3>
                 </div>
@@ -1117,7 +1378,7 @@ export default function LearnerProfile() {
                 ) : (
                     <div className="space-y-4">
                         {evaluations?.map((e, i) => (
-                            <div key={i} className="flex flex-col md:flex-row gap-4 p-4 border border-gray-50 rounded-2xl bg-purple-50/30">
+                            <button key={i} type="button" onClick={() => setEvaluationPreview(e)} className="w-full text-left flex flex-col md:flex-row gap-4 p-4 border border-gray-50 rounded-2xl bg-purple-50/30 hover:bg-purple-50 transition-colors">
                                 <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-2">
                                         <Badge variant="outline" className="text-purple-700 bg-purple-100/50 border-purple-200">{e.partner?.name}</Badge>
@@ -1153,7 +1414,7 @@ export default function LearnerProfile() {
                                         {e.wouldHire ? 'Would Hire' : 'No Hire'}
                                     </div>
                                 </div>
-                            </div>
+                            </button>
                         ))}
                     </div>
                 )}
@@ -1161,7 +1422,7 @@ export default function LearnerProfile() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 lg:mt-0">
                  {/* Monitoring Visits */}
-                <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+                <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                     <div className="flex items-center justify-between mb-4">
                         <h3 className="font-bold text-lg flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-blue-500"/> Monitoring Visits</h3>
                         {(currentStage === 'Placed' || currentStage === 'Monitored') && (
@@ -1183,26 +1444,26 @@ export default function LearnerProfile() {
                     ) : (
                         <div className="space-y-3">
                             {visits.map((v, i) => (
-                                <div key={i} className="p-3 border rounded-xl hover:bg-gray-50 transition-colors">
+                                <button key={i} type="button" onClick={() => setVisitPreview(v)} className="w-full text-left p-3 border border-blue-100 rounded-xl bg-blue-50/30 hover:bg-blue-50 transition-colors">
                                     <div className="flex justify-between items-start">
                                         <span className="font-bold text-sm text-gray-900">{v.visitType} Visit</span>
                                         <span className="text-xs text-gray-500">{format(new Date(v.visitDate), 'MMM d, yyyy')}</span>
                                     </div>
                                     <p className="text-xs text-gray-600 mt-2 line-clamp-2">{v.feedback}</p>
-                                </div>
+                                </button>
                             ))}
                         </div>
                     )}
                 </div>
 
                 {/* Semester Reports */}
-                <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-gray-100">
+                <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                     <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><FileText className="h-5 w-5 text-amber-500"/> Semester Reports</h3>
                     {semesterReports.length === 0 ? (
                         <p className="text-sm text-gray-500 text-center py-4">No semester reports generated yet.</p>
                     ) : (
                         <div className="space-y-3">
-                            {semesterReports.map((r: { _id: string, semester: string, academicYear: string, status: string, summary?: { totalLearners: number, placed: number } }, i: number) => (
+                            {semesterReports.map((r, i) => (
                                 <div key={i} className="p-3 border rounded-xl hover:bg-amber-50 transition-colors bg-white cursor-pointer" onClick={() => navigate(`/semester-reports/${r._id}`)}>
                                     <div className="flex justify-between items-start">
                                         <span className="font-bold text-sm text-gray-900">{r.semester} — {r.academicYear}</span>
@@ -1223,18 +1484,6 @@ export default function LearnerProfile() {
             </div>
 
         </div>
-
-        {/* Documents Section - Horizontal Card Layout */}
-        <div className="bg-white rounded-[2rem] p-3 md:p-6 shadow-xl border border-gray-100 mt-6 lg:mt-0 lg:col-span-2">
-            <div className="p-4 md:p-8 border border-gray-50 rounded-[2.5rem] bg-violet-50/30">
-                <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-                    <Paperclip className="h-5 w-5 text-violet-500"/> Documents
-                    <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-lg">{documents.length}</span>
-                </h3>
-                <DocumentList documents={documents} onDelete={fetchDocuments} loading={docsLoading} />
-            </div>
-        </div>
-
       </div>
 
       {/* Inline Dialogs */}
@@ -1249,31 +1498,172 @@ export default function LearnerProfile() {
       </Dialog>
 
       <Dialog open={visitOpen} onOpenChange={setVisitOpen}>
-        <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh]">
-          <DialogHeader>
-            <DialogTitle>Log Visit for {learner.name}</DialogTitle>
-            <DialogDescription>Record a monitoring visit for this learner.</DialogDescription>
-          </DialogHeader>
-          <MonitoringVisitForm onSuccess={() => { setVisitOpen(false); handleFormSuccess(); }} initialData={{ learner: learner._id }} />
+        <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 bg-white text-gray-900 shadow-2xl p-0">
+          <div className="p-8">
+            <DialogHeader className="mb-6">
+              <DialogTitle className="text-2xl font-black text-gray-900">Log Visit for {learner.name}</DialogTitle>
+              <DialogDescription className="font-medium text-gray-500">Record a monitoring visit for this learner.</DialogDescription>
+            </DialogHeader>
+            <MonitoringVisitForm onSuccess={() => { setVisitOpen(false); handleFormSuccess(); }} initialData={{ learner: learner._id }} />
+          </div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={assessmentOpen} onOpenChange={setAssessmentOpen}>
-        <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-[2rem] border-0 shadow-2xl p-0">
+        <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
               <DialogTitle className="text-2xl font-black">Assessment for {learner.name}</DialogTitle>
               <DialogDescription className="font-bold text-gray-400">Record a competency evaluation for this learner.</DialogDescription>
             </DialogHeader>
-            <div className="bg-gray-900 p-8 rounded-[2rem] shadow-inner">
+            <div className="bg-gray-900 p-8 rounded-2xl shadow-inner">
               <CompetencyAssessmentForm onSuccess={() => { setAssessmentOpen(false); handleFormSuccess(); }} initialData={{ learner: learner._id }} />
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-[700px] overflow-y-auto max-h-[90vh] rounded-[2rem] border-0 shadow-2xl p-0">
+      <Dialog open={Boolean(assessmentPreview)} onOpenChange={(open) => { if (!open) setAssessmentPreview(null) }}>
+        <DialogContent className="sm:max-w-[720px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle>Competency Assessment Preview</DialogTitle>
+            <DialogDescription>Read-only view of the recorded learner assessment.</DialogDescription>
+          </DialogHeader>
+          {assessmentPreview ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">{assessmentPreview.assessmentType}</Badge>
+                <Badge variant="outline">{format(new Date(assessmentPreview.assessmentDate), 'PP')}</Badge>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Technical Skills</p>
+                  <p className="mt-2 text-sm text-gray-900">{assessmentPreview.technicalSkills || 'N/A'}</p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Soft Skills</p>
+                  <p className="mt-2 text-sm text-gray-900">{assessmentPreview.softSkills || 'N/A'}</p>
+                </div>
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-emerald-700">Overall Score</p>
+                  <p className="mt-2 text-3xl font-black text-emerald-600">{assessmentPreview.overallScore ?? 'N/A'}</p>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Recommendations</p>
+                <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{assessmentPreview.recommendations || 'No recommendations recorded.'}</p>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(evaluationPreview)} onOpenChange={(open) => { if (!open) setEvaluationPreview(null) }}>
+        <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle>Employer Evaluation Preview</DialogTitle>
+            <DialogDescription>Read-only view of employer feedback for this learner.</DialogDescription>
+          </DialogHeader>
+          {evaluationPreview ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="bg-purple-100 text-purple-700 border-purple-200">{evaluationPreview.partner?.name || 'Partner'}</Badge>
+                <Badge variant="outline" className="border-blue-200 text-blue-700 bg-blue-50">{format(new Date(evaluationPreview.evaluationDate), 'PP')}</Badge>
+                <Badge className={evaluationPreview.wouldHire ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-red-100 text-red-700 border-red-200'}>
+                  {evaluationPreview.wouldHire ? 'Would Hire' : 'Would Not Hire'}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 md:col-span-2">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Evaluator</p>
+                  <p className="mt-2 text-sm text-gray-900">{evaluationPreview.evaluatorName} ({evaluationPreview.evaluatorPosition})</p>
+                </div>
+                <div className="rounded-2xl border border-purple-100 bg-purple-50/60 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-purple-700">Overall Score</p>
+                  <p className="mt-2 text-3xl font-black text-purple-600">{evaluationPreview.overallScore ?? 'N/A'}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-emerald-700">Strengths</p>
+                  <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{evaluationPreview.strengths || 'No strengths recorded.'}</p>
+                </div>
+                <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-amber-700">Areas For Improvement</p>
+                  <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{evaluationPreview.areasForImprovement || 'No improvement areas recorded.'}</p>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Metrics</p>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-700">
+                  <p>Punctuality & Attendance: {evaluationPreview.metrics?.punctualityAndAttendance ?? 'N/A'}</p>
+                  <p>Technical Skills: {evaluationPreview.metrics?.technicalSkills ?? 'N/A'}</p>
+                  <p>Ability To Learn: {evaluationPreview.metrics?.abilityToLearn ?? 'N/A'}</p>
+                  <p>Teamwork & Communication: {evaluationPreview.metrics?.teamworkAndCommunication ?? 'N/A'}</p>
+                  <p>Initiative & Problem Solving: {evaluationPreview.metrics?.initiativeAndProblemSolving ?? 'N/A'}</p>
+                </div>
+                {evaluationPreview.additionalComments ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">Additional Comments</p>
+                    <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{evaluationPreview.additionalComments}</p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(visitPreview)} onOpenChange={(open) => { if (!open) setVisitPreview(null) }}>
+        <DialogContent className="sm:max-w-[720px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle>Monitoring Visit Preview</DialogTitle>
+            <DialogDescription>Read-only view of the selected monitoring visit.</DialogDescription>
+          </DialogHeader>
+          {visitPreview ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="bg-blue-100 text-blue-700 border-blue-200">{visitPreview.visitType} Visit</Badge>
+                <Badge variant="outline">{format(new Date(visitPreview.visitDate), 'PP')}</Badge>
+                {visitPreview.status ? <Badge variant="outline">{visitPreview.status}</Badge> : null}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {visitPreview.visitorName ? (
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">Visitor</p>
+                    <p className="mt-2 text-sm text-gray-900">{visitPreview.visitorName}</p>
+                  </div>
+                ) : null}
+                {visitPreview.location ? (
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">Location</p>
+                    <p className="mt-2 text-sm text-gray-900">{visitPreview.location}</p>
+                  </div>
+                ) : null}
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Feedback</p>
+                <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{visitPreview.feedback || 'No feedback recorded.'}</p>
+              </div>
+              {visitPreview.observations ? (
+                <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Observations</p>
+                  <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{visitPreview.observations}</p>
+                </div>
+              ) : null}
+              {visitPreview.recommendations ? (
+                <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Recommendations</p>
+                  <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{visitPreview.recommendations}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen && !isGraduatedArchive} onOpenChange={setEditOpen}>
+        <DialogContent className="sm:max-w-[700px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
               <DialogTitle className="text-2xl font-black">Update Learner Profile</DialogTitle>
@@ -1293,7 +1683,7 @@ export default function LearnerProfile() {
                 <p className="mt-2 text-sm font-bold text-slate-900">{learner.academicStatus || 'Active'} · {learner.status || 'Pending'}</p>
               </div>
             </div>
-            <div className="bg-white p-8 rounded-[2rem] shadow-inner border border-slate-200">
+            <div className="bg-white p-8 rounded-2xl shadow-inner border border-slate-200">
               <LearnerForm
                 onSuccess={() => { setEditOpen(false); handleFormSuccess(); }}
                 mode="profile-edit"
@@ -1310,7 +1700,7 @@ export default function LearnerProfile() {
             <DialogTitle>Report Placement Blocker</DialogTitle>
             <DialogDescription>Create a support ticket linked to this learner and active placement.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div data-help-id="learner-profile-blocker-form" className="space-y-4">
             <Input
               placeholder="Subject"
               value={supportDraft.subject}
@@ -1356,7 +1746,7 @@ export default function LearnerProfile() {
       </Dialog>
 
       <Dialog open={learnerAgreementOpen} onOpenChange={setLearnerAgreementOpen}>
-        <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh] rounded-[2rem] border-0 shadow-2xl p-0">
+        <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
               <DialogTitle className="text-2xl font-black">Learner Agreement</DialogTitle>

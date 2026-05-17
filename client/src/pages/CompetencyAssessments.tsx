@@ -24,6 +24,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { useSearchParams } from "react-router-dom"
 import { CompetencyAssessmentForm } from "./CompetencyAssessmentForm"
 import { DataTable } from "@/components/ui/data-table"
 import { useAuth } from "@/context/AuthContext"
@@ -136,6 +137,8 @@ export default function CompetencyAssessments() {
     const [viewingAssessment, setViewingAssessment] = useState<CompetencyAssessment | null>(null)
     const [refreshKey, setRefreshKey] = useState(0)
     const { authFetch, user } = useAuth()
+    const [searchParams, setSearchParams] = useSearchParams()
+    const isEditingExistingAssessment = Boolean(editingAssessment?._id)
 
     useEffect(() => {
         const fetchData = async () => {
@@ -152,11 +155,37 @@ export default function CompetencyAssessments() {
         fetchData()
     }, [refreshKey, authFetch])
 
+    useEffect(() => {
+        const learnerId = searchParams.get("learnerId")
+        if (!learnerId || open || editingAssessment) return
+        setEditingAssessment({
+            learner: { _id: learnerId, name: "" },
+            assessmentDate: new Date().toISOString(),
+            assessmentType: "Practical",
+            technicalSkills: "",
+            softSkills: "",
+            professionalism: 3,
+            problemSolving: 3,
+            overallScore: 0,
+            assessorName: "",
+            recommendations: searchParams.get("sourceVisit")
+                ? "Initiated from a low-rating monitoring visit. Review visit observations before scoring."
+                : "",
+        } as CompetencyAssessment)
+        setOpen(true)
+    }, [editingAssessment, open, searchParams])
+
     const handleSuccess = () => {
         setOpen(false)
         setEditingAssessment(null)
+        if (searchParams.get("learnerId")) {
+            const next = new URLSearchParams(searchParams)
+            next.delete("learnerId")
+            next.delete("sourceVisit")
+            setSearchParams(next, { replace: true })
+        }
         setRefreshKey(prev => prev + 1)
-        toast.success(editingAssessment ? "Assessment updated" : "Assessment registered")
+        toast.success(isEditingExistingAssessment ? "Assessment updated" : "Assessment registered")
     }
 
     const handleEdit = (assessment: CompetencyAssessment) => {
@@ -200,9 +229,9 @@ export default function CompetencyAssessments() {
                         <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-[2rem] border-0 shadow-2xl p-0">
                             <div className="p-8">
                                 <DialogHeader className="mb-6">
-                                <DialogTitle className="text-2xl font-black">{editingAssessment ? 'Edit Assessment' : 'New Competency Assessment'}</DialogTitle>
+                                <DialogTitle className="text-2xl font-black">{isEditingExistingAssessment ? 'Edit Assessment' : 'New Competency Assessment'}</DialogTitle>
                                 <DialogDescription className="font-bold text-gray-400">
-                                    {editingAssessment ? 'Update evaluation details.' : 'Register a new skills evaluation.'}
+                                    {isEditingExistingAssessment ? 'Update evaluation details.' : 'Register a new skills evaluation.'}
                                 </DialogDescription>
                                 </DialogHeader>
                                 <div className="bg-gray-900 p-8 rounded-[2rem] shadow-inner">
