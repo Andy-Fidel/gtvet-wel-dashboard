@@ -5,6 +5,8 @@ const industryPartnerSchema = new mongoose.Schema({
   sector: { type: String, required: true },
   region: { type: String, required: true },
   district: { type: String },
+  tradeArea: { type: String },
+  town: { type: String },
   location: { type: String },
   contactPerson: { type: String },
   contactPhone: { type: String },
@@ -17,6 +19,15 @@ const industryPartnerSchema = new mongoose.Schema({
     enum: ['Active', 'Inactive'],
     default: 'Active'
   },
+  approvalStatus: {
+    type: String,
+    enum: ['PendingHQApproval', 'Approved', 'Rejected'],
+    default: 'PendingHQApproval'
+  },
+  approvalRequestedAt: { type: Date },
+  approvalReviewedAt: { type: Date },
+  approvalReviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  approvalComment: { type: String, default: '' },
   programs: [{ type: String }],
   mouDocumentUrl: { type: String },
   addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -26,5 +37,6 @@ const industryPartnerSchema = new mongoose.Schema({
 industryPartnerSchema.index({ region: 1 });
 industryPartnerSchema.index({ sector: 1 });
 industryPartnerSchema.index({ status: 1 });
+industryPartnerSchema.index({ approvalStatus: 1 });
 
 export const IndustryPartner = mongoose.model('IndustryPartner', industryPartnerSchema);

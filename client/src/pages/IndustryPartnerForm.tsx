@@ -22,6 +22,8 @@ const formSchema = z.object({
   sector: z.string().min(2, "Sector is required"),
   region: z.string().min(2, "Region is required"),
   district: z.string().optional(),
+  tradeArea: z.string().optional(),
+  town: z.string().optional(),
   location: z.string().optional(),
   contactPerson: z.string().optional(),
   contactPhone: z.string().optional(),
@@ -54,7 +56,7 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
   const form = useForm<IndustryPartnerFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: initialData || {
-      name: "", sector: "", region: "", district: "", location: "",
+      name: "", sector: "", region: "", district: "", tradeArea: "", town: "", location: "",
       contactPerson: "", contactPhone: "", contactEmail: "", website: "",
       totalSlots: 0, status: "Active", mouDocumentUrl: "",
     },
@@ -134,6 +136,20 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Total Capacity (Slots) *</FormLabel>
                   <FormControl><Input type="number" {...field} value={Number.isFinite(field.value) ? field.value : ""} onChange={e => field.onChange(normalizeNumberInput(e.target.value))} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+            )} />
+            <FormField control={form.control} name="tradeArea" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Trade Area</FormLabel>
+                  <FormControl><Input placeholder="e.g. Suame Magazine" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+            )} />
+            <FormField control={form.control} name="town" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Town</FormLabel>
+                  <FormControl><Input placeholder="e.g. Kumasi" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />

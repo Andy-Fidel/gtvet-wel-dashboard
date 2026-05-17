@@ -7,21 +7,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { toast } from "sonner"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
 import { SearchPartnerDialog } from "@/components/SearchPartnerDialog"
+import type { IndustryPartner as SharedIndustryPartner } from "@/types/models"
 
-export type IndustryPartner = {
-  _id: string;
-  name: string;
-  sector: string;
-  region: string;
-  location?: string;
-  contactPerson?: string;
-  contactPhone?: string;
-  contactEmail?: string;
-  website?: string;
-  totalSlots: number;
-  usedSlots: number;
-  status: 'Active' | 'Inactive';
-  programs: string[];
+export type IndustryPartner = SharedIndustryPartner & {
   mouDocumentUrl?: string;
 }
 
@@ -33,11 +21,13 @@ export default function IndustryPartners() {
   const [editingPartner, setEditingPartner] = useState<IndustryPartner | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const { authFetch, user } = useAuth()
+  const isApprovedPartner = (partner: IndustryPartner) => !partner.approvalStatus || partner.approvalStatus === 'Approved'
 
   useEffect(() => {
     const fetchPartners = async () => {
       try {
-        const res = await authFetch('/api/industry-partners')
+        const includeAll = ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'].includes(user?.role || '')
+        const res = await authFetch(`/api/industry-partners${includeAll ? '?includeAll=1' : ''}`)
         if (!res.ok) throw new Error("Failed to fetch")
         const data = await res.json()
         setPartners(data)
@@ -49,13 +39,17 @@ export default function IndustryPartners() {
       }
     }
     fetchPartners()
-  }, [refreshKey, authFetch])
+  }, [refreshKey, authFetch, user?.role])
 
   const handleSuccess = () => {
     setOpen(false)
     setEditingPartner(null)
     setRefreshKey(prev => prev + 1)
-    toast.success(editingPartner ? "Partner updated" : "Partner created")
+    if (editingPartner) {
+      toast.success("Partner updated")
+    } else {
+      toast.success(user?.role === 'SuperAdmin' ? "Partner created" : "Partner submitted for HQ approval")
+    }
   }
 
   const handleDelete = async (id: string) => {
@@ -81,9 +75,9 @@ export default function IndustryPartners() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.message || "Failed to create account")
       
-      toast.success("Account Created", { 
-          description: `Temporary Password: ${data.defaultPassword}`,
-          duration: 10000 
+      toast.success("Account created", {
+        description: "A secure setup link has been issued to the partner email address.",
+        duration: 10000,
       })
     } catch (err) {
       const e = err as Error;
@@ -103,7 +97,7 @@ export default function IndustryPartners() {
         </div>
         {['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'].includes(user?.role || '') && (
           <div className="flex flex-col sm:flex-row items-start sm:items-center w-full md:w-auto mt-4 md:mt-0 space-y-2 sm:space-y-0 sm:space-x-2">
-                    <Button onClick={() => { setEditingPartner(null); setSearchOpen(true); }} className="bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-6 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
+                    <Button data-help-id="industry-partners-add" onClick={() => { setEditingPartner(null); setSearchOpen(true); }} className="bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-6 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
               <Plus className="mr-2 h-5 w-5" /> Add Partner
             </Button>
           </div>
@@ -146,7 +140,7 @@ export default function IndustryPartners() {
           <p className="text-gray-400 mt-2 font-medium">Add some industry partners to get started.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
+        <div data-help-id="industry-partners-grid" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
           {partners.map(partner => (
             <Card key={partner._id} className="bg-white border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-xl hover:-translate-y-1 transition-all duration-300 rounded-[2rem] overflow-hidden group">
               <div className="h-2 w-full bg-[#FFB800]" />
@@ -157,6 +151,15 @@ export default function IndustryPartners() {
                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 bg-gray-100 text-gray-600 mt-2 uppercase tracking-wide">
                         {partner.sector}
                      </span>
+                     {partner.approvalStatus && partner.approvalStatus !== 'Approved' && (
+                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 mt-2 ml-2 uppercase tracking-wide ${
+                         partner.approvalStatus === 'PendingHQApproval'
+                           ? 'bg-amber-100 text-amber-700'
+                           : 'bg-rose-100 text-rose-700'
+                       }`}>
+                         {partner.approvalStatus === 'PendingHQApproval' ? 'Pending HQ' : 'Rejected'}
+                       </span>
+                     )}
                   </div>
                   {partner.status === 'Active' ? (
                      <div className="h-3 w-3 rounded-full bg-emerald-400 border-2 border-white shadow-sm" title="Active"></div>
@@ -212,7 +215,13 @@ export default function IndustryPartners() {
 
                 {(user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') && (
                     <div className="flex gap-2 pt-2 border-t border-gray-100 mt-4">
-                         <Button variant="outline" size="sm" onClick={() => handleCreateAccount(partner._id, partner.contactEmail)} className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 font-bold h-9">
+                         <Button
+                           variant="outline"
+                           size="sm"
+                           onClick={() => handleCreateAccount(partner._id, partner.contactEmail)}
+                           disabled={!isApprovedPartner(partner) || partner.status !== 'Active'}
+                           className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 font-bold h-9"
+                         >
                              <UserPlus className="h-4 w-4 mr-2" /> Portal
                          </Button>
                          <Button variant="outline" size="sm" onClick={() => { setEditingPartner(partner); setOpen(true); }} className="flex-1 hover:bg-[#FFB800]/10 hover:text-[#FFB800] border-gray-200 font-bold h-9">

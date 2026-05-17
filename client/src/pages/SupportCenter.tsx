@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { AlertTriangle, ArrowUpRight, BookOpen, ChevronDown, CircleHelp, Headset, LifeBuoy, MessageSquarePlus, SendHorizonal, ShieldAlert, Ticket, UserPlus } from "lucide-react"
@@ -16,6 +16,7 @@ import { DocumentList } from "@/components/DocumentList"
 import { DocumentUpload } from "@/components/DocumentUpload"
 import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
 import { clearOfflineConflictBridge, getOfflineConflictBridge } from "@/lib/offlineConflictBridge"
+import { getGuideCatalog } from "@/components/HelpWizard"
 
 type RoleKey = "SuperAdmin" | "RegionalAdmin" | "Admin" | "Manager" | "Staff" | "IndustryPartner" | "Guardian"
 type TicketStatus = "Open" | "InProgress" | "Resolved" | "Closed"
@@ -104,8 +105,27 @@ interface SupportAssignee {
   institution?: string
 }
 
+interface SupportTicketStats {
+  total: number
+  open: number
+  inProgress: number
+  resolved: number
+  breached: number
+  escalated: number
+  unread: number
+  ownedByMe: number
+}
+
+interface SupportQueueStats {
+  awaitingSupport: number
+  urgent: number
+  unassigned: number
+  incidents: number
+}
+
 const ALL_STATUSES = "__all_statuses"
 const ALL_QUEUE_VIEWS = "__all_queue_views"
+const ALL_GUIDE_CATEGORIES = "__all_guide_categories"
 const NEW_TICKET_DRAFT_KEY = "draft:support:new-ticket"
 
 const ROLE_GUIDES: Record<RoleKey, Array<{ title: string; summary: string; steps: string[] }>> = {
@@ -154,6 +174,27 @@ export default function SupportCenter() {
   const [tickets, setTickets] = useState<SupportTicket[]>([])
   const [assignees, setAssignees] = useState<SupportAssignee[]>([])
   const [loading, setLoading] = useState(true)
+  const [ticketPage, setTicketPage] = useState(1)
+  const [ticketPageSize] = useState(10)
+  const [ticketTotal, setTicketTotal] = useState(0)
+  const [ticketTotalPages, setTicketTotalPages] = useState(1)
+  const [focusedTicket, setFocusedTicket] = useState<SupportTicket | null>(null)
+  const [ticketStats, setTicketStats] = useState<SupportTicketStats>({
+    total: 0,
+    open: 0,
+    inProgress: 0,
+    resolved: 0,
+    breached: 0,
+    escalated: 0,
+    unread: 0,
+    ownedByMe: 0,
+  })
+  const [hqQueueStats, setHqQueueStats] = useState<SupportQueueStats>({
+    awaitingSupport: 0,
+    urgent: 0,
+    unassigned: 0,
+    incidents: 0,
+  })
   const [ticketOpen, setTicketOpen] = useState(false)
   const [expandedFaq, setExpandedFaq] = useState<number | null>(0)
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
@@ -171,6 +212,8 @@ export default function SupportCenter() {
   const composeOfflineReview = searchParams.get("compose") === "1" || searchParams.get("offlineReview") === "1"
   const replyOfflineReview = searchParams.get("offlineReply") === "1"
   const [activeTab, setActiveTab] = useState(deepLinkedTicketId ? "tickets" : "guides")
+  const [guideSearch, setGuideSearch] = useState("")
+  const [guideCategory, setGuideCategory] = useState(ALL_GUIDE_CATEGORIES)
 
   const role = (user?.role || "Staff") as RoleKey
   const canManageTickets = role === "SuperAdmin" || role === "RegionalAdmin" || role === "Admin"
@@ -204,26 +247,50 @@ export default function SupportCenter() {
     })
   }, [replyDrafts])
 
-  const fetchTickets = async () => {
+  const fetchTickets = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
       if (statusFilter) params.set("status", statusFilter)
+      if (queueView) params.set("queueView", queueView)
+      params.set("page", String(ticketPage))
+      params.set("pageSize", String(ticketPageSize))
+      if (deepLinkedTicketId) params.set("focusedTicketId", deepLinkedTicketId)
       const res = await authFetch(`/api/support-tickets?${params.toString()}`)
       if (!res.ok) throw new Error("Failed to fetch support tickets")
       const data = await res.json()
-      setTickets(data)
+      setTickets(Array.isArray(data.items) ? data.items : [])
+      setTicketTotal(typeof data.total === "number" ? data.total : 0)
+      setTicketTotalPages(typeof data.totalPages === "number" ? data.totalPages : 1)
+      setTicketPage(typeof data.page === "number" ? data.page : 1)
+      setFocusedTicket(data.focusedTicket ?? null)
+      setTicketStats(data.stats ?? {
+        total: 0,
+        open: 0,
+        inProgress: 0,
+        resolved: 0,
+        breached: 0,
+        escalated: 0,
+        unread: 0,
+        ownedByMe: 0,
+      })
+      setHqQueueStats(data.hqQueueStats ?? {
+        awaitingSupport: 0,
+        urgent: 0,
+        unassigned: 0,
+        incidents: 0,
+      })
     } catch (error) {
       console.error("Error fetching support tickets:", error)
       toast.error("Failed to load support tickets")
     } finally {
       setLoading(false)
     }
-  }
+  }, [authFetch, deepLinkedTicketId, queueView, statusFilter, ticketPage, ticketPageSize])
 
   useEffect(() => {
     fetchTickets()
-  }, [statusFilter])
+  }, [fetchTickets])
 
   useEffect(() => {
     if (deepLinkedTicketId) {
@@ -285,45 +352,25 @@ export default function SupportCenter() {
   }, [tickets])
 
   const visibleGuides = ROLE_GUIDES[role] || ROLE_GUIDES.Staff
-
-  const awaitingCurrentUser = (ticket: SupportTicket) => {
-    if (ticket.awaitingParty === "Support") {
-      return canManageTickets || ticket.isOwnedByCurrentUser
-    }
-    if (ticket.awaitingParty === "Partner") {
-      return role === "IndustryPartner"
-    }
-    if (ticket.awaitingParty === "Institution") {
-      return role === "Admin" || role === "Manager" || role === "Staff"
-    }
-    if (ticket.awaitingParty === "Requester") {
-      return ticket.requester._id === user?._id
-    }
-    return false
-  }
+  const guideCatalog = useMemo(() => getGuideCatalog(role), [role])
+  const visibleGuideCatalog = useMemo(() => {
+    const query = guideSearch.trim().toLowerCase()
+    return guideCatalog.filter((guide) => {
+      const matchesCategory = guideCategory === ALL_GUIDE_CATEGORIES || guide.category === guideCategory
+      const matchesQuery =
+        !query ||
+        guide.label.toLowerCase().includes(query) ||
+        guide.catalogSummary.toLowerCase().includes(query) ||
+        guide.category.toLowerCase().includes(query)
+      return matchesCategory && matchesQuery
+    })
+  }, [guideCatalog, guideCategory, guideSearch])
 
   const visibleTickets = useMemo(() => {
-    let filteredTickets = tickets
-
-    if (queueView === "new") {
-      filteredTickets = tickets.filter((ticket) => ticket.hasUnreadChanges)
-    } else if (queueView === "owned") {
-      filteredTickets = tickets.filter((ticket) => ticket.isOwnedByCurrentUser)
-    } else if (queueView === "awaiting") {
-      filteredTickets = tickets.filter(awaitingCurrentUser)
-    }
-
-    if (!deepLinkedTicketId) {
-      return filteredTickets
-    }
-
-    if (filteredTickets.some((ticket) => ticket._id === deepLinkedTicketId)) {
-      return filteredTickets
-    }
-
-    const deepLinkedTicket = tickets.find((ticket) => ticket._id === deepLinkedTicketId)
-    return deepLinkedTicket ? [deepLinkedTicket, ...filteredTickets] : filteredTickets
-  }, [deepLinkedTicketId, queueView, tickets, user?._id])
+    if (!focusedTicket) return tickets
+    if (tickets.some((ticket) => ticket._id === focusedTicket._id)) return tickets
+    return [focusedTicket, ...tickets]
+  }, [focusedTicket, tickets])
 
   useEffect(() => {
     if (!deepLinkedTicketId || loading || activeTab !== "tickets") return
@@ -337,24 +384,6 @@ export default function SupportCenter() {
 
     return () => window.cancelAnimationFrame(frame)
   }, [activeTab, deepLinkedTicketId, loading, visibleTickets.length])
-
-  const ticketStats = useMemo(() => ({
-    total: tickets.length,
-    open: tickets.filter((ticket) => ticket.status === "Open").length,
-    inProgress: tickets.filter((ticket) => ticket.status === "InProgress").length,
-    resolved: tickets.filter((ticket) => ticket.status === "Resolved").length,
-    breached: tickets.filter((ticket) => ticket.slaStatus?.hasBreach).length,
-    escalated: tickets.filter((ticket) => ticket.escalationLevel && ticket.escalationLevel !== "None").length,
-    unread: tickets.filter((ticket) => ticket.hasUnreadChanges).length,
-    ownedByMe: tickets.filter((ticket) => ticket.isOwnedByCurrentUser).length,
-  }), [tickets])
-
-  const hqQueueStats = useMemo(() => ({
-    awaitingSupport: tickets.filter((ticket) => ticket.awaitingParty === "Support").length,
-    urgent: tickets.filter((ticket) => ticket.priority === "Urgent").length,
-    unassigned: tickets.filter((ticket) => !ticket.assignedTo?._id).length,
-    incidents: tickets.filter((ticket) => ticket.ticketType === "Incident").length,
-  }), [tickets])
 
   const getStatusBadge = (status: TicketStatus) => {
     if (status === "Resolved") return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Resolved</Badge>
@@ -383,6 +412,10 @@ export default function SupportCenter() {
 
     return incidentType ? labels[incidentType] || incidentType : ""
   }
+
+  useEffect(() => {
+    setTicketPage(1)
+  }, [queueView, statusFilter])
 
   const handleCreateTicket = async () => {
     try {
@@ -635,7 +668,7 @@ export default function SupportCenter() {
               Role-specific guides, common answers, and support tickets in one place.
             </p>
           </div>
-          <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={() => setTicketOpen(true)}>
+          <Button data-help-id="support-new-ticket" className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={() => setTicketOpen(true)}>
             <MessageSquarePlus className="h-4 w-4 mr-2" />
             New Ticket
           </Button>
@@ -644,13 +677,72 @@ export default function SupportCenter() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="bg-gray-100/70 p-1 rounded-2xl inline-flex h-auto">
-          <TabsTrigger value="guides" className="rounded-xl px-5 py-2.5 font-bold data-[state=active]:bg-white">{isHQ ? "HQ Playbook" : "Role Guides"}</TabsTrigger>
+          <TabsTrigger data-help-id="support-guides-tab" value="guides" className="rounded-xl px-5 py-2.5 font-bold data-[state=active]:bg-white">{isHQ ? "HQ Playbook" : "Role Guides"}</TabsTrigger>
           <TabsTrigger value="faq" className="rounded-xl px-5 py-2.5 font-bold data-[state=active]:bg-white">FAQ</TabsTrigger>
           <TabsTrigger value="tickets" className="rounded-xl px-5 py-2.5 font-bold data-[state=active]:bg-white">{isHQ ? "Admin Queue" : "Support Tickets"}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="guides" className="mt-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-6">
+            <Card className="rounded-[2rem] border border-amber-100 bg-amber-50/60 shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
+                  <CircleHelp className="h-5 w-5 text-amber-600" />
+                  Walkthrough Library
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-4">
+                  <Input
+                    placeholder="Search walkthroughs by page or workflow..."
+                    value={guideSearch}
+                    onChange={(e) => setGuideSearch(e.target.value)}
+                    className="rounded-xl border-amber-200 bg-white"
+                  />
+                  <Select value={guideCategory} onValueChange={setGuideCategory}>
+                    <SelectTrigger className="rounded-xl border-amber-200 bg-white">
+                      <SelectValue placeholder="All categories" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_GUIDE_CATEGORIES}>All categories</SelectItem>
+                      <SelectItem value="Operations">Operations</SelectItem>
+                      <SelectItem value="Learners">Learners</SelectItem>
+                      <SelectItem value="Reporting">Reporting</SelectItem>
+                      <SelectItem value="Governance">Governance</SelectItem>
+                      <SelectItem value="Partners">Partners</SelectItem>
+                      <SelectItem value="Personal">Personal</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {visibleGuideCatalog.map((guide) => (
+                  <div key={guide.key} className="rounded-2xl border border-amber-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="font-black text-slate-900">{guide.label}</p>
+                      <Badge className="bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100">{guide.category}</Badge>
+                    </div>
+                    <p className="mt-2 min-h-[60px] text-sm text-slate-600">{guide.catalogSummary}</p>
+                    <Button
+                      variant="outline"
+                      className="mt-4 w-full rounded-xl border-amber-200 text-amber-700 hover:bg-amber-50"
+                      onClick={() => navigate(`${guide.launchPath}?help=1&guide=${guide.key}&restart=1`)}
+                    >
+                      <ArrowUpRight className="mr-2 h-4 w-4" />
+                      Open Walkthrough
+                    </Button>
+                  </div>
+                ))}
+                </div>
+                {visibleGuideCatalog.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-amber-200 bg-white p-8 text-center text-sm text-slate-500">
+                    No walkthroughs match that filter.
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card className={`${isHQ ? "bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white" : "bg-gradient-to-br from-[#FFB800]/10 via-white to-amber-50"} border-none shadow-xl rounded-[2rem]`}>
               <CardHeader>
                 <CardTitle className={`text-xl font-black ${isHQ ? "text-white" : "text-gray-900"} flex items-center gap-2`}>
@@ -703,6 +795,7 @@ export default function SupportCenter() {
                 ))}
               </CardContent>
             </Card>
+            </div>
           </div>
         </TabsContent>
 
@@ -835,6 +928,36 @@ export default function SupportCenter() {
               </div>
             </CardContent>
           </Card>
+
+          {!loading ? (
+            <div className="flex flex-col gap-3 rounded-[2rem] border border-gray-100 bg-white px-6 py-4 shadow-sm md:flex-row md:items-center md:justify-between">
+              <p className="text-sm font-medium text-gray-500">
+                Showing {ticketTotal === 0 ? 0 : (ticketPage - 1) * ticketPageSize + 1}-
+                {Math.min(ticketPage * ticketPageSize, ticketTotal)} of {ticketTotal} tickets
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="rounded-xl"
+                  disabled={ticketPage <= 1}
+                  onClick={() => setTicketPage((current) => Math.max(current - 1, 1))}
+                >
+                  Previous
+                </Button>
+                <span className="min-w-[96px] text-center text-sm font-medium text-gray-600">
+                  Page {ticketTotal === 0 ? 0 : ticketPage} of {ticketTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  className="rounded-xl"
+                  disabled={ticketPage >= ticketTotalPages || ticketTotal === 0}
+                  onClick={() => setTicketPage((current) => Math.min(current + 1, ticketTotalPages))}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="space-y-4">
             {loading ? (

@@ -1,7 +1,7 @@
 
 import type { ColumnDef } from "@tanstack/react-table"
 import { Button } from "@/components/ui/button"
-import { MoreHorizontal, ArrowUpDown, MessageSquare, HeartPulse, Paperclip, Handshake } from "lucide-react"
+import { MoreHorizontal, ArrowUpDown, MessageSquare, HeartPulse, Paperclip, Handshake, Archive, CalendarClock } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import {
   DropdownMenu,
@@ -47,6 +47,10 @@ export type Placement = {
     location: string
     supervisorName: string
     status: 'Active' | 'Completed' | 'Terminated'
+    closedAt?: string | null
+    closedBy?: string | { _id: string; name: string; role?: string } | null
+    closureReason?: string
+    closureNote?: string
     startDate: string
     endDate: string
     institution?: string
@@ -153,6 +157,66 @@ function HealthBadge({ healthScore }: { healthScore: HealthScore }) {
   )
 }
 
+function ClosureSummary({ placement }: { placement: Placement }) {
+  if (placement.status === "Active") {
+    return <Badge variant="outline">Open</Badge>
+  }
+
+  const closedBy = placement.closedBy && typeof placement.closedBy === "object" ? placement.closedBy : null
+  const hasDetails = Boolean(placement.closureReason || placement.closureNote || placement.closedAt || closedBy?.name)
+
+  if (!hasDetails) {
+    return <Badge className="bg-slate-100 text-slate-700 border-slate-200">Archived</Badge>
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" className="h-auto px-0 font-semibold text-slate-700 hover:text-slate-900">
+          <Archive className="mr-2 h-4 w-4" />
+          View Summary
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0 rounded-2xl border-white/70 bg-white/95 backdrop-blur-xl shadow-2xl" align="start">
+        <div className="p-4 border-b border-gray-100">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="font-black text-sm text-gray-900">Closure Summary</h4>
+            <Badge className={placement.status === "Completed" ? "bg-blue-500 text-white border-0" : "bg-red-500 text-white border-0"}>
+              {placement.status}
+            </Badge>
+          </div>
+        </div>
+        <div className="p-4 space-y-3 text-sm">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">Reason</p>
+            <p className="mt-1 text-gray-800">{placement.closureReason || "No closure reason recorded."}</p>
+          </div>
+          {placement.closureNote ? (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">Note</p>
+              <p className="mt-1 whitespace-pre-wrap text-gray-700">{placement.closureNote}</p>
+            </div>
+          ) : null}
+          <div className="grid grid-cols-1 gap-3">
+            <div className="flex items-start gap-2">
+              <CalendarClock className="h-4 w-4 text-slate-500 mt-0.5" />
+              <p className="text-gray-700">
+                {placement.closedAt ? new Date(placement.closedAt).toLocaleDateString() : "Closure date not recorded"}
+              </p>
+            </div>
+            <div className="flex items-start gap-2">
+              <Archive className="h-4 w-4 text-slate-500 mt-0.5" />
+              <p className="text-gray-700">
+                {closedBy?.name ? `${closedBy.name}${closedBy.role ? ` (${closedBy.role})` : ""}` : "Closure owner not recorded"}
+              </p>
+            </div>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export const columns: ColumnDef<Placement>[] = [
   {
     id: "name",
@@ -209,6 +273,31 @@ export const columns: ColumnDef<Placement>[] = [
       }
   },
   {
+      accessorKey: "endDate",
+      header: ({ column }) => {
+        return (
+          <Button
+            variant="ghost"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            End Date
+            <ArrowUpDown className="ml-2 h-4 w-4" />
+          </Button>
+        )
+    },
+      cell: ({ row }) => {
+          const endDate = new Date(row.getValue("endDate"));
+          const isActive = row.original.status === 'Active';
+          const isOverdue = isActive && endDate < new Date();
+          return (
+            <span className={isOverdue ? "text-red-600 font-bold" : ""}>
+              {endDate.toLocaleDateString()}
+              {isOverdue && <span className="ml-1 text-[10px] font-black uppercase tracking-wider text-red-500">Overdue</span>}
+            </span>
+          );
+      }
+  },
+  {
     accessorKey: "status",
     header: "Status",
     cell: ({ row }) => {
@@ -220,6 +309,11 @@ export const columns: ColumnDef<Placement>[] = [
         
         return <Badge className={`${color} text-white border-0`}>{status}</Badge>
     }
+  },
+  {
+    id: "closureSummary",
+    header: "Closure",
+    cell: ({ row }) => <ClosureSummary placement={row.original} />
   },
   {
     id: "healthScore",
@@ -260,11 +354,11 @@ export const columns: ColumnDef<Placement>[] = [
       const delegate = row.original.delegate
       if (!delegate) return null
       return (
-        <div className="flex items-center gap-1.5">
+        <div className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
           <Handshake className="h-3.5 w-3.5 text-amber-600" />
-          <div className="flex flex-col">
-            <span className="text-xs font-bold text-amber-100">{delegate.name}</span>
-            <span className="text-[10px] text-amber-500">{delegate.institution}</span>
+          <div className="flex flex-col leading-tight">
+            <span className="text-xs font-bold text-amber-900">{delegate.name}</span>
+            <span className="text-[10px] font-semibold text-amber-700">{delegate.institution}</span>
           </div>
         </div>
       )

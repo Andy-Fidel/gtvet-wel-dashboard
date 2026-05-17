@@ -23,9 +23,18 @@ interface AttendanceLog {
   entryType: AttendanceEntryType
   periodStart: string
   periodEnd: string
+  startTime?: string
+  endTime?: string
   hoursWorked: number
   tasksCompleted: string
+  skillsDemonstrated?: string
   notes?: string
+  learnerSignatureName?: string
+  facilitatorComment?: string
+  facilitatorName?: string
+  facilitatorSignatureName?: string
+  facilitatorSignedAt?: string
+  supervisorSignatureName?: string
   status: AttendanceStatus
   submittedSource: "Institution" | "Partner"
   supervisorComment?: string
@@ -174,8 +183,13 @@ export default function AttendanceLogs() {
       ? "Optional supervisor comment before sign-off:"
       : "Reason for returning this hours entry:"
     const supervisorComment = window.prompt(promptLabel) ?? ""
+    const supervisorSignatureName = window.prompt("Type supervisor full name as signature:", user?.name || "") ?? ""
     if (action === "reject" && !supervisorComment.trim()) {
       toast.error("A reason is required when rejecting an attendance entry")
+      return
+    }
+    if (!supervisorSignatureName.trim()) {
+      toast.error("Supervisor signature name is required")
       return
     }
 
@@ -183,7 +197,7 @@ export default function AttendanceLogs() {
       const res = await authFetch(`/api/attendance-logs/${log._id}/${action}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ supervisorComment }),
+        body: JSON.stringify({ supervisorComment, supervisorSignatureName }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to update attendance log")
@@ -310,7 +324,7 @@ export default function AttendanceLogs() {
         </div>
       )}
 
-      <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+      <Card data-help-id="attendance-logs-filters" className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
         <CardContent className="p-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Input
@@ -344,7 +358,7 @@ export default function AttendanceLogs() {
         </CardContent>
       </Card>
 
-      <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+      <Card data-help-id="attendance-logs-table" className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
         <CardHeader>
           <CardTitle className="text-lg font-black text-gray-900">Hours Register</CardTitle>
         </CardHeader>
@@ -366,6 +380,7 @@ export default function AttendanceLogs() {
                 <TableRow>
                   <TableHead>Learner</TableHead>
                   <TableHead>Period</TableHead>
+                  <TableHead>Time</TableHead>
                   <TableHead>Company</TableHead>
                   <TableHead>Hours</TableHead>
                   <TableHead>Type</TableHead>
@@ -391,6 +406,11 @@ export default function AttendanceLogs() {
                         <div className="font-medium text-gray-700">
                           {format(new Date(log.periodStart), "MMM d, yyyy")}
                           {log.entryType === "Weekly" && ` to ${format(new Date(log.periodEnd), "MMM d, yyyy")}`}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm text-gray-700 whitespace-nowrap">
+                          {log.startTime || "--:--"} to {log.endTime || "--:--"}
                         </div>
                       </TableCell>
                       <TableCell>{log.placement.companyName}</TableCell>

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
-import { AlertTriangle, Building2, Briefcase, CalendarClock, ClipboardList, FileSignature, LifeBuoy, MessageSquare, Search, Star, UserCircle2 } from "lucide-react"
+import { AlertTriangle, Building2, Briefcase, CalendarClock, CheckCircle2, ChevronDown, ClipboardCheck, ClipboardList, Clock3, FileClock, FileSignature, LifeBuoy, MessageSquare, NotebookPen, Pencil, Plus, Search, Star, Trash2, UserCircle2, XCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -10,12 +10,16 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { EmployerEvaluationForm } from "./EmployerEvaluationForm"
 import type { EmployerEvaluationDraft } from "./EmployerEvaluationForm"
+import { AttendanceLogForm } from "./AttendanceLogForm"
 import { PlacementMessagesDialog } from "@/components/PlacementMessagesDialog"
 import { DocumentList } from "@/components/DocumentList"
 import { DocumentUpload } from "@/components/DocumentUpload"
 import { downloadPlacementAgreementPdf } from "@/lib/placementAgreementPdf"
+import { downloadWELLogbookPdf } from "@/lib/welLogbookPdf"
 
 interface PartnerActionItem {
   type: string
@@ -30,6 +34,7 @@ interface PartnerActionItem {
 
 interface PartnerPlacement {
   _id: string
+  status: "Active" | "Completed" | "Terminated"
   companyName: string
   location: string
   institution: string
@@ -132,6 +137,56 @@ interface PartnerSupervisor {
   phone?: string
 }
 
+interface AttendanceLogEntry {
+  _id: string
+  entryType: "Daily" | "Weekly"
+  periodStart: string
+  periodEnd: string
+  startTime?: string
+  endTime?: string
+  hoursWorked: number
+  tasksCompleted: string
+  skillsDemonstrated?: string
+  notes?: string
+  learnerSignatureName?: string
+  facilitatorComment?: string
+  facilitatorName?: string
+  facilitatorSignatureName?: string
+  facilitatorSignedAt?: string
+  supervisorSignatureName?: string
+  status: "Pending" | "SignedOff" | "Rejected"
+  supervisorComment?: string
+  submittedSource: "Institution" | "Partner"
+  submittedBy?: {
+    _id: string
+    name: string
+    role: string
+  } | null
+  signedOffBy?: {
+    _id: string
+    name: string
+    role: string
+  } | null
+  signedOffAt?: string | null
+}
+
+type AttendanceStatus = "Pending" | "SignedOff" | "Rejected"
+
+interface PartnerAttendanceLog extends AttendanceLogEntry {
+  learner: {
+    _id: string
+    name: string
+    trackingId: string
+    program?: string
+  }
+  placement: {
+    _id: string
+    companyName: string
+    supervisorName?: string
+    supervisorEmail?: string
+  }
+}
+
 interface SupervisorPerformanceRow {
   supervisor: PartnerSupervisor
   placementsOwned: number
@@ -170,12 +225,58 @@ const EVALUATION_METRIC_LABELS: Record<string, string> = {
   initiativeAndProblemSolving: "Initiative & Problem Solving",
 }
 
+const ALL_STATUS = "__all_status"
+const ALL_TYPES = "__all_types"
+
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+})
+
+const MONTH_YEAR_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "long",
+  year: "numeric",
+})
+
+const SHORT_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+})
+
+function formatDate(value?: string | null) {
+  if (!value) return "Not available"
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? "Not available" : DATE_FORMATTER.format(parsed)
+}
+
+function formatMonthYear(value?: string | null) {
+  if (!value) return "Not available"
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? "Not available" : MONTH_YEAR_FORMATTER.format(parsed)
+}
+
+function formatDateRange(start?: string | null, end?: string | null) {
+  if (!start || !end) return "Not available"
+  const startDate = new Date(start)
+  const endDate = new Date(end)
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return "Not available"
+  return `${SHORT_DATE_FORMATTER.format(startDate)} - ${DATE_FORMATTER.format(endDate)}`
+}
+
+function getStatusBadgeClass(status: AttendanceLogEntry["status"]) {
+  if (status === "SignedOff") return "bg-emerald-100 text-emerald-700 border-emerald-200"
+  if (status === "Rejected") return "bg-red-100 text-red-700 border-red-200"
+  return "bg-amber-100 text-amber-700 border-amber-200"
+}
+
 export default function PartnerDashboard() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { authFetch, user } = useAuth()
   const [placements, setPlacements] = useState<PartnerPlacement[]>([])
   const [supervisors, setSupervisors] = useState<PartnerSupervisor[]>([])
+  const [attendanceLogs, setAttendanceLogs] = useState<PartnerAttendanceLog[]>([])
   const [performanceRows, setPerformanceRows] = useState<SupervisorPerformanceRow[]>([])
   const [unassignedPerformance, setUnassignedPerformance] = useState<UnassignedPerformanceSummary | null>(null)
   const [supervisorDrafts, setSupervisorDrafts] = useState<Record<string, string>>({})
@@ -188,6 +289,10 @@ export default function PartnerDashboard() {
   const [messagesOpen, setMessagesOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [employerAgreementOpen, setEmployerAgreementOpen] = useState(false)
+  const [attendanceOpen, setAttendanceOpen] = useState(false)
+  const [logbookOpen, setLogbookOpen] = useState(false)
+  const [logbookLoading, setLogbookLoading] = useState(false)
+  const [logbookEntries, setLogbookEntries] = useState<AttendanceLogEntry[]>([])
   const [evaluationDocuments, setEvaluationDocuments] = useState<Array<{
     _id: string
     url: string
@@ -200,9 +305,14 @@ export default function PartnerDashboard() {
   }>>([])
   const [evaluationDocumentsLoading, setEvaluationDocumentsLoading] = useState(false)
   const [selectedPlacement, setSelectedPlacement] = useState<PartnerPlacement | null>(null)
+  const [editingAttendanceLog, setEditingAttendanceLog] = useState<PartnerAttendanceLog | null>(null)
   const [selectedEvaluationVersion, setSelectedEvaluationVersion] = useState<string>("latest")
   const [selectedLearner, setSelectedLearner] = useState<{ _id: string; name?: string } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [attendanceSearchQuery, setAttendanceSearchQuery] = useState("")
+  const [attendanceStatusFilter, setAttendanceStatusFilter] = useState("")
+  const [attendanceTypeFilter, setAttendanceTypeFilter] = useState("")
+  const [expandedPlacementId, setExpandedPlacementId] = useState<string | null>(null)
   const [supportDraft, setSupportDraft] = useState({
     subject: "",
     category: "Workflow" as TicketCategory,
@@ -223,26 +333,42 @@ export default function PartnerDashboard() {
   })
   const placementView = searchParams.get("view") === "mine" ? "mine" : "all"
 
+  const activePlacements = useMemo(
+    () => placements.filter((placement) => placement.status === "Active"),
+    [placements]
+  )
+
+  const historicalPlacements = useMemo(
+    () => placements.filter((placement) => placement.status !== "Active"),
+    [placements]
+  )
+
   useEffect(() => {
     const fetchDashboard = async () => {
       setLoading(true)
       try {
-        const [placementsRes, queueRes, supervisorsRes, performanceRes] = await Promise.all([
-          authFetch("/api/partner-portal/placements"),
+        const attendanceParams = new URLSearchParams()
+        if (attendanceStatusFilter) attendanceParams.set("status", attendanceStatusFilter)
+        if (attendanceTypeFilter) attendanceParams.set("entryType", attendanceTypeFilter)
+
+        const [placementsRes, queueRes, supervisorsRes, performanceRes, attendanceRes] = await Promise.all([
+          authFetch("/api/partner-portal/placements?status=Active"),
           authFetch("/api/partner-portal/action-queue"),
           authFetch("/api/partner-portal/supervisors"),
           authFetch("/api/partner-portal/performance"),
+          authFetch(`/api/attendance-logs?${attendanceParams.toString()}`),
         ])
 
-        if (!placementsRes.ok || !queueRes.ok || !supervisorsRes.ok || !performanceRes.ok) {
+        if (!placementsRes.ok || !queueRes.ok || !supervisorsRes.ok || !performanceRes.ok || !attendanceRes.ok) {
           throw new Error("Failed to load partner dashboard")
         }
 
-        const [placementsData, queueData, supervisorsData, performanceData] = await Promise.all([
+        const [placementsData, queueData, supervisorsData, performanceData, attendanceData] = await Promise.all([
           placementsRes.json(),
           queueRes.json(),
           supervisorsRes.json(),
           performanceRes.json(),
+          attendanceRes.json(),
         ])
 
         setPlacements(placementsData)
@@ -250,6 +376,7 @@ export default function PartnerDashboard() {
         setSupervisors(supervisorsData)
         setPerformanceRows(performanceData.supervisors || [])
         setUnassignedPerformance(performanceData.unassignedSummary || null)
+        setAttendanceLogs(Array.isArray(attendanceData) ? attendanceData : [])
       } catch (error) {
         console.error("Error fetching partner dashboard:", error)
         toast.error("Failed to load partner dashboard")
@@ -259,11 +386,27 @@ export default function PartnerDashboard() {
     }
 
     fetchDashboard()
-  }, [authFetch, refreshKey])
+  }, [attendanceStatusFilter, attendanceTypeFilter, authFetch, refreshKey])
+
+  const filteredAttendanceLogs = useMemo(() => {
+    const query = attendanceSearchQuery.toLowerCase()
+    return attendanceLogs.filter((log) => (
+      log.learner.name.toLowerCase().includes(query) ||
+      log.learner.trackingId.toLowerCase().includes(query) ||
+      log.placement.companyName.toLowerCase().includes(query)
+    ))
+  }, [attendanceLogs, attendanceSearchQuery])
+
+  const attendanceStats = useMemo(() => ({
+    totalEntries: filteredAttendanceLogs.length,
+    totalHours: filteredAttendanceLogs.reduce((sum, log) => sum + log.hoursWorked, 0),
+    signedOffHours: filteredAttendanceLogs.filter((log) => log.status === "SignedOff").reduce((sum, log) => sum + log.hoursWorked, 0),
+    pendingCount: filteredAttendanceLogs.filter((log) => log.status === "Pending").length,
+  }), [filteredAttendanceLogs])
 
   const filteredPlacements = useMemo(() => {
     const query = searchQuery.toLowerCase()
-    return placements.filter((placement) => {
+    return activePlacements.filter((placement) => {
       if (placementView === "mine" && placement.partnerSupervisor?._id && !placement.assignedToCurrentSupervisor) {
         return false
       }
@@ -276,16 +419,27 @@ export default function PartnerDashboard() {
       ]
       return fields.some((field) => field.toLowerCase().includes(query))
     })
-  }, [placementView, placements, searchQuery])
+  }, [activePlacements, placementView, searchQuery])
+
+  useEffect(() => {
+    if (filteredPlacements.length === 0) {
+      setExpandedPlacementId(null)
+      return
+    }
+
+    if (!expandedPlacementId || !filteredPlacements.some((placement) => placement._id === expandedPlacementId)) {
+      setExpandedPlacementId(filteredPlacements[0]._id)
+    }
+  }, [expandedPlacementId, filteredPlacements])
 
   const stats = useMemo(() => ({
-    activePlacements: placements.length,
-    assignedToMe: placements.filter((placement) => placement.assignedToCurrentSupervisor).length,
-    unassignedPlacements: placements.filter((placement) => !placement.partnerSupervisor?._id).length,
-    unreadMessages: placements.reduce((sum, placement) => sum + (placement.unreadMessageCount || 0), 0),
-    pendingEvaluations: placements.filter((placement) => !placement.evaluationSubmitted).length,
-    supportBacklog: placements.reduce((sum, placement) => sum + (placement.openSupportCount || 0), 0),
-  }), [placements])
+    activePlacements: activePlacements.length,
+    assignedToMe: activePlacements.filter((placement) => placement.assignedToCurrentSupervisor).length,
+    unassignedPlacements: activePlacements.filter((placement) => !placement.partnerSupervisor?._id).length,
+    unreadMessages: activePlacements.reduce((sum, placement) => sum + (placement.unreadMessageCount || 0), 0),
+    pendingEvaluations: activePlacements.filter((placement) => !placement.evaluationSubmitted).length,
+    supportBacklog: activePlacements.reduce((sum, placement) => sum + (placement.openSupportCount || 0), 0),
+  }), [activePlacements])
 
   const handleOpenEvaluation = (placement: PartnerPlacement) => {
     if (!placement.learner) return
@@ -294,10 +448,86 @@ export default function PartnerDashboard() {
     setEvaluateOpen(true)
   }
 
+  const handleAttendanceSuccess = (result?: { offlineQueued?: boolean }) => {
+    const wasEditing = Boolean(editingAttendanceLog)
+    setAttendanceOpen(false)
+    setEditingAttendanceLog(null)
+    if (result?.offlineQueued) {
+      toast.success(wasEditing ? "Attendance update saved offline. It will sync automatically." : "Attendance log saved offline. It will sync automatically.")
+      return
+    }
+    setRefreshKey((prev) => prev + 1)
+    toast.success(wasEditing ? "Attendance log updated" : "Attendance log saved")
+  }
+
+  const handleEditAttendance = (log: PartnerAttendanceLog) => {
+    setEditingAttendanceLog(log)
+    setAttendanceOpen(true)
+  }
+
+  const handleDeleteAttendance = async (id: string) => {
+    if (!window.confirm("Delete this attendance log?")) return
+    try {
+      const res = await authFetch(`/api/attendance-logs/${id}`, { method: "DELETE" })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || "Failed to delete attendance log")
+      setRefreshKey((prev) => prev + 1)
+      toast.success("Attendance log deleted")
+    } catch (error) {
+      console.error("Error deleting attendance log:", error)
+      toast.error(error instanceof Error ? error.message : "Failed to delete attendance log")
+    }
+  }
+
+  const handleAttendancePartnerAction = async (log: PartnerAttendanceLog, action: "sign-off" | "reject") => {
+    const promptLabel = action === "sign-off"
+      ? "Optional supervisor comment before sign-off:"
+      : "Reason for returning this hours entry:"
+    const supervisorComment = window.prompt(promptLabel) ?? ""
+    const supervisorSignatureName = window.prompt("Type supervisor full name as signature:", user?.name || "") ?? ""
+    if (action === "reject" && !supervisorComment.trim()) {
+      toast.error("A reason is required when rejecting an attendance entry")
+      return
+    }
+    if (!supervisorSignatureName.trim()) {
+      toast.error("Supervisor signature name is required")
+      return
+    }
+
+    try {
+      const res = await authFetch(`/api/attendance-logs/${log._id}/${action}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ supervisorComment, supervisorSignatureName }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || "Failed to update attendance log")
+      setRefreshKey((prev) => prev + 1)
+      toast.success(action === "sign-off" ? "Hours signed off" : "Hours returned for review")
+    } catch (error) {
+      console.error("Error updating attendance log:", error)
+      toast.error(error instanceof Error ? error.message : "Failed to update attendance log")
+    }
+  }
+
+  const getAttendanceStatusBadge = (status: AttendanceStatus) => {
+    if (status === "SignedOff") return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Signed Off</Badge>
+    if (status === "Rejected") return <Badge className="bg-red-100 text-red-700 border-red-200">Rejected</Badge>
+    return <Badge className="bg-amber-100 text-amber-700 border-amber-200">Pending</Badge>
+  }
+
   const handleOpenMessages = (placement: PartnerPlacement) => {
     setSelectedPlacement(placement)
     setMessagesOpen(true)
   }
+
+  const handleMessageCreated = useCallback(() => {
+    setRefreshKey((prev) => prev + 1)
+  }, [])
+
+  const handleConversationRead = useCallback(() => {
+    setRefreshKey((prev) => prev + 1)
+  }, [])
 
   const handleOpenSupport = (placement: PartnerPlacement) => {
     setSelectedPlacement(placement)
@@ -314,6 +544,50 @@ export default function PartnerDashboard() {
     setSelectedPlacement(placement)
     setSelectedEvaluationVersion("latest")
     setReviewOpen(true)
+  }
+
+  const handleOpenLogbook = async (placement: PartnerPlacement) => {
+    if (!placement.learner) return
+    setSelectedPlacement(placement)
+    setLogbookOpen(true)
+    setLogbookLoading(true)
+
+    try {
+      const res = await authFetch(`/api/attendance-logs?placementId=${placement._id}`)
+      if (!res.ok) throw new Error("Failed to load logbook entries")
+      const data = await res.json()
+      setLogbookEntries(Array.isArray(data) ? data : [])
+    } catch (error) {
+      console.error("Error fetching logbook entries:", error)
+      setLogbookEntries([])
+      toast.error(error instanceof Error ? error.message : "Failed to load logbook entries")
+    } finally {
+      setLogbookLoading(false)
+    }
+  }
+
+  const handleExportLogbook = () => {
+    if (!selectedPlacement?.learner) {
+      toast.error("Learner details are required to export the logbook")
+      return
+    }
+
+    downloadWELLogbookPdf({
+      learnerName: selectedPlacement.learner.name,
+      learnerTrackingId: selectedPlacement.learner.trackingId,
+      institution: selectedPlacement.institution,
+      companyName: selectedPlacement.companyName,
+      location: selectedPlacement.location,
+      program: selectedPlacement.learner.program,
+      studyYear: selectedPlacement.learner.year,
+      startDate: selectedPlacement.startDate,
+      endDate: selectedPlacement.endDate,
+      evaluationSubmitted: selectedPlacement.evaluationSubmitted,
+      evaluationScore: selectedPlacement.evaluation?.overallScore ?? null,
+      evaluationStrengths: selectedPlacement.evaluation?.strengths,
+      evaluationImprovements: selectedPlacement.evaluation?.areasForImprovement,
+      entries: logbookEntries,
+    })
   }
 
   const handleAssignSupervisor = async (placement: PartnerPlacement) => {
@@ -458,6 +732,31 @@ export default function PartnerDashboard() {
 
     return selectedPlacement.evaluationHistory.find((entry) => String(entry.version) === selectedEvaluationVersion) || selectedPlacement.evaluation
   }, [selectedEvaluationVersion, selectedPlacement])
+
+  const logbookSummary = useMemo(() => {
+    if (!selectedPlacement) {
+      return {
+        totalHours: 0,
+        signedOffCount: 0,
+        pendingCount: 0,
+        rejectedCount: 0,
+        latestMonthYear: "Not available",
+      }
+    }
+
+    const sortedEntries = [...logbookEntries].sort((a, b) => (
+      new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime()
+    ))
+    const latestEntry = sortedEntries[sortedEntries.length - 1] || null
+
+    return {
+      totalHours: logbookEntries.reduce((sum, entry) => sum + (Number(entry.hoursWorked) || 0), 0),
+      signedOffCount: logbookEntries.filter((entry) => entry.status === "SignedOff").length,
+      pendingCount: logbookEntries.filter((entry) => entry.status === "Pending").length,
+      rejectedCount: logbookEntries.filter((entry) => entry.status === "Rejected").length,
+      latestMonthYear: latestEntry ? formatMonthYear(latestEntry.periodEnd || latestEntry.periodStart) : formatMonthYear(selectedPlacement.startDate),
+    }
+  }, [logbookEntries, selectedPlacement])
 
   useEffect(() => {
     const fetchEvaluationDocuments = async () => {
@@ -625,6 +924,29 @@ export default function PartnerDashboard() {
                 />
               </div>
             ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={attendanceOpen} onOpenChange={(open) => {
+        setAttendanceOpen(open)
+        if (!open) setEditingAttendanceLog(null)
+      }}>
+        <DialogContent className="sm:max-w-[760px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+          <DialogHeader className="pt-6 px-6 pb-0">
+            <DialogTitle className="text-gray-900">
+              {editingAttendanceLog ? "Edit Attendance Log" : "New Attendance Log"}
+            </DialogTitle>
+            <DialogDescription className="text-gray-500">
+              Record daily or weekly placement hours directly from the partner workspace.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="px-6 pb-6">
+            <AttendanceLogForm
+              onSuccess={handleAttendanceSuccess}
+              initialData={editingAttendanceLog}
+              presetLearnerId={selectedPlacement?.learner?._id}
+            />
           </div>
         </DialogContent>
       </Dialog>
@@ -859,6 +1181,257 @@ export default function PartnerDashboard() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={logbookOpen}
+        onOpenChange={(open) => {
+          setLogbookOpen(open)
+          if (!open) {
+            setLogbookEntries([])
+            setLogbookLoading(false)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[1080px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh] [&>button]:text-gray-500 [&>button]:bg-gray-100 hover:[&>button]:bg-gray-200 hover:[&>button]:text-gray-900">
+          <DialogHeader className="p-6 pb-0">
+            <DialogTitle className="text-2xl font-black flex items-center gap-2">
+              <NotebookPen className="h-6 w-6 text-[#FFB800]" />
+              WEL Learner Logbook
+            </DialogTitle>
+            <DialogDescription className="font-medium text-gray-500">
+              Structured from the WEL weekly logbook template using the placement details and attendance logs already recorded in the portal.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-6 pt-2 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-gray-900">Export a formal copy of this learner's logbook.</p>
+                <p className="text-sm text-gray-600 mt-1">The PDF uses the same live placement and attendance data shown in this dialog.</p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl"
+                onClick={handleExportLogbook}
+                disabled={!selectedPlacement?.learner || logbookLoading}
+              >
+                <NotebookPen className="mr-2 h-4 w-4" />
+                Export Logbook PDF
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Learner's Name</p>
+                <p className="font-bold text-gray-900 mt-2">{selectedPlacement?.learner?.name || "Not available"}</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">TVET Provider</p>
+                <p className="font-bold text-gray-900 mt-2">{selectedPlacement?.institution || "Not available"}</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Company & Region</p>
+                <p className="font-bold text-gray-900 mt-2">{selectedPlacement?.companyName || "Not available"}</p>
+                <p className="text-sm text-gray-600 mt-1">{selectedPlacement?.location || "Location not available"}</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Qualification Level</p>
+                <p className="font-bold text-gray-900 mt-2">{selectedPlacement?.learner?.program || "Not available"}</p>
+                <p className="text-sm text-gray-600 mt-1">{selectedPlacement?.learner?.year ? `Year ${selectedPlacement.learner.year}` : "Year not recorded"}</p>
+              </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Month & Year</p>
+                <p className="font-bold text-gray-900 mt-2">{logbookSummary.latestMonthYear}</p>
+                <p className="text-sm text-gray-600 mt-1">{formatDateRange(selectedPlacement?.startDate, selectedPlacement?.endDate)}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-emerald-600">Total Hours</p>
+                <p className="text-2xl font-black text-gray-900 mt-2">{logbookSummary.totalHours}</p>
+              </div>
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-emerald-600">Signed Off</p>
+                <p className="text-2xl font-black text-gray-900 mt-2">{logbookSummary.signedOffCount}</p>
+              </div>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-amber-600">Pending Review</p>
+                <p className="text-2xl font-black text-gray-900 mt-2">{logbookSummary.pendingCount}</p>
+              </div>
+              <div className="rounded-2xl border border-red-100 bg-red-50/70 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-red-600">Rejected Entries</p>
+                <p className="text-2xl font-black text-gray-900 mt-2">{logbookSummary.rejectedCount}</p>
+              </div>
+            </div>
+
+            <div className="rounded-[2rem] border border-gray-100 overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+                <p className="text-sm font-black text-gray-900">Learners' Weekly Training Logsheet</p>
+                <p className="text-sm text-gray-600 mt-1">Each row below is mapped from the attendance register and supervisor review data already in the dashboard.</p>
+              </div>
+              {logbookLoading ? (
+                <div className="p-10 text-center text-gray-500 font-medium">Loading logbook entries...</div>
+              ) : logbookEntries.length === 0 ? (
+                <div className="p-10 text-center text-gray-500 font-medium">
+                  No attendance entries have been recorded for this placement yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50/80">
+                      <tr className="text-left text-gray-500">
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Week</th>
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Dates</th>
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Time</th>
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Type</th>
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Total Time</th>
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Tasks / Activities</th>
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Skills Demonstrated</th>
+                        <th className="px-4 py-3 font-black uppercase tracking-wider">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...logbookEntries]
+                        .sort((a, b) => new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime())
+                        .map((entry, index) => (
+                          <tr key={entry._id} className="border-t border-gray-100 align-top">
+                            <td className="px-4 py-4 font-bold text-gray-900 whitespace-nowrap">Week {index + 1}</td>
+                            <td className="px-4 py-4 text-gray-700 min-w-[170px]">{formatDateRange(entry.periodStart, entry.periodEnd)}</td>
+                            <td className="px-4 py-4 text-gray-700 whitespace-nowrap">{entry.startTime || "--:--"} - {entry.endTime || "--:--"}</td>
+                            <td className="px-4 py-4 text-gray-700 whitespace-nowrap">{entry.entryType}</td>
+                            <td className="px-4 py-4 text-gray-700 whitespace-nowrap">{entry.hoursWorked} hrs</td>
+                            <td className="px-4 py-4 text-gray-700 min-w-[260px] whitespace-pre-wrap">{entry.tasksCompleted}</td>
+                            <td className="px-4 py-4 text-gray-700 min-w-[220px] whitespace-pre-wrap">{entry.skillsDemonstrated?.trim() || entry.notes?.trim() || "No skills captured."}</td>
+                            <td className="px-4 py-4 min-w-[220px]">
+                              <div className="space-y-2">
+                                <Badge className={getStatusBadgeClass(entry.status)}>{entry.status}</Badge>
+                                <p className="text-xs text-gray-500">Source: {entry.submittedSource}</p>
+                                {entry.notes?.trim() ? <p className="text-sm text-gray-700 whitespace-pre-wrap">{entry.notes}</p> : null}
+                                {entry.supervisorComment?.trim() ? <p className="text-sm text-gray-700 whitespace-pre-wrap">{entry.supervisorComment}</p> : null}
+                                {entry.signedOffBy?.name ? (
+                                  <p className="text-xs text-gray-500">
+                                    Reviewed by {entry.signedOffBy.name} on {formatDate(entry.signedOffAt)}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-[2rem] border border-gray-100 bg-gray-50/60 p-5 space-y-4">
+              <div>
+                <p className="text-sm font-black text-gray-900">Post-WEL Assessment Companion</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  The original logbook template includes a facilitator checklist. The portal does not store every checklist answer directly, so this section shows system-backed evidence instead of guessed responses.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-2xl border border-white bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Attendance Compliance</p>
+                  <div className="mt-3 flex items-start gap-2">
+                    {logbookSummary.pendingCount === 0 && logbookEntries.length > 0 ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-amber-600 mt-0.5" />
+                    )}
+                    <p className="text-sm text-gray-700">
+                      {logbookEntries.length === 0
+                        ? "No weekly evidence submitted yet."
+                        : logbookSummary.pendingCount === 0
+                          ? "All current attendance entries have been reviewed or signed off."
+                          : `${logbookSummary.pendingCount} attendance entr${logbookSummary.pendingCount === 1 ? "y is" : "ies are"} still awaiting review.`}
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Supervisor Review Trail</p>
+                  <div className="mt-3 flex items-start gap-2">
+                    {logbookSummary.signedOffCount > 0 ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-amber-600 mt-0.5" />
+                    )}
+                    <p className="text-sm text-gray-700">
+                      {logbookSummary.signedOffCount > 0
+                        ? `${logbookSummary.signedOffCount} log entr${logbookSummary.signedOffCount === 1 ? "y has" : "ies have"} a recorded supervisor sign-off trail.`
+                        : "No signed-off attendance entry has been recorded yet."}
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Employer Evaluation</p>
+                  <div className="mt-3 flex items-start gap-2">
+                    {selectedPlacement?.evaluationSubmitted ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-amber-600 mt-0.5" />
+                    )}
+                    <p className="text-sm text-gray-700">
+                      {selectedPlacement?.evaluationSubmitted
+                        ? `Latest employer evaluation score: ${selectedPlacement.evaluation?.overallScore || "N/A"} / 5.`
+                        : "Employer evaluation has not been submitted yet for this placement."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              {selectedPlacement?.evaluation ? (
+                <div className="rounded-2xl border border-white bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Latest Evaluation Notes</p>
+                  <p className="text-sm text-gray-700 mt-3">
+                    Strengths: {selectedPlacement.evaluation.strengths}
+                  </p>
+                  <p className="text-sm text-gray-700 mt-2">
+                    Improvement Areas: {selectedPlacement.evaluation.areasForImprovement}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="rounded-[2rem] border border-gray-100 bg-white p-5 space-y-4">
+              <div>
+                <p className="text-sm font-black text-gray-900">Signature Blocks</p>
+                <p className="text-sm text-gray-600 mt-1">These values come directly from the attendance log capture flow and complete the formal logbook sections.</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Learner Signature</p>
+                  <p className="font-bold text-gray-900 mt-2">{logbookEntries[0]?.learnerSignatureName || selectedPlacement?.learner?.name || "Not captured"}</p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">WEL Facilitator</p>
+                  <p className="font-bold text-gray-900 mt-2">{logbookEntries[0]?.facilitatorName || "Not captured"}</p>
+                  <p className="text-sm text-gray-600 mt-1">Signature: {logbookEntries[0]?.facilitatorSignatureName || "Not captured"}</p>
+                  <p className="text-sm text-gray-600 mt-1">Date: {formatDate(logbookEntries[0]?.facilitatorSignedAt)}</p>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">WEL Supervisor</p>
+                  <p className="font-bold text-gray-900 mt-2">{logbookEntries[0]?.signedOffBy?.name || selectedPlacement?.supervisorName || "Not captured"}</p>
+                  <p className="text-sm text-gray-600 mt-1">Signature: {logbookEntries[0]?.supervisorSignatureName || "Not captured"}</p>
+                  <p className="text-sm text-gray-600 mt-1">Date: {formatDate(logbookEntries[0]?.signedOffAt)}</p>
+                </div>
+              </div>
+              {logbookEntries[0]?.facilitatorComment?.trim() ? (
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Facilitator Comments</p>
+                  <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap">{logbookEntries[0].facilitatorComment}</p>
+                </div>
+              ) : null}
+            </div>
+            
+            <div className="flex justify-end pt-4 mt-6 border-t border-gray-100">
+              <Button type="button" variant="outline" className="rounded-xl px-8" onClick={() => setLogbookOpen(false)}>
+                Close Logbook
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={employerAgreementOpen} onOpenChange={setEmployerAgreementOpen}>
         <DialogContent className="sm:max-w-[780px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="p-6 pb-0">
@@ -895,8 +1468,8 @@ export default function PartnerDashboard() {
         placementId={selectedPlacement?._id || null}
         authFetch={authFetch}
         currentUserId={user?._id}
-        onMessageCreated={() => setRefreshKey((prev) => prev + 1)}
-        onConversationRead={() => setRefreshKey((prev) => prev + 1)}
+        onMessageCreated={handleMessageCreated}
+        onConversationRead={handleConversationRead}
       />
 
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -910,6 +1483,14 @@ export default function PartnerDashboard() {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-xl"
+            onClick={() => navigate("/partner-history")}
+          >
+            View Placement History
+          </Button>
           <div className="flex items-center gap-2 rounded-2xl bg-white border border-gray-200 p-1">
             <Button
               type="button"
@@ -955,7 +1536,22 @@ export default function PartnerDashboard() {
         </div>
       )}
 
-      <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+      {!loading && historicalPlacements.length > 0 ? (
+        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+          <CardContent className="p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <p className="text-sm font-black uppercase tracking-wider text-gray-400">Archived & Completed Records</p>
+              <p className="text-xl font-black text-gray-900 mt-2">{historicalPlacements.length} historical placement{historicalPlacements.length === 1 ? "" : "s"} preserved in partner history</p>
+              <p className="text-sm text-gray-600 mt-1">Use the dedicated history page to review completed learners, terminated placements, and archived completion evidence.</p>
+            </div>
+            <Button type="button" className="rounded-xl bg-gray-900 hover:bg-gray-800 text-white" onClick={() => navigate("/partner-history")}>
+              Open Partner History
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card data-help-id="partner-dashboard-action-queue" className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
         <CardHeader>
           <CardTitle className="text-xl font-black">Partner Action Queue</CardTitle>
         </CardHeader>
@@ -1090,6 +1686,148 @@ export default function PartnerDashboard() {
       </Card>
 
       <div className="space-y-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-xl font-black text-gray-900 flex items-center gap-3">
+              <ClipboardList className="h-5 w-5 text-[#FFB800]" />
+              Attendance & Hours Register
+            </h3>
+            <p className="text-sm text-gray-600 mt-1">
+              The same attendance workflow available on the institution portal, replicated here for partner supervisors.
+            </p>
+          </div>
+          <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold" onClick={() => { setSelectedPlacement(null); setEditingAttendanceLog(null); setAttendanceOpen(true) }}>
+            <Plus className="mr-2 h-4 w-4" />
+            Record Hours
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4"><FileClock className="h-6 w-6 text-indigo-600" /></div><p className="text-sm font-medium text-gray-500">Entries</p><p className="text-3xl font-black text-gray-900">{attendanceStats.totalEntries}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-4"><Clock3 className="h-6 w-6 text-blue-600" /></div><p className="text-sm font-medium text-gray-500">Logged Hours</p><p className="text-3xl font-black text-gray-900">{attendanceStats.totalHours}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4"><CheckCircle2 className="h-6 w-6 text-emerald-600" /></div><p className="text-sm font-medium text-gray-500">Signed-Off Hours</p><p className="text-3xl font-black text-gray-900">{attendanceStats.signedOffHours}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center mb-4"><AlertTriangle className="h-6 w-6 text-amber-600" /></div><p className="text-sm font-medium text-gray-500">Pending Sign-Off</p><p className="text-3xl font-black text-gray-900">{attendanceStats.pendingCount}</p></CardContent></Card>
+        </div>
+
+        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+          <CardContent className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Input
+                placeholder="Search learner, tracking ID, or company..."
+                value={attendanceSearchQuery}
+                onChange={(e) => setAttendanceSearchQuery(e.target.value)}
+                className="bg-gray-50 border-gray-200 rounded-xl"
+              />
+              <Select value={attendanceStatusFilter || ALL_STATUS} onValueChange={(value) => setAttendanceStatusFilter(value === ALL_STATUS ? "" : value)}>
+                <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_STATUS}>All statuses</SelectItem>
+                  <SelectItem value="Pending">Pending</SelectItem>
+                  <SelectItem value="SignedOff">Signed Off</SelectItem>
+                  <SelectItem value="Rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={attendanceTypeFilter || ALL_TYPES} onValueChange={(value) => setAttendanceTypeFilter(value === ALL_TYPES ? "" : value)}>
+                <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
+                  <SelectValue placeholder="All entry types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_TYPES}>All entry types</SelectItem>
+                  <SelectItem value="Daily">Daily</SelectItem>
+                  <SelectItem value="Weekly">Weekly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+          <CardHeader>
+            <CardTitle className="text-lg font-black text-gray-900">Hours Register</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="p-6 space-y-4">
+                {[...Array(5)].map((_, index) => (
+                  <Skeleton key={index} className="h-16 rounded-xl" />
+                ))}
+              </div>
+            ) : filteredAttendanceLogs.length === 0 ? (
+              <div className="p-12 text-center">
+                <ClipboardCheck className="h-16 w-16 text-gray-200 mx-auto mb-4" />
+                <p className="text-gray-500 font-medium">No attendance logs found</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Learner</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Company</TableHead>
+                    <TableHead>Hours</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Supervisor</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredAttendanceLogs.map((log) => {
+                    const canEdit = log.status !== "SignedOff" && log.submittedBy?._id === user?._id
+                    const canSignOff = log.status !== "SignedOff" && log.submittedSource !== "Partner"
+                    return (
+                      <TableRow key={log._id}>
+                        <TableCell><div><div className="font-bold text-gray-900">{log.learner.name}</div><div className="text-xs text-gray-500 font-mono">{log.learner.trackingId}</div></div></TableCell>
+                        <TableCell><div className="font-medium text-gray-700">{formatDate(log.periodStart)}{log.entryType === "Weekly" ? ` to ${formatDate(log.periodEnd)}` : ""}</div></TableCell>
+                        <TableCell><div className="text-sm text-gray-700 whitespace-nowrap">{log.startTime || "--:--"} to {log.endTime || "--:--"}</div></TableCell>
+                        <TableCell>{log.placement.companyName}</TableCell>
+                        <TableCell><span className="font-black text-gray-900">{log.hoursWorked}</span></TableCell>
+                        <TableCell><Badge className="bg-slate-100 text-slate-700 border-slate-200">{log.entryType}</Badge></TableCell>
+                        <TableCell><div className="space-y-1"><Badge className={log.submittedSource === "Partner" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-indigo-100 text-indigo-700 border-indigo-200"}>{log.submittedSource}</Badge>{log.submittedBy ? <div className="text-xs text-gray-500">{log.submittedBy.name} ({log.submittedBy.role})</div> : null}</div></TableCell>
+                        <TableCell>{getAttendanceStatusBadge(log.status)}</TableCell>
+                        <TableCell><div className="max-w-[220px]"><div className="font-medium text-gray-800">{log.placement.supervisorName || "Not set"}</div>{log.supervisorComment ? <div className="text-xs text-gray-500 mt-1 line-clamp-2">{log.supervisorComment}</div> : null}</div></TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            {canEdit ? (
+                              <>
+                                <Button variant="outline" size="sm" className="rounded-xl" onClick={() => handleEditAttendance(log)}>
+                                  <Pencil className="h-3.5 w-3.5 mr-1" />
+                                  Edit
+                                </Button>
+                                <Button variant="outline" size="sm" className="rounded-xl text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleDeleteAttendance(log._id)}>
+                                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                                  Delete
+                                </Button>
+                              </>
+                            ) : null}
+                            {canSignOff ? (
+                              <>
+                                <Button size="sm" className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => handleAttendancePartnerAction(log, "sign-off")}>
+                                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                  Sign Off
+                                </Button>
+                                <Button size="sm" variant="outline" className="rounded-xl border-red-200 text-red-700 hover:bg-red-50" onClick={() => handleAttendancePartnerAction(log, "reject")}>
+                                  Return
+                                </Button>
+                              </>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div data-help-id="partner-dashboard-placements" className="space-y-6">
         <div className="flex items-center gap-3">
           <Briefcase className="h-5 w-5 text-[#FFB800]" />
           <h3 className="text-xl font-black text-gray-900">Active Placement Workspace</h3>
@@ -1105,36 +1843,47 @@ export default function PartnerDashboard() {
             <p className="text-gray-400 mt-2 font-medium">Try a different search or wait for new learner assignments.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="space-y-4">
             {filteredPlacements.map((placement) => (
               <Card key={placement._id} className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
-                <CardHeader className="border-b border-gray-100">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
+                <button
+                  type="button"
+                  className="w-full border-b border-gray-100 px-6 py-5 text-left transition hover:bg-gray-50/70"
+                  onClick={() => setExpandedPlacementId((current) => current === placement._id ? null : placement._id)}
+                >
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="min-w-0">
                       <CardTitle className="text-xl font-black text-gray-900">
                         {placement.learner?.name || "Unassigned learner"}
                       </CardTitle>
-                      <p className="text-sm text-gray-500 mt-1">
-                        {placement.learner?.trackingId || "No tracking ID"} · {placement.learner?.program || "No program"}
+                      <p className="mt-1 text-sm text-gray-500">
+                        {placement.learner?.trackingId || "No tracking ID"} · {placement.learner?.program || "No program"} · {placement.companyName}
                       </p>
                     </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      {placement.partnerSupervisor ? (
-                        <Badge className={placement.assignedToCurrentSupervisor ? "bg-sky-100 text-sky-700 border-sky-200" : "bg-slate-100 text-slate-700 border-slate-200"}>
-                          {placement.assignedToCurrentSupervisor ? "Assigned to you" : `Assigned: ${placement.partnerSupervisor.name}`}
-                        </Badge>
-                      ) : (
-                        <Badge className="bg-red-100 text-red-700 border-red-200">No supervisor assigned</Badge>
-                      )}
-                      {placement.unreadMessageCount ? <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200">{placement.unreadMessageCount} unread</Badge> : null}
-                      {placement.agreementSummary?.employerSigned ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Employer signed</Badge> : null}
-                      {placement.agreementSummary?.learnerSigned ? <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200">Learner signed</Badge> : null}
-                      {placement.evaluationSubmitted ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Evaluation completed</Badge> : null}
-                      {placement.evaluationDueSoon && !placement.evaluationSubmitted ? <Badge className="bg-amber-100 text-amber-700 border-amber-200">Evaluation due soon</Badge> : null}
-                      {!placement.operationalReadiness?.isOperational ? <Badge className="bg-red-100 text-red-700 border-red-200">Setup required</Badge> : null}
+                    <div className="flex flex-col gap-3 xl:items-end">
+                      <div className="flex flex-wrap gap-2 xl:justify-end">
+                        {placement.partnerSupervisor ? (
+                          <Badge className={placement.assignedToCurrentSupervisor ? "bg-sky-100 text-sky-700 border-sky-200" : "bg-slate-100 text-slate-700 border-slate-200"}>
+                            {placement.assignedToCurrentSupervisor ? "Assigned to you" : `Assigned: ${placement.partnerSupervisor.name}`}
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-red-100 text-red-700 border-red-200">No supervisor assigned</Badge>
+                        )}
+                        {placement.unreadMessageCount ? <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200">{placement.unreadMessageCount} unread</Badge> : null}
+                        {placement.agreementSummary?.employerSigned ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Employer signed</Badge> : null}
+                        {placement.agreementSummary?.learnerSigned ? <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200">Learner signed</Badge> : null}
+                        {placement.evaluationSubmitted ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Evaluation completed</Badge> : null}
+                        {placement.evaluationDueSoon && !placement.evaluationSubmitted ? <Badge className="bg-amber-100 text-amber-700 border-amber-200">Evaluation due soon</Badge> : null}
+                        {!placement.operationalReadiness?.isOperational ? <Badge className="bg-red-100 text-red-700 border-red-200">Setup required</Badge> : null}
+                      </div>
+                      <div className="inline-flex items-center gap-2 self-start rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-bold text-gray-600 xl:self-end">
+                        {expandedPlacementId === placement._id ? "Hide workspace" : "Open workspace"}
+                        <ChevronDown className={`h-4 w-4 transition-transform ${expandedPlacementId === placement._id ? "rotate-180" : ""}`} />
+                      </div>
                     </div>
                   </div>
-                </CardHeader>
+                </button>
+                {expandedPlacementId === placement._id ? (
                 <CardContent className="p-6 space-y-5">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
@@ -1173,6 +1922,16 @@ export default function PartnerDashboard() {
                   </div>
 
                   <div className="rounded-2xl border border-sky-100 bg-sky-50/70 p-4 space-y-3">
+                    {(() => {
+                      const draftSupervisorId = supervisorDrafts[placement._id] ?? placement.partnerSupervisor?._id ?? ""
+                      const savedSupervisorId = placement.partnerSupervisor?._id ?? ""
+                      const assignmentDirty = draftSupervisorId !== savedSupervisorId
+                      const assignmentLabel = draftSupervisorId
+                        ? supervisors.find((supervisor) => supervisor._id === draftSupervisorId)?.name || "Selected supervisor"
+                        : "Unassigned"
+
+                      return (
+                        <>
                     <div>
                       <p className="text-xs font-black uppercase tracking-wider text-gray-400">Portal Supervisor Ownership</p>
                       <p className="font-bold text-gray-900 mt-2">
@@ -1181,6 +1940,14 @@ export default function PartnerDashboard() {
                       <p className="text-sm text-gray-600 mt-1">
                         Attendance recording, evaluation submission, and incident reporting are restricted to the assigned supervisor.
                       </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge className={assignmentDirty ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-emerald-100 text-emerald-700 border-emerald-200"}>
+                          {assignmentDirty ? "Not yet saved" : "Saved"}
+                        </Badge>
+                        <Badge className="bg-white text-sky-700 border-sky-200">
+                          Selection: {assignmentLabel}
+                        </Badge>
+                      </div>
                     </div>
                     <div className="flex flex-col md:flex-row gap-2">
                       <Select
@@ -1199,10 +1966,18 @@ export default function PartnerDashboard() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <Button variant="outline" className="rounded-xl border-sky-200 text-sky-700 hover:bg-sky-50" onClick={() => handleAssignSupervisor(placement)}>
-                        Save Assignment
+                      <Button
+                        variant="outline"
+                        className="rounded-xl border-sky-200 text-sky-700 hover:bg-sky-50"
+                        onClick={() => handleAssignSupervisor(placement)}
+                        disabled={!assignmentDirty}
+                      >
+                        {assignmentDirty ? "Save Assignment" : "Assignment Saved"}
                       </Button>
                     </div>
+                        </>
+                      )
+                    })()}
                   </div>
 
                   <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4 space-y-3">
@@ -1216,17 +1991,17 @@ export default function PartnerDashboard() {
                           Employer acknowledgement: {placement.agreementSummary?.employerSigned ? "Signed" : "Pending"} · Learner agreement: {placement.agreementSummary?.learnerSigned ? "Signed" : "Pending"}
                         </p>
                       </div>
-                      <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full sm:w-auto">
                         <Button
                           variant="outline"
-                          className="rounded-xl"
+                          className="rounded-xl w-full whitespace-normal h-auto py-2 text-left sm:text-center"
                           onClick={() => handleDownloadAgreement(placement)}
                         >
                           Export Agreement PDF
                         </Button>
                         <Button
                           variant="outline"
-                          className="rounded-xl border-amber-200 text-amber-700 hover:bg-amber-100"
+                          className="rounded-xl border-amber-200 text-amber-700 hover:bg-amber-100 w-full whitespace-normal h-auto py-2 text-left sm:text-center"
                           onClick={() => handleOpenEmployerAgreement(placement)}
                           disabled={Boolean(placement.partnerSupervisor && !placement.assignedToCurrentSupervisor)}
                         >
@@ -1241,6 +2016,10 @@ export default function PartnerDashboard() {
                     <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={() => placement.learner && navigate(`/attendance-logs?learnerId=${placement.learner._id}`)} disabled={Boolean(placement.partnerSupervisor && !placement.assignedToCurrentSupervisor)}>
                       <ClipboardList className="mr-2 h-4 w-4" />
                       Record Hours
+                    </Button>
+                    <Button variant="outline" className="rounded-xl" onClick={() => handleOpenLogbook(placement)} disabled={!placement.learner}>
+                      <NotebookPen className="mr-2 h-4 w-4" />
+                      Open WEL Logbook
                     </Button>
                     <Button variant="outline" className="rounded-xl" onClick={() => handleOpenMessages(placement)}>
                       <MessageSquare className="mr-2 h-4 w-4" />
@@ -1280,6 +2059,7 @@ export default function PartnerDashboard() {
                     {placement.learner ? <Badge variant="outline"><UserCircle2 className="mr-1 h-3 w-3" /> {placement.learner.name}</Badge> : null}
                   </div>
                 </CardContent>
+                ) : null}
               </Card>
             ))}
           </div>

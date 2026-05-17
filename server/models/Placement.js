@@ -19,6 +19,10 @@ const placementSchema = new mongoose.Schema({
     enum: ['Active', 'Completed', 'Terminated'], 
     default: 'Active'
   },
+  closedAt: { type: Date },
+  closedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  closureReason: { type: String, trim: true },
+  closureNote: { type: String, trim: true },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   institution: { type: String, required: true },
   coordinates: {

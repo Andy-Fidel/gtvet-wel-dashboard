@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect } from "react"
 import {
   type ColumnDef,
 } from "@tanstack/react-table"
@@ -85,6 +85,23 @@ interface SemesterReport {
   };
 }
 
+interface SemesterReportsResponse {
+  items: SemesterReport[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  academicYearOptions: string[];
+  stats: {
+    draftCount: number;
+    certifiedCount: number;
+    submittedCount: number;
+    approvedCount: number;
+    currentEnrolled: number;
+    graduated: number;
+  };
+}
+
 const statusColors: Record<string, string> = {
   Generated: "bg-gray-100 text-gray-700",
   Draft: "bg-slate-100 text-slate-700",
@@ -108,6 +125,19 @@ const statusLabels: Record<string, string> = {
 export default function SemesterReports() {
   const [reports, setReports] = useState<SemesterReport[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(25);
+  const [totalReports, setTotalReports] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [academicYearOptions, setAcademicYearOptions] = useState<string[]>([]);
+  const [reportStats, setReportStats] = useState({
+    draftCount: 0,
+    certifiedCount: 0,
+    submittedCount: 0,
+    approvedCount: 0,
+    currentEnrolled: 0,
+    graduated: 0,
+  });
   const [showInitiate, setShowInitiate] = useState(false);
   const [initiating, setInitiating] = useState(false);
   const [terms, setTerms] = useState<AcademicTermOption[]>([]);
@@ -121,11 +151,36 @@ export default function SemesterReports() {
 
   const fetchReports = async () => {
     try {
-      const res = await authFetch('/api/semester-reports');
-      const data = await res.json();
-      setReports(data);
+      const params = new URLSearchParams();
+      if (statusFilter) params.set("status", statusFilter);
+      if (institutionFilter) params.set("institution", institutionFilter);
+      if (academicYearFilter) params.set("academicYear", academicYearFilter);
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
+
+      const res = await authFetch(`/api/semester-reports?${params.toString()}`);
+      const payload = await res.json().catch(() => null) as SemesterReportsResponse | null;
+      if (!res.ok) {
+        throw new Error((payload as { message?: string } | null)?.message || "Failed to load reports");
+      }
+      setReports(Array.isArray(payload?.items) ? payload.items : []);
+      setTotalReports(typeof payload?.total === "number" ? payload.total : 0);
+      setTotalPages(typeof payload?.totalPages === "number" ? payload.totalPages : 0);
+      setAcademicYearOptions(Array.isArray(payload?.academicYearOptions) ? payload.academicYearOptions : []);
+      setReportStats(payload?.stats || {
+        draftCount: 0,
+        certifiedCount: 0,
+        submittedCount: 0,
+        approvedCount: 0,
+        currentEnrolled: 0,
+        graduated: 0,
+      });
     } catch (err) {
       console.error("Error fetching reports:", err);
+      setReports([]);
+      setTotalReports(0);
+      setTotalPages(0);
+      setAcademicYearOptions([]);
     } finally {
       setLoading(false);
     }
@@ -147,32 +202,17 @@ export default function SemesterReports() {
     fetchReports();
     fetchTerms();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authFetch]);
+  }, [authFetch, page, pageSize, statusFilter, institutionFilter, academicYearFilter]);
 
-  const filteredReports = useMemo(() => {
-    return reports.filter((report) => {
-      if (statusFilter && report.status !== statusFilter) return false;
-      if (institutionFilter && report.institution !== institutionFilter) return false;
-      if (academicYearFilter && report.academicYear !== academicYearFilter) return false;
-      return true;
-    });
-  }, [reports, statusFilter, institutionFilter, academicYearFilter]);
-
-  const lifecycleTotals = useMemo(() => {
-    return filteredReports.reduce((acc, report) => {
-      acc.currentEnrolled += report.summary.currentEnrolled || 0;
-      acc.graduated += report.summary.academicGraduated || 0;
-      return acc;
-    }, { currentEnrolled: 0, graduated: 0 });
-  }, [filteredReports]);
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, institutionFilter, academicYearFilter]);
 
   const activeFilters = [
     statusFilter ? `Status: ${statusLabels[statusFilter] || statusFilter}` : "",
     institutionFilter ? `Institution: ${institutionFilter}` : "",
     academicYearFilter ? `Academic Year: ${academicYearFilter}` : "",
   ].filter(Boolean);
-
-  const academicYearOptions = Array.from(new Set(reports.map((report) => report.academicYear).filter(Boolean))).sort((a, b) => b.localeCompare(a));
 
   // Which terms don't have reports yet
   const usedTermIds = new Set(reports.map(r => r.academicTerm?._id).filter(Boolean));
@@ -208,11 +248,6 @@ export default function SemesterReports() {
   };
 
   // Stats strip
-  const draftCount = reports.filter(r => r.status === 'Draft').length;
-  const certifiedCount = reports.filter(r => r.status === 'Certified').length;
-  const submittedCount = reports.filter(r => r.status === 'Submitted').length;
-  const approvedCount = reports.filter(r => r.status === 'HQ_Approved').length;
-
   const columns: ColumnDef<SemesterReport>[] = [
     {
       accessorKey: "semester",
@@ -324,6 +359,7 @@ export default function SemesterReports() {
         </div>
         {user?.role !== 'SuperAdmin' && user?.role !== 'RegionalAdmin' && (
           <Button
+            data-help-id="semester-reports-initiate"
             onClick={() => setShowInitiate(true)}
             className="w-full md:w-auto rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold"
           >
@@ -335,12 +371,12 @@ export default function SemesterReports() {
       {/* Stats Strip */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {[
-          { label: 'Draft', count: draftCount, color: 'bg-slate-50 text-slate-700 border-slate-100', icon: <FileText className="h-4 w-4" /> },
-          { label: 'Certified', count: certifiedCount, color: 'bg-indigo-50 text-indigo-700 border-indigo-100', icon: <ShieldCheck className="h-4 w-4" /> },
-          { label: 'Submitted', count: submittedCount, color: 'bg-blue-50 text-blue-700 border-blue-100', icon: <Send className="h-4 w-4" /> },
-          { label: 'Approved', count: approvedCount, color: 'bg-emerald-50 text-emerald-700 border-emerald-100', icon: <ShieldCheck className="h-4 w-4" /> },
-          { label: 'Current Enrolled', count: lifecycleTotals.currentEnrolled, color: 'bg-sky-50 text-sky-700 border-sky-100', icon: <FileText className="h-4 w-4" /> },
-          { label: 'Graduated', count: lifecycleTotals.graduated, color: 'bg-emerald-50 text-emerald-700 border-emerald-100', icon: <ShieldCheck className="h-4 w-4" /> },
+          { label: 'Draft', count: reportStats.draftCount, color: 'bg-slate-50 text-slate-700 border-slate-100', icon: <FileText className="h-4 w-4" /> },
+          { label: 'Certified', count: reportStats.certifiedCount, color: 'bg-indigo-50 text-indigo-700 border-indigo-100', icon: <ShieldCheck className="h-4 w-4" /> },
+          { label: 'Submitted', count: reportStats.submittedCount, color: 'bg-blue-50 text-blue-700 border-blue-100', icon: <Send className="h-4 w-4" /> },
+          { label: 'Approved', count: reportStats.approvedCount, color: 'bg-emerald-50 text-emerald-700 border-emerald-100', icon: <ShieldCheck className="h-4 w-4" /> },
+          { label: 'Current Enrolled', count: reportStats.currentEnrolled, color: 'bg-sky-50 text-sky-700 border-sky-100', icon: <FileText className="h-4 w-4" /> },
+          { label: 'Graduated', count: reportStats.graduated, color: 'bg-emerald-50 text-emerald-700 border-emerald-100', icon: <ShieldCheck className="h-4 w-4" /> },
         ].map(stat => (
           <div key={stat.label} className={`rounded-2xl border p-4 ${stat.color}`}>
             <div className="flex items-center gap-2 mb-1">
@@ -430,20 +466,54 @@ export default function SemesterReports() {
         </div>
       )}
 
-      <Card className="bg-white border-none sm:border sm:border-gray-100 rounded-2xl sm:rounded-[2rem] shadow-sm sm:shadow-xl overflow-hidden">
+      <Card data-help-id="semester-reports-table" className="bg-white border-none sm:border sm:border-gray-100 rounded-2xl sm:rounded-[2rem] shadow-sm sm:shadow-xl overflow-hidden">
         <CardHeader className="p-4 sm:p-6 pb-0">
           <div className="flex items-center gap-3">
             <FileText className="h-6 w-6 text-[#FFB800]" />
             <div>
               <CardTitle className="text-xl font-black">All Reports</CardTitle>
               <CardDescription className="text-gray-400 font-bold">
-                {filteredReports.length} report{filteredReports.length !== 1 ? 's' : ''} found
+                {totalReports} report{totalReports !== 1 ? 's' : ''} found
               </CardDescription>
             </div>
           </div>
         </CardHeader>
         <CardContent className="p-0 sm:p-6 mt-4 sm:mt-0">
-          <DataTable columns={columns} data={filteredReports} exportTitle="Term Closure Reports Export" />
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 px-4 pt-4 md:flex-row md:items-center md:justify-between">
+              <div className="text-sm font-medium text-gray-500">
+                Showing {reports.length === 0 ? 0 : ((page - 1) * pageSize) + 1}
+                {" "}-{" "}
+                {Math.min(page * pageSize, totalReports)}
+                {" "}of{" "}
+                <span className="font-bold text-gray-900">{totalReports}</span> reports
+              </div>
+              <div className="flex items-center gap-2 self-end md:self-auto">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl"
+                  onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
+                  disabled={page <= 1}
+                >
+                  Previous
+                </Button>
+                <span className="min-w-[120px] text-center text-sm font-semibold text-gray-600">
+                  Page {page} of {Math.max(totalPages, 1)}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl"
+                  onClick={() => setPage((prev) => Math.min(prev + 1, Math.max(totalPages, 1)))}
+                  disabled={page >= totalPages}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+            <DataTable columns={columns} data={reports} disablePagination exportTitle="Term Closure Reports Export" />
+          </div>
         </CardContent>
       </Card>
 
@@ -467,7 +537,7 @@ export default function SemesterReports() {
                   </Button>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div data-help-id="semester-reports-term-selector" className="space-y-2">
                   {availableTerms.map(term => (
                     <label
                       key={term._id}

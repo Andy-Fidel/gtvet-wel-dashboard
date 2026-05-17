@@ -18,18 +18,23 @@ import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { Loader2, Search, Building2, Terminal, ShieldAlert } from "lucide-react"
 import type { IndustryPartner, Learner } from '@/types/models'
+import { INDUSTRY_SECTORS } from "@/lib/constants"
 
 const formSchema = z.object({
-  placementType: z.enum(["registered", "custom"]),
+  placementType: z.enum(["registered", "custom", "learner_sourced"]),
   partner: z.string().optional(),
   
   // Custom fields
   companyName: z.string().optional(),
   sector: z.string().optional(),
   location: z.string().optional(),
+  tradeArea: z.string().optional(),
+  town: z.string().optional(),
+  contactPerson: z.string().optional(),
   supervisorName: z.string().optional(),
   supervisorPhone: z.string().optional(),
   supervisorEmail: z.string().email("Invalid email").optional().or(z.literal('')),
+  sourceNotes: z.string().optional(),
   
   // Shared fields
   learners: z.array(z.string()).min(1, "At least one learner is required"),
@@ -43,7 +48,7 @@ const formSchema = z.object({
             path: ["partner"],
         });
     }
-    if (data.placementType === 'custom') {
+    if (data.placementType === 'custom' || data.placementType === 'learner_sourced') {
         if (!data.companyName || data.companyName.trim().length < 2) {
              ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Company Name is required", path: ["companyName"] });
         }
@@ -85,7 +90,11 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         location: "",
         supervisorName: "",
         supervisorPhone: "",
-        supervisorEmail: ""
+        supervisorEmail: "",
+        tradeArea: "",
+        town: "",
+        contactPerson: "",
+        sourceNotes: ""
     },
   })
 
@@ -98,7 +107,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
            authFetch('/api/industry-partners'),
            preSelectedLearnerId 
              ? authFetch(`/api/learners/${preSelectedLearnerId}`) // Fetch just the one if pre-selected
-             : authFetch('/api/learners?availableForPlacement=true')
+             : authFetch('/api/learners/placement-options')
         ]);
         
         const pData: IndustryPartner[] = await partnersRes.json();
@@ -189,7 +198,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           })
           const resData = await res.json()
           if (!res.ok) throw new Error(resData.message || "Failed to submit request")
-      } else {
+      } else if (data.placementType === 'custom') {
           // Send to bulk placements endpoint
           const res = await authFetch('/api/placements', {
             method: 'POST',
@@ -208,9 +217,35 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           })
           const resData = await res.json()
           if (!res.ok) throw new Error(resData.message || "Failed to create placement records")
+      } else {
+          const res = await authFetch('/api/placement-requests', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                learners: data.learners,
+                program: selectedLearnerInfo?.program || 'Unassigned',
+                requestedSlots: data.learners.length,
+                startDate: data.startDate,
+                endDate: data.endDate,
+                sourceType: 'LearnerFound',
+                selfSourcedHost: {
+                  companyName: data.companyName,
+                  sector: data.sector,
+                  location: data.location,
+                  tradeArea: data.tradeArea,
+                  town: data.town,
+                  contactPerson: data.contactPerson,
+                  contactPhone: data.supervisorPhone,
+                  contactEmail: data.supervisorEmail,
+                  notes: data.sourceNotes,
+                }
+            }),
+          })
+          const resData = await res.json()
+          if (!res.ok) throw new Error(resData.message || "Failed to submit learner-sourced placement")
       }
 
-      toast.success("Learners placed successfully")
+      toast.success(data.placementType === "learner_sourced" ? "Learner-sourced placement submitted for verification" : "Learners placed successfully")
       onSuccess()
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Something went wrong";
@@ -261,8 +296,32 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
             )
         })()}
 
+        {selectedLearnerIds.length > 0 && (() => {
+            const blockedByCalendar = learners.filter((learner) =>
+                selectedLearnerIds.includes(learner._id) && learner.placementEligibility && !learner.placementEligibility.isEligible
+            )
+
+            if (blockedByCalendar.length === 0) return null
+
+            return (
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                    <div className="flex items-center gap-2 font-bold">
+                        <ShieldAlert className="h-4 w-4" />
+                        Placement blocked by WEL cohort calendar
+                    </div>
+                    <div className="mt-2 space-y-1">
+                        {blockedByCalendar.map((learner) => (
+                            <p key={learner._id}>
+                                {learner.name}: {learner.placementEligibility?.reason}
+                            </p>
+                        ))}
+                    </div>
+                </div>
+            )
+        })()}
+
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-          Eligible learners are current students without an active placement. Previous WEL cycles stay attached to the learner profile as placement history.
+          Eligible learners are current students without an active placement whose year group is within an active or preparation-stage WEL calendar window. Previous WEL cycles stay attached to the learner profile as placement history.
         </div>
         
         {/* Placement Type Toggle */}
@@ -284,6 +343,15 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 }`}
             >
                 <Terminal className="h-4 w-4" /> Custom Org
+            </button>
+            <button
+                type="button"
+                onClick={() => form.setValue("placementType", "learner_sourced")}
+                className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-4 rounded-xl text-sm font-bold transition-all ${
+                    placementType === "learner_sourced" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
+                }`}
+            >
+                <Search className="h-4 w-4" /> Learner Found
             </button>
         </div>
 
@@ -323,12 +391,9 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                         <Select onValueChange={field.onChange} defaultValue={field.value}>
                             <FormControl><SelectTrigger className="bg-white"><SelectValue placeholder="Select sector" /></SelectTrigger></FormControl>
                             <SelectContent>
-                                <SelectItem value="Information Technology">Information Technology</SelectItem>
-                                <SelectItem value="Manufacturing">Manufacturing</SelectItem>
-                                <SelectItem value="Agriculture">Agriculture</SelectItem>
-                                <SelectItem value="Construction">Construction</SelectItem>
-                                <SelectItem value="Healthcare">Healthcare</SelectItem>
-                                <SelectItem value="Hospitality">Hospitality</SelectItem>
+                                {INDUSTRY_SECTORS.map(s => (
+                                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                                ))}
                             </SelectContent>
                         </Select>
                         <FormMessage />
@@ -345,28 +410,62 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                     )} />
                     <FormField control={form.control} name="supervisorName" render={({ field }) => (
                         <FormItem>
-                        <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Name</FormLabel>
+                        <FormLabel className="text-sm font-semibold text-gray-900">{placementType === 'learner_sourced' ? 'Proposed Supervisor Name' : 'Supervisor Name'}</FormLabel>
                         <FormControl><Input placeholder="Full Name" className="bg-white" {...field} /></FormControl>
                         <FormMessage />
                         </FormItem>
                     )} />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField control={form.control} name="tradeArea" render={({ field }) => (
+                        <FormItem>
+                        <FormLabel className="text-sm font-semibold text-gray-900">Trade Area</FormLabel>
+                        <FormControl><Input placeholder="Industrial Area" className="bg-white" {...field} /></FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )} />
+                    <FormField control={form.control} name="town" render={({ field }) => (
+                        <FormItem>
+                        <FormLabel className="text-sm font-semibold text-gray-900">Town</FormLabel>
+                        <FormControl><Input placeholder="Akosombo" className="bg-white" {...field} /></FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )} />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {placementType === 'learner_sourced' ? (
+                        <FormField control={form.control} name="contactPerson" render={({ field }) => (
+                            <FormItem>
+                            <FormLabel className="text-sm font-semibold text-gray-900">Company Contact Person</FormLabel>
+                            <FormControl><Input placeholder="Contact person" className="bg-white" {...field} /></FormControl>
+                            <FormMessage />
+                            </FormItem>
+                        )} />
+                    ) : null}
                     <FormField control={form.control} name="supervisorPhone" render={({ field }) => (
                         <FormItem>
-                        <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Phone</FormLabel>
+                        <FormLabel className="text-sm font-semibold text-gray-900">{placementType === 'learner_sourced' ? 'Company Phone' : 'Supervisor Phone'}</FormLabel>
                         <FormControl><Input placeholder="+233..." className="bg-white" {...field} /></FormControl>
                         <FormMessage />
                         </FormItem>
                     )} />
                     <FormField control={form.control} name="supervisorEmail" render={({ field }) => (
                         <FormItem>
-                        <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Email</FormLabel>
+                        <FormLabel className="text-sm font-semibold text-gray-900">{placementType === 'learner_sourced' ? 'Company Email' : 'Supervisor Email'}</FormLabel>
                         <FormControl><Input placeholder="supervisor@company.com" type="email" className="bg-white" {...field} /></FormControl>
                         <FormMessage />
                         </FormItem>
                     )} />
                 </div>
+                {placementType === 'learner_sourced' ? (
+                    <FormField control={form.control} name="sourceNotes" render={({ field }) => (
+                        <FormItem>
+                        <FormLabel className="text-sm font-semibold text-gray-900">How the learner found this placement</FormLabel>
+                        <FormControl><Input placeholder="Walk-in, referral, family contact, etc." className="bg-white" {...field} /></FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )} />
+                ) : null}
             </div>
         )}
 
@@ -452,7 +551,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         </div>
 
         <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm mt-2">
-          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : 'Confirm Placement'}
+          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : placementType === 'learner_sourced' ? 'Submit for Verification' : 'Confirm Placement'}
         </Button>
       </form>
     </Form>

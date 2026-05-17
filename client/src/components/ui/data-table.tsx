@@ -9,6 +9,7 @@ import {
   useReactTable,
   type SortingState,
   type ColumnFiltersState,
+  type VisibilityState,
   type OnChangeFn,
 } from "@tanstack/react-table"
 
@@ -23,8 +24,8 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useState } from "react"
-import { ChevronLeft, ChevronRight, Download, FileText } from "lucide-react"
+import { useState, useRef, useEffect } from "react"
+import { ChevronLeft, ChevronRight, Download, FileText, Columns3, Check } from "lucide-react"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import gtvetsLogo from '@/assets/gtvets_logo.png'
@@ -37,6 +38,9 @@ interface DataTableProps<TData, TValue> {
   sorting?: SortingState
   onSortingChange?: OnChangeFn<SortingState>
   exportTitle?: string
+  disablePagination?: boolean
+  columnVisibility?: VisibilityState
+  onColumnVisibilityChange?: OnChangeFn<VisibilityState>
 }
 
 type ExportableColumnMeta<TData> = {
@@ -50,12 +54,31 @@ export function DataTable<TData, TValue>({
   sorting: externalSorting,
   onSortingChange: setExternalSorting,
   exportTitle = "GTVET WEL System Data Export",
+  disablePagination = false,
+  columnVisibility: externalColumnVisibility,
+  onColumnVisibilityChange: setExternalColumnVisibility,
 }: DataTableProps<TData, TValue>) {
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  const [internalColumnVisibility, setInternalColumnVisibility] = useState<VisibilityState>({})
+  const [colDropdownOpen, setColDropdownOpen] = useState(false)
+  const colDropdownRef = useRef<HTMLDivElement>(null)
 
   const sorting = externalSorting ?? internalSorting
   const onSortingChange = setExternalSorting ?? setInternalSorting
+  const columnVisibility = externalColumnVisibility ?? internalColumnVisibility
+  const onColumnVisibilityChange = setExternalColumnVisibility ?? setInternalColumnVisibility
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (colDropdownRef.current && !colDropdownRef.current.contains(e.target as Node)) {
+        setColDropdownOpen(false)
+      }
+    }
+    if (colDropdownOpen) document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [colDropdownOpen])
 
   // eslint-disable-next-line
   const table = useReactTable({
@@ -67,13 +90,15 @@ export function DataTable<TData, TValue>({
     getSortedRowModel: getSortedRowModel(),
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
+    onColumnVisibilityChange: onColumnVisibilityChange,
     state: {
       sorting,
       columnFilters,
+      columnVisibility,
     },
     initialState: {
       pagination: {
-        pageSize: 10,
+        pageSize: disablePagination ? 100000 : 10,
       },
     },
     meta,
@@ -190,6 +215,52 @@ export function DataTable<TData, TValue>({
           />
         )}
         <div className="w-full sm:ml-auto sm:w-auto flex flex-col sm:flex-row gap-2">
+          {/* Column Visibility Toggle */}
+          <div className="relative" ref={colDropdownRef}>
+            <Button
+              variant="outline"
+              onClick={() => setColDropdownOpen(!colDropdownOpen)}
+              className="w-full sm:w-auto rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
+            >
+              <Columns3 className="mr-2 h-4 w-4" /> Columns
+            </Button>
+            {colDropdownOpen && (
+              <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] max-h-[320px] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg p-1.5">
+                {table.getAllColumns()
+                  .filter(col => typeof col.accessorFn !== 'undefined' || col.id !== 'actions')
+                  .filter(col => col.id !== 'actions')
+                  .map(col => {
+                    const headerText = typeof col.columnDef.header === 'string'
+                      ? col.columnDef.header
+                      : col.id === 'name' ? 'Learner'
+                      : col.id === 'closureSummary' ? 'Closure'
+                      : col.id === 'healthScore' ? 'Health'
+                      : col.id === 'owner' ? 'Owner'
+                      : col.id === 'delegate' ? 'Delegate'
+                      : col.id === 'operationalReadiness' ? 'Operational'
+                      : col.id.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase())
+                    return (
+                      <button
+                        key={col.id}
+                        onClick={() => col.toggleVisibility(!col.getIsVisible())}
+                        className={`flex items-center gap-2 w-full px-3 py-2 text-sm rounded-lg transition-colors ${
+                          col.getIsVisible()
+                            ? 'text-gray-900 font-semibold hover:bg-gray-50'
+                            : 'text-gray-400 hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className={`flex h-4 w-4 items-center justify-center rounded border ${
+                          col.getIsVisible() ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'
+                        }`}>
+                          {col.getIsVisible() && <Check className="h-3 w-3 text-white" />}
+                        </span>
+                        {headerText}
+                      </button>
+                    )
+                  })}
+              </div>
+            )}
+          </div>
           <Button 
             variant="outline" 
             onClick={downloadCSV}
@@ -251,6 +322,7 @@ export function DataTable<TData, TValue>({
           </TableBody>
         </Table>
       </div>
+      {!disablePagination && (
       <div className="flex items-center justify-end space-x-2 py-4">
         <Button
           variant="outline"
@@ -271,6 +343,7 @@ export function DataTable<TData, TValue>({
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
+      )}
     </div>
   )
 }

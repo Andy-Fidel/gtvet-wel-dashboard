@@ -20,7 +20,13 @@ export function PlacementProgressWidget() {
     if (user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') return;
 
     authFetch('/api/dashboard/stats')
-      .then(res => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          throw new Error(payload?.message || `Failed to fetch widget stats (${res.status})`);
+        }
+        return res.json();
+      })
       .then(data => {
         setStats(data);
         setLoading(false);

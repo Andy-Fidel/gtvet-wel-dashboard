@@ -16,6 +16,7 @@ const systemSettingSchema = new mongoose.Schema({
   enablePartnerSelfService: { type: Boolean, default: true },
   defaultAcademicYear: { type: String, default: '' },
   timezone: { type: String, default: 'Africa/Accra' },
+  value: { type: mongoose.Schema.Types.Mixed, default: null },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 

@@ -362,14 +362,14 @@ export default function GuardianDashboard() {
 
       <Tabs defaultValue="learners" className="space-y-6">
         <TabsList className="grid w-full max-w-xl grid-cols-3 rounded-2xl bg-slate-100 p-1">
-          <TabsTrigger value="learners" className="rounded-xl font-bold">Learners</TabsTrigger>
-          <TabsTrigger value="alerts" className="rounded-xl font-bold">Alerts</TabsTrigger>
-          <TabsTrigger value="concerns" className="rounded-xl font-bold">Concerns</TabsTrigger>
+          <TabsTrigger data-help-id="guardian-dashboard-tab-learners" value="learners" className="rounded-xl font-bold">Learners</TabsTrigger>
+          <TabsTrigger data-help-id="guardian-dashboard-tab-alerts" value="alerts" className="rounded-xl font-bold">Alerts</TabsTrigger>
+          <TabsTrigger data-help-id="guardian-dashboard-tab-concerns" value="concerns" className="rounded-xl font-bold">Concerns</TabsTrigger>
         </TabsList>
 
         <TabsContent value="learners" className="space-y-6">
           {(data?.learners || []).map((item) => (
-            <Card key={item.learner._id} className="rounded-[2rem] border border-slate-200 shadow-sm">
+            <Card key={item.learner._id} data-help-id="guardian-dashboard-learners" className="rounded-[2rem] border border-slate-200 shadow-sm">
               <CardHeader className="space-y-4">
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -410,7 +410,7 @@ export default function GuardianDashboard() {
               </CardHeader>
               <CardContent className="space-y-6">
                 {item.requiresGuardianConsent ? (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
+                  <div data-help-id="guardian-dashboard-consent" className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
                     <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                       <div>
                         <p className="text-xs font-black uppercase tracking-wider text-amber-700">Under-18 WEL Consent</p>
@@ -556,7 +556,7 @@ export default function GuardianDashboard() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-[2rem] border border-slate-200 shadow-sm">
+          <Card data-help-id="guardian-dashboard-concerns" className="rounded-[2rem] border border-slate-200 shadow-sm">
             <CardHeader>
               <CardTitle className="text-slate-900">Concern Desk</CardTitle>
               <CardDescription>Report a welfare, placement, or communication concern to the institution support team.</CardDescription>
@@ -675,7 +675,10 @@ export default function GuardianDashboard() {
       </Dialog>
 
       <Dialog open={consentOpen} onOpenChange={setConsentOpen}>
-        <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-3xl bg-white border-slate-200">
+        <DialogContent
+          overlayClassName="bg-black/45 backdrop-blur-md"
+          className="sm:max-w-3xl max-h-[90vh] overflow-y-auto bg-white border-slate-200"
+        >
           <DialogHeader>
             <DialogTitle className="text-slate-900">Consent Form for Learners Under 18</DialogTitle>
             <DialogDescription className="text-slate-600">

@@ -61,7 +61,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
   const normalizeNumberInput = (value: string) => (value === "" ? 0 : Number(value))
 
   useEffect(() => {
-    authFetch('/api/learners')
+    authFetch('/api/learners/options')
         .then(res => res.json())
         .then(data => setLearners(data))
         .catch(err => console.error("Error fetching learners:", err))

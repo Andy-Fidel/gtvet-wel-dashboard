@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { BellRing, Settings2, CalendarRange, Save, Plus, Trash2, Loader2, School, ShieldCheck } from "lucide-react"
 
 type SystemSettings = {
@@ -60,6 +61,30 @@ type WhatsAppStatus = {
   phoneNumberPresent: boolean
   optedIn: boolean
   phoneNumber: string
+}
+
+type ArchiveSummaryItem = {
+  id: string
+  label: string
+  status: string
+  archivedAt: string
+  archiveReason: string
+  archivedAcademicYear?: string
+  detail: string
+}
+
+type ArchiveSummary = {
+  academicYear: string | null
+  totals: {
+    placementRequests: number
+    supportTickets: number
+    notifications: number
+  }
+  recent: {
+    placementRequests: ArchiveSummaryItem[]
+    supportTickets: ArchiveSummaryItem[]
+    notifications: ArchiveSummaryItem[]
+  }
 }
 
 const defaultSystemSettings: SystemSettings = {
@@ -123,6 +148,9 @@ export default function SettingsPage() {
   const [savingPrefs, setSavingPrefs] = useState(false)
   const [sendingWhatsAppTest, setSendingWhatsAppTest] = useState(false)
   const [savingTerm, setSavingTerm] = useState(false)
+  const [runningSemesterRollover, setRunningSemesterRollover] = useState(false)
+  const [runningAcademicYearRollover, setRunningAcademicYearRollover] = useState(false)
+  const [loadingArchiveSummary, setLoadingArchiveSummary] = useState(false)
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(defaultSystemSettings)
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences)
   const [whatsAppStatus, setWhatsAppStatus] = useState<WhatsAppStatus>({
@@ -134,8 +162,27 @@ export default function SettingsPage() {
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [editingTermId, setEditingTermId] = useState<string | null>(null)
   const [termForm, setTermForm] = useState(defaultTermForm)
+  const [archiveYearFilter, setArchiveYearFilter] = useState("")
+  const [archiveSummary, setArchiveSummary] = useState<ArchiveSummary | null>(null)
 
   const canManageGlobalSettings = user?.role === "SuperAdmin"
+
+  const fetchArchiveSummary = async (academicYear?: string) => {
+    if (!canManageGlobalSettings) return
+    setLoadingArchiveSummary(true)
+    try {
+      const query = academicYear?.trim() ? `?academicYear=${encodeURIComponent(academicYear.trim())}` : ""
+      const res = await authFetch(`/api/settings/archive-summary${query}`)
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error((data as { message?: string } | null)?.message || "Failed to load archive summary")
+      setArchiveSummary(data as ArchiveSummary)
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : "Failed to load archive summary")
+    } finally {
+      setLoadingArchiveSummary(false)
+    }
+  }
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -160,6 +207,8 @@ export default function SettingsPage() {
         if (canManageGlobalSettings) {
           setSystemSettings({ ...defaultSystemSettings, ...payloads[2] })
           setTerms(payloads[3] || [])
+          setArchiveYearFilter(payloads[2]?.defaultAcademicYear || "")
+          void fetchArchiveSummary(payloads[2]?.defaultAcademicYear || "")
         }
       } catch (error) {
         console.error(error)
@@ -300,6 +349,75 @@ export default function SettingsPage() {
     }
   }
 
+  const refreshGlobalSettings = async () => {
+    if (!canManageGlobalSettings) return
+    try {
+      const [settingsRes, termsRes] = await Promise.all([
+        authFetch("/api/settings/system"),
+        authFetch("/api/academic-terms"),
+      ])
+      const [settingsData, termsData] = await Promise.all([
+        settingsRes.json().catch(() => ({})),
+        termsRes.json().catch(() => ([])),
+      ])
+      if (settingsRes.ok) {
+        setSystemSettings({ ...defaultSystemSettings, ...settingsData })
+      }
+      if (termsRes.ok) {
+        setTerms(Array.isArray(termsData) ? termsData : [])
+      }
+      await fetchArchiveSummary(settingsRes.ok ? settingsData?.defaultAcademicYear || archiveYearFilter : archiveYearFilter)
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  const runSemesterRollover = async () => {
+    const confirmed = window.confirm("Complete the current term and activate the next academic term?")
+    if (!confirmed) return
+
+    setRunningSemesterRollover(true)
+    try {
+      const res = await authFetch("/api/settings/rollover/semester", {
+        method: "POST",
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || "Failed to run semester rollover")
+      await refreshGlobalSettings()
+      const incomingTermName = data?.summary?.incomingTerm?.name
+      toast.success(incomingTermName ? `Semester rollover complete. ${incomingTermName} is now active.` : "Semester rollover complete")
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : "Failed to run semester rollover")
+    } finally {
+      setRunningSemesterRollover(false)
+    }
+  }
+
+  const runAcademicYearRollover = async () => {
+    const confirmed = window.confirm("Run the academic year rollover? This will progress learners, close outgoing active placements, and recalculate partner slot usage.")
+    if (!confirmed) return
+
+    setRunningAcademicYearRollover(true)
+    try {
+      const res = await authFetch("/api/settings/rollover/academic-year", {
+        method: "POST",
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.message || "Failed to run academic year rollover")
+      await refreshGlobalSettings()
+      const summary = data?.summary
+      const promoted = (summary?.learnerProgression?.promotedYear1To2 || 0) + (summary?.learnerProgression?.promotedYear2To3 || 0)
+      const graduated = summary?.learnerProgression?.graduatedYear3 || 0
+      toast.success(`Academic year rollover complete. ${promoted} promoted, ${graduated} graduated.`)
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : "Failed to run academic year rollover")
+    } finally {
+      setRunningAcademicYearRollover(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex-1 space-y-6 pt-16 px-4 md:px-8">
@@ -330,18 +448,18 @@ export default function SettingsPage() {
 
       <Tabs defaultValue="notifications" className="space-y-6">
         <TabsList className="h-auto flex-wrap justify-start rounded-2xl bg-white p-2 shadow-sm border border-gray-100">
-          <TabsTrigger value="notifications" className="rounded-xl px-4 py-2.5 font-bold">
+          <TabsTrigger data-help-id="settings-tab-notifications" value="notifications" className="rounded-xl px-4 py-2.5 font-bold">
             <BellRing className="mr-2 h-4 w-4" />
             Notifications
           </TabsTrigger>
           {canManageGlobalSettings ? (
-            <TabsTrigger value="system" className="rounded-xl px-4 py-2.5 font-bold">
+            <TabsTrigger data-help-id="settings-tab-system" value="system" className="rounded-xl px-4 py-2.5 font-bold">
               <Settings2 className="mr-2 h-4 w-4" />
               System Config
             </TabsTrigger>
           ) : null}
           {canManageGlobalSettings ? (
-            <TabsTrigger value="terms" className="rounded-xl px-4 py-2.5 font-bold">
+            <TabsTrigger data-help-id="settings-tab-terms" value="terms" className="rounded-xl px-4 py-2.5 font-bold">
               <CalendarRange className="mr-2 h-4 w-4" />
               Academic Terms
             </TabsTrigger>
@@ -349,7 +467,7 @@ export default function SettingsPage() {
         </TabsList>
 
         <TabsContent value="notifications" className="space-y-6">
-          <Card className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
+          <Card data-help-id="settings-notifications" className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
             <CardHeader>
               <CardTitle className="text-xl font-black">Notification Preferences</CardTitle>
               <CardDescription>Control which alerts appear in your account and which categories remain active.</CardDescription>
@@ -419,7 +537,7 @@ export default function SettingsPage() {
 
         {canManageGlobalSettings ? (
           <TabsContent value="system" className="space-y-6">
-            <Card className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
+            <Card data-help-id="settings-system" className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
               <CardHeader>
                 <CardTitle className="text-xl font-black">System Configuration</CardTitle>
                 <CardDescription>Adjust the platform identity, support contact details, and global workflow defaults.</CardDescription>
@@ -511,6 +629,129 @@ export default function SettingsPage() {
                     Save System Config
                   </Button>
                 </div>
+
+                <div className="md:col-span-2 rounded-2xl border border-rose-200 bg-rose-50/50 p-5">
+                  <div className="mb-4">
+                    <p className="font-black text-slate-900">Rollover Controls</p>
+                    <p className="text-sm text-slate-500">
+                      Use these only after reports and operational checks are complete. Semester rollover activates the next term. Academic year rollover progresses learners, closes outgoing active placements, and recalculates partner capacity.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-3 md:flex-row">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-xl border-amber-300 bg-white hover:bg-amber-50"
+                      disabled={runningSemesterRollover || runningAcademicYearRollover}
+                      onClick={runSemesterRollover}
+                    >
+                      {runningSemesterRollover ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CalendarRange className="mr-2 h-4 w-4" />}
+                      Run Semester Rollover
+                    </Button>
+                    <Button
+                      type="button"
+                      className="rounded-xl bg-rose-600 hover:bg-rose-700"
+                      disabled={runningSemesterRollover || runningAcademicYearRollover}
+                      onClick={runAcademicYearRollover}
+                    >
+                      {runningAcademicYearRollover ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <School className="mr-2 h-4 w-4" />}
+                      Run Academic Year Rollover
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
+              <CardHeader>
+                <CardTitle className="text-xl font-black">Archive Summary</CardTitle>
+                <CardDescription>Review archived operational records created by rollover and rebaseline actions.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                  <div className="space-y-2 md:w-72">
+                    <Label>Academic Year Filter</Label>
+                    <Input
+                      value={archiveYearFilter}
+                      onChange={(e) => setArchiveYearFilter(e.target.value)}
+                      placeholder={systemSettings.defaultAcademicYear || "2026/2027"}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={() => fetchArchiveSummary(archiveYearFilter)}
+                    disabled={loadingArchiveSummary}
+                  >
+                    {loadingArchiveSummary ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Refresh Archive Report
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {[
+                    { label: "Placement Requests", count: archiveSummary?.totals.placementRequests || 0, tone: "bg-amber-50 text-amber-700 border-amber-100" },
+                    { label: "Support Tickets", count: archiveSummary?.totals.supportTickets || 0, tone: "bg-sky-50 text-sky-700 border-sky-100" },
+                    { label: "Notifications", count: archiveSummary?.totals.notifications || 0, tone: "bg-indigo-50 text-indigo-700 border-indigo-100" },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-2xl border border-gray-100 bg-white p-4">
+                      <Badge className={`border ${item.tone}`}>{item.label}</Badge>
+                      <p className="mt-3 text-3xl font-black text-slate-900">{item.count}</p>
+                      <p className="text-sm text-slate-500 mt-1">Archived records{archiveSummary?.academicYear ? ` for ${archiveSummary.academicYear}` : ""}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {[
+                  { title: "Recent Archived Placement Requests", items: archiveSummary?.recent.placementRequests || [] },
+                  { title: "Recent Archived Support Tickets", items: archiveSummary?.recent.supportTickets || [] },
+                  { title: "Recent Archived Notifications", items: archiveSummary?.recent.notifications || [] },
+                ].map((section) => (
+                  <div key={section.title} className="space-y-3">
+                    <div>
+                      <p className="font-black text-slate-900">{section.title}</p>
+                      <p className="text-sm text-slate-500">Latest archived records in this module.</p>
+                    </div>
+                    {section.items.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                        No archived records found for this filter.
+                      </div>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Record</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Archived</TableHead>
+                            <TableHead>Reason</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {section.items.map((item) => (
+                            <TableRow key={item.id}>
+                              <TableCell>
+                                <div className="space-y-1">
+                                  <p className="font-bold text-slate-900">{item.label}</p>
+                                  <p className="text-xs text-slate-500">{item.detail}</p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{item.status}</Badge>
+                              </TableCell>
+                              <TableCell className="text-xs text-slate-500">
+                                {item.archivedAt ? new Date(item.archivedAt).toLocaleString() : "N/A"}
+                              </TableCell>
+                              <TableCell className="text-xs text-slate-500">
+                                {item.archiveReason || "No archive reason recorded"}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </TabsContent>
@@ -519,7 +760,7 @@ export default function SettingsPage() {
         {canManageGlobalSettings ? (
           <TabsContent value="terms" className="space-y-6">
             <div className="grid grid-cols-1 xl:grid-cols-[420px_minmax(0,1fr)] gap-6">
-              <Card className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
+              <Card data-help-id="settings-terms" className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
                 <CardHeader>
                   <CardTitle className="text-xl font-black">{editingTermId ? "Edit Academic Term" : "Create Academic Term"}</CardTitle>
                   <CardDescription>Define the term window, status, and whether it is the current active cycle.</CardDescription>

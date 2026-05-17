@@ -1,6 +1,13 @@
 const http = require('http');
 
-const loginData = JSON.stringify({ email: "steve.jobs@gtvets.edu.gh", password: "password123" }); // assuming a seed user exists
+const email = process.env.TEST_LOGIN_EMAIL;
+const password = process.env.TEST_LOGIN_PASSWORD;
+
+if (!email || !password) {
+  throw new Error('Set TEST_LOGIN_EMAIL and TEST_LOGIN_PASSWORD before running this script');
+}
+
+const loginData = JSON.stringify({ email, password });
 
 const req = http.request({
   hostname: 'localhost',

@@ -33,6 +33,7 @@ const formSchema = z.object({
   category: z.enum(["A", "B", "C"]),
   status: z.enum(["Day", "Boarding"]),
   gender: z.enum(["Boys", "Girls", "Mixed"]),
+  calendarType: z.enum(["Single Track", "Transitional"]),
 })
 
 type InstitutionFormValues = z.infer<typeof formSchema>
@@ -48,15 +49,16 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
 
   const form = useForm<InstitutionFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: initialData || {
-      name: "",
-      code: "",
-      district: "",
-      region: "",
-      location: "",
-      category: "A",
-      status: "Day",
-      gender: "Mixed",
+    defaultValues: {
+      name: initialData?.name ?? "",
+      code: initialData?.code ?? "",
+      district: initialData?.district ?? "",
+      region: initialData?.region ?? "",
+      location: initialData?.location ?? "",
+      category: initialData?.category ?? "A",
+      status: initialData?.status ?? "Day",
+      gender: initialData?.gender ?? "Mixed",
+      calendarType: initialData?.calendarType ?? "Single Track",
     },
   })
 
@@ -148,7 +150,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
             </FormItem>
         )} />
 
-        <div className="grid grid-cols-3 gap-5">
+        <div className="grid grid-cols-2 gap-5">
             <FormField control={form.control} name="category" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-white">Category</FormLabel>
@@ -163,6 +165,22 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
                   <FormMessage />
                 </FormItem>
             )} />
+            <FormField control={form.control} name="calendarType" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-white">Academic Calendar Type</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Calendar type" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="Single Track">Single Track</SelectItem>
+                      <SelectItem value="Transitional">Transitional</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+            )} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-5">
             <FormField control={form.control} name="status" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-white">Status</FormLabel>

@@ -11,6 +11,7 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -21,11 +22,13 @@ import {
 import { useState } from "react"
 import { Loader2, CalendarDays, MapPin } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
+import { toast } from "sonner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { Calendar } from "@/components/ui/Calendar"
 import { safeDateString } from "@/lib/dateUtils"
+import { INDUSTRY_SECTORS } from "@/lib/constants"
 
 const GHANA_REGIONS = [
   "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern",
@@ -41,8 +44,19 @@ const formSchema = z.object({
   supervisorName: z.string().min(2, { message: "Supervisor Name is required." }),
   supervisorPhone: z.string().optional(),
   supervisorEmail: z.string().email({ message: "Invalid email address." }).optional().or(z.literal('')),
+  status: z.enum(["Active", "Completed", "Terminated"]),
+  closureReason: z.string().optional(),
+  closureNote: z.string().optional(),
   startDate: z.date(),
   endDate: z.date(),
+}).superRefine((data, ctx) => {
+  if (data.status !== "Active" && !data.closureReason?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Closure reason is required when closing a placement.",
+      path: ["closureReason"],
+    })
+  }
 })
 
 type EditPlacementFormValues = z.infer<typeof formSchema>
@@ -52,6 +66,9 @@ interface EditPlacementFormProps {
     initialData: Omit<Partial<EditPlacementFormValues>, 'learner' | 'startDate' | 'endDate'> & { 
         _id: string;
         learner: string | { _id: string; name: string; trackingId: string };
+        status?: "Active" | "Completed" | "Terminated";
+        closureReason?: string;
+        closureNote?: string;
         startDate?: string | Date;
         endDate?: string | Date;
     };
@@ -75,8 +92,13 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
         learner: (typeof initialData.learner === 'object' && initialData.learner !== null)
             ? (initialData.learner as { _id: string })._id
             : initialData.learner as string,
+        status: initialData.status || "Active",
+        closureReason: initialData.closureReason || "",
+        closureNote: initialData.closureNote || "",
     },
   })
+
+  const placementStatus = form.watch("status")
 
   async function onSubmit(values: EditPlacementFormValues) {
     setLoading(true)
@@ -87,15 +109,21 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ...values,
+                closureReason: values.status === "Active" ? "" : values.closureReason?.trim() || "",
+                closureNote: values.status === "Active" ? "" : values.closureNote?.trim() || "",
                 ...(coordLat && coordLng ? { coordinates: { lat: parseFloat(coordLat), lng: parseFloat(coordLng) } } : {}),
                 ...(placementRegion ? { placementRegion } : {}),
             }),
         })
-        if (!response.ok) throw new Error('Failed to save placement')
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}))
+            throw new Error(errData.message || 'Failed to save placement')
+        }
         const data = await response.json()
         onSuccess(data)
     } catch (error) {
         console.error(error)
+        toast.error(error instanceof Error ? error.message : "Failed to update placement")
     } finally {
         setLoading(false)
     }
@@ -122,22 +150,20 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <FormField control={form.control} name="companyName" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Company Name</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Company Name</FormLabel>
                   <FormControl><Input placeholder="Tech Solutions Ltd" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
             <FormField control={form.control} name="sector" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Industry Sector</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Industry Sector</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select sector" /></SelectTrigger></FormControl>
                     <SelectContent>
-                        <SelectItem value="Information Technology">Information Technology</SelectItem>
-                        <SelectItem value="Manufacturing">Manufacturing</SelectItem>
-                        <SelectItem value="Agriculture">Agriculture</SelectItem>
-                        <SelectItem value="Construction">Construction</SelectItem>
-                        <SelectItem value="Healthcare">Healthcare</SelectItem>
+                        {INDUSTRY_SECTORS.map(s => (
+                            <SelectItem key={s} value={s}>{s}</SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -149,14 +175,14 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <FormField control={form.control} name="location" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Location / Address</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Location / Address</FormLabel>
                   <FormControl><Input placeholder="Company Location" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
             <FormField control={form.control} name="supervisorName" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Supervisor Name</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Name</FormLabel>
                   <FormControl><Input placeholder="Full Name" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
@@ -167,24 +193,85 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <FormField control={form.control} name="supervisorPhone" render={({ field }) => (
               <FormItem>
-                <FormLabel className="text-sm font-semibold text-white">Supervisor Phone</FormLabel>
+                <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Phone</FormLabel>
                 <FormControl><Input placeholder="+233..." {...field} /></FormControl>
                 <FormMessage />
               </FormItem>
           )} />
           <FormField control={form.control} name="supervisorEmail" render={({ field }) => (
               <FormItem>
-                <FormLabel className="text-sm font-semibold text-white">Supervisor Email</FormLabel>
+                <FormLabel className="text-sm font-semibold text-gray-900">Supervisor Email</FormLabel>
                 <FormControl><Input placeholder="supervisor@company.com" type="email" {...field} /></FormControl>
                 <FormMessage />
               </FormItem>
+            )} />
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-gray-100 bg-[#F5F5FA] p-4">
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Placement Lifecycle</p>
+            <p className="text-sm text-gray-600 mt-1">Use this section to complete, terminate, or reopen the placement with an explicit closure reason.</p>
+          </div>
+
+          <FormField control={form.control} name="status" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-gray-900">Placement Status</FormLabel>
+                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <FormControl>
+                    <SelectTrigger className="h-12 rounded-xl border-transparent bg-white text-gray-900">
+                      <SelectValue placeholder="Select placement status" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="Active">Active</SelectItem>
+                    <SelectItem value="Completed">Completed</SelectItem>
+                    <SelectItem value="Terminated">Terminated</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
           )} />
+
+          {placementStatus !== "Active" ? (
+            <div className="grid grid-cols-1 gap-5">
+              <FormField control={form.control} name="closureReason" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-sm font-semibold text-gray-900">Closure Reason</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={placementStatus === "Completed" ? "Placement completed successfully" : "Reason for early termination"}
+                        className="h-12 rounded-xl border-transparent bg-white text-gray-900"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+              )} />
+              <FormField control={form.control} name="closureNote" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-sm font-semibold text-gray-900">Closure Note</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Add context, follow-up notes, or the specific completion/termination details for archive history."
+                        className="min-h-[110px] rounded-xl border-transparent bg-white text-gray-900"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+              )} />
+            </div>
+          ) : (
+            <p className="text-xs font-medium text-gray-500">
+              Reopening a previously closed placement will clear stored closure metadata and return the learner to an active placement state.
+            </p>
+          )}
         </div>
 
         {/* GPS Coordinates (for visit verification) */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-sm font-semibold text-white flex items-center gap-1.5">
+            <label className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
               <MapPin className="h-3.5 w-3.5" /> Site GPS Coordinates <span className="text-gray-400 font-normal">(optional)</span>
             </label>
             <button
@@ -223,7 +310,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
 
          {/* Placement Region (for cross-region delegation) */}
          <div className="space-y-2">
-           <label className="text-sm font-semibold text-white">Placement Region</label>
+           <label className="text-sm font-semibold text-gray-900">Placement Region</label>
            <Select value={placementRegion} onValueChange={setPlacementRegion}>
              <SelectTrigger className="h-12 rounded-xl border-transparent bg-[#F5F5FA] text-gray-900">
                <SelectValue placeholder="Select region where placement is located" />
@@ -239,7 +326,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
              <FormField control={form.control} name="startDate" render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel className="text-sm font-semibold text-white">Start Date</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Start Date</FormLabel>
                   <Popover>
                     <PopoverTrigger asChild>
                       <FormControl>
@@ -258,7 +345,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
              )} />
              <FormField control={form.control} name="endDate" render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel className="text-sm font-semibold text-white">End Date</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-900">End Date</FormLabel>
                   <Popover>
                     <PopoverTrigger asChild>
                       <FormControl>

@@ -101,7 +101,7 @@ const { authFetch } = useAuth();
   const selectedLearner = learners.find(l => l._id === selectedLearnerId)
 
   useEffect(() => {
-    authFetch('/api/learners')
+    authFetch('/api/learners/options')
       .then(res => res.json())
       .then(data => setLearners(data))
       .catch(err => console.error("Error fetching learners:", err));

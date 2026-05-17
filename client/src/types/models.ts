@@ -10,6 +10,7 @@ export interface Learner {
   lastName?: string;
   name: string;
   trackingId: string;
+  institution?: string;
   indexNumber?: string;
   dateOfBirth?: string;
   program?: string;
@@ -24,6 +25,21 @@ export interface Learner {
     missingFields: string[];
     missingDocuments: string[];
     documentCount: number;
+  };
+  placementEligibility?: {
+    isEligible: boolean;
+    reason: string;
+    allowedWindowStatus?: string | null;
+    calendarType?: string | null;
+    yearGroup?: string;
+    schedule?: {
+      semester?: string;
+      academicYear?: string;
+      startDate?: string;
+      endDate?: string;
+      totalWeeks?: number | null;
+      institutionCalendarType?: string | null;
+    } | null;
   };
 }
 
@@ -41,6 +57,10 @@ export interface IndustryPartner {
   totalSlots: number;
   usedSlots: number;
   status: 'Active' | 'Inactive';
+  approvalStatus?: 'PendingHQApproval' | 'Approved' | 'Rejected';
+  approvalRequestedAt?: string;
+  approvalReviewedAt?: string;
+  approvalComment?: string;
   programs: string[];
 }
 
@@ -50,6 +70,7 @@ export interface Institution {
   name: string;
   code: string;
   region: string;
+  calendarType?: string;
   type?: string;
   address?: string;
   contactEmail?: string;

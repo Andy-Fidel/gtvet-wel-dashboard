@@ -29,6 +29,8 @@ export type Learner = {
   region: string
   year: string
   intakeAcademicYear?: string
+  graduationAcademicYear?: string
+  graduatedAt?: string
   academicStatus?: "Active" | "Graduating" | "Graduated" | "Dropped"
   status: "Pending" | "Placed" | "Completed" | "Dropped"
   readiness?: {

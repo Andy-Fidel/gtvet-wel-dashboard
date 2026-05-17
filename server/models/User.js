@@ -75,4 +75,11 @@ userSchema.methods.toJSON = function() {
   return obj;
 };
 
+userSchema.index({ role: 1, status: 1 });
+userSchema.index({ institution: 1, role: 1, status: 1 });
+userSchema.index({ region: 1, role: 1, status: 1 });
+userSchema.index({ partnerId: 1, role: 1, status: 1 });
+userSchema.index({ linkedLearners: 1 });
+userSchema.index({ resetPasswordToken: 1, resetPasswordExpires: 1 });
+
 export const User = mongoose.model('User', userSchema);

@@ -20,6 +20,7 @@ export function SearchPartnerDialog({ open, onOpenChange, onLinkSuccess, onRegis
   const [loading, setLoading] = useState(false)
   const [linkingId, setLinkingId] = useState<string | null>(null)
   const { authFetch } = useAuth()
+  const isApprovedPartner = (partner: IndustryPartner) => !partner.approvalStatus || partner.approvalStatus === "Approved"
 
   useEffect(() => {
     if (!query.trim()) {
@@ -107,15 +108,24 @@ export function SearchPartnerDialog({ open, onOpenChange, onLinkSuccess, onRegis
                       <div className="flex items-center gap-2 text-xs text-gray-500 font-medium mt-1">
                         <span className="bg-gray-100 px-2 py-0.5 rounded">{partner.sector}</span>
                         <span className="bg-gray-100 px-2 py-0.5 rounded">{partner.region}</span>
+                        {partner.approvalStatus && partner.approvalStatus !== "Approved" && (
+                          <span className={`px-2 py-0.5 rounded font-bold ${
+                            partner.approvalStatus === "PendingHQApproval"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-rose-100 text-rose-700"
+                          }`}>
+                            {partner.approvalStatus === "PendingHQApproval" ? "Pending HQ" : "Rejected"}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <Button 
                       onClick={() => handleLink(partner._id)}
-                      disabled={linkingId === partner._id}
+                      disabled={linkingId === partner._id || !isApprovedPartner(partner) || partner.status !== "Active"}
                       className="bg-[#FFB800]/10 text-amber-700 hover:bg-[#FFB800] hover:text-gray-900 rounded-xl font-bold transition-colors"
                     >
                       {linkingId === partner._id ? <Loader2 className="h-4 w-4 animate-spin" /> : <LinkIcon className="h-4 w-4 mr-2" />}
-                      Link
+                      {partner.approvalStatus === "PendingHQApproval" ? "Pending" : partner.approvalStatus === "Rejected" ? "Rejected" : "Link"}
                     </Button>
                   </div>
                 ))

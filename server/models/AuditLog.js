@@ -27,8 +27,14 @@ const auditLogSchema = new mongoose.Schema({
 auditLogSchema.index({ createdAt: -1 });
 auditLogSchema.index({ institution: 1, createdAt: -1 });
 auditLogSchema.index({ region: 1, createdAt: -1 });
+auditLogSchema.index({ action: 1, createdAt: -1 });
+auditLogSchema.index({ institution: 1, action: 1, createdAt: -1 });
+auditLogSchema.index({ region: 1, action: 1, createdAt: -1 });
 auditLogSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
 auditLogSchema.index({ actorId: 1, createdAt: -1 });
+auditLogSchema.index({ actorId: 1, action: 1, createdAt: -1 });
+auditLogSchema.index({ institution: 1, actorId: 1, action: 1, createdAt: -1 });
+auditLogSchema.index({ action: 1, 'metadata.outcome': 1, createdAt: -1 });
 
 function blockAuditMutation(next) {
   next(new Error('Audit logs are immutable and cannot be modified or deleted.'));

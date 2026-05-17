@@ -226,7 +226,15 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
   useEffect(() => {
     if (!['Guardian'].includes(selectedRole)) return
 
-    authFetch('/api/learners')
+    const params = new URLSearchParams()
+    const learnerScopeInstitution =
+      currentUser?.role === "Admin"
+        ? currentUser.institution || ""
+        : selectedInstitution || ""
+    if (learnerScopeInstitution) params.set("institution", learnerScopeInstitution)
+    params.set("academicStatus", "CurrentEnrolled")
+
+    authFetch(`/api/learners/options?${params.toString()}`)
       .then((res) => res.json())
       .then((data) => {
         const fetchedLearners = Array.isArray(data) ? data : []
@@ -249,7 +257,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
         setLearnerOptions(mergedLearners)
       })
       .catch((err) => console.error("Error fetching learners for guardian linking:", err))
-  }, [authFetch, initialData?.linkedLearners, selectedRole])
+  }, [authFetch, currentUser?.institution, currentUser?.role, initialData?.linkedLearners, selectedInstitution, selectedRole])
 
   useEffect(() => {
     if (["Admin", "Manager", "Staff"].includes(selectedRole)) {
@@ -299,11 +307,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
             }
             throw new Error(data.message || 'Failed to save user')
         }
-        if (data.defaultPassword) {
-            toast.success(`User created successfully. Temporary password: ${data.defaultPassword}`, {
-                duration: Number.POSITIVE_INFINITY,
-            })
-        }
+        toast.success('User created successfully.')
         await onSuccess(data)
     } catch (error) {
         console.error(error)

@@ -58,4 +58,8 @@ const competencyAssessmentSchema = new mongoose.Schema({
   timestamps: true
 });
 
+competencyAssessmentSchema.index({ learner: 1, assessmentDate: -1 });
+competencyAssessmentSchema.index({ institution: 1, assessmentDate: -1 });
+competencyAssessmentSchema.index({ trackingId: 1 });
+
 export const CompetencyAssessment = mongoose.model('CompetencyAssessment', competencyAssessmentSchema);

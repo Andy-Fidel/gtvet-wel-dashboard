@@ -15,6 +15,7 @@ import { useAuth } from '@/context/AuthContext';
 // Lazy-loaded page components (code-split by route)
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const LearnerRegister = lazy(() => import('@/pages/LearnerRegister'));
+const GraduatedLearners = lazy(() => import('@/pages/GraduatedLearners'));
 const LearnerProfile = lazy(() => import('@/pages/LearnerProfile'));
 const LearnerProgressDashboard = lazy(() => import('@/pages/LearnerProgressDashboard'));
 const AttendanceLogs = lazy(() => import('@/pages/AttendanceLogs'));
@@ -28,7 +29,9 @@ const CalendarView = lazy(() => import('@/pages/CalendarView'));
 const AcademicCalendarPage = lazy(() => import('@/pages/AcademicCalendar'));
 const Users = lazy(() => import('@/pages/Users'));
 const SuperAdminDashboard = lazy(() => import('@/pages/SuperAdminDashboard'));
+const HQIndustryPartners = lazy(() => import('@/pages/HQIndustryPartners'));
 const PartnerDashboard = lazy(() => import('@/pages/PartnerDashboard'));
+const PartnerHistory = lazy(() => import('@/pages/PartnerHistory'));
 const GuardianDashboard = lazy(() => import('@/pages/GuardianDashboard'));
 const UserProfile = lazy(() => import('@/pages/UserProfile'));
 const Notifications = lazy(() => import('@/pages/Notifications'));
@@ -92,6 +95,15 @@ function App() {
                   </Suspense>
                 </ErrorBoundary>
               } />
+              <Route path="graduated-learners" element={
+                <ProtectedRoute requiredRoles={['Admin', 'Manager', 'Staff']}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <GraduatedLearners />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              } />
               <Route path="learners/:id" element={
                 <ErrorBoundary>
                   <Suspense fallback={<PageSkeleton />}>
@@ -114,6 +126,13 @@ function App() {
                 </ErrorBoundary>
               } />
               <Route path="placements" element={
+                <ErrorBoundary>
+                  <Suspense fallback={<PageSkeleton />}>
+                    <Placements />
+                  </Suspense>
+                </ErrorBoundary>
+              } />
+              <Route path="delegated-placements" element={
                 <ErrorBoundary>
                   <Suspense fallback={<PageSkeleton />}>
                     <Placements />
@@ -189,11 +208,29 @@ function App() {
                   </ErrorBoundary>
                 </ProtectedRoute>
               } />
+              <Route path="hq-industry-partners" element={
+                <ProtectedRoute requiredRoles={['SuperAdmin']}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <HQIndustryPartners />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              } />
               <Route path="partner-dashboard" element={
                 <ProtectedRoute requiredRoles={['IndustryPartner']}>
                   <ErrorBoundary>
                     <Suspense fallback={<PageSkeleton />}>
                       <PartnerDashboard />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              } />
+              <Route path="partner-history" element={
+                <ProtectedRoute requiredRoles={['IndustryPartner']}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <PartnerHistory />
                     </Suspense>
                   </ErrorBoundary>
                 </ProtectedRoute>

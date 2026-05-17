@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -68,6 +68,16 @@ export function PlacementMessagesDialog({
   const [messages, setMessages] = useState<PlacementMessage[]>([])
   const [draft, setDraft] = useState("")
   const [replyTo, setReplyTo] = useState<PlacementMessage | null>(null)
+  const onConversationReadRef = useRef(onConversationRead)
+  const onMessageCreatedRef = useRef(onMessageCreated)
+
+  useEffect(() => {
+    onConversationReadRef.current = onConversationRead
+  }, [onConversationRead])
+
+  useEffect(() => {
+    onMessageCreatedRef.current = onMessageCreated
+  }, [onMessageCreated])
 
   useEffect(() => {
     if (!open || !placementId) return
@@ -86,7 +96,7 @@ export function PlacementMessagesDialog({
       .then((data) => {
         setPlacement(data.placement)
         setMessages(data.messages)
-        onConversationRead?.(placementId)
+        onConversationReadRef.current?.(placementId)
       })
       .catch((error: Error) => {
         if (error.name !== "AbortError") {
@@ -97,7 +107,7 @@ export function PlacementMessagesDialog({
       .finally(() => setLoading(false))
 
     return () => controller.abort()
-  }, [open, placementId, authFetch, onConversationRead])
+  }, [open, placementId, authFetch])
 
   useEffect(() => {
     if (!open) {
@@ -128,7 +138,7 @@ export function PlacementMessagesDialog({
       setMessages((current) => [...current, createdMessage])
       setDraft("")
       setReplyTo(null)
-      onMessageCreated?.(placementId, createdMessage.createdAt)
+      onMessageCreatedRef.current?.(placementId, createdMessage.createdAt)
       toast.success("Message sent")
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to send message"
@@ -149,22 +159,25 @@ export function PlacementMessagesDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-3xl max-h-[90vh] overflow-hidden p-0 gap-0">
+      <DialogContent
+        overlayClassName="bg-slate-950/55"
+        className="sm:max-w-3xl max-h-[90vh] overflow-hidden p-0 gap-0 border-slate-200 bg-white [&>button]:text-slate-500 [&>button]:bg-slate-100 hover:[&>button]:bg-slate-200 hover:[&>button]:text-slate-900"
+      >
         <DialogHeader className="border-b border-slate-200 px-6 py-5">
-          <DialogTitle className="flex items-center gap-2 text-xl font-black text-white">
+          <DialogTitle className="flex items-center gap-2 text-xl font-black text-slate-900 pr-8">
             <MessageSquare className="h-5 w-5 text-indigo-400" />
             Placement Conversation
           </DialogTitle>
-          <DialogDescription className="space-y-2 pt-1 text-slate-200">
+          <DialogDescription className="space-y-2 pt-1 text-slate-600">
             <span className="block">
               Thread for {placement?.learner?.name || "this learner"} at {placement?.companyName || "the placement site"}.
             </span>
             {placement && (
               <span className="flex flex-wrap gap-2">
-                <Badge variant="outline">{placement.learner?.trackingId || "No Tracking ID"}</Badge>
-                <Badge variant="outline">{placement.institution || "No Institution"}</Badge>
-                {placement.partner?.name ? <Badge variant="outline">{placement.partner.name}</Badge> : null}
-                <Badge variant="outline">{placement.status}</Badge>
+                <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">{placement.learner?.trackingId || "No Tracking ID"}</Badge>
+                <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">{placement.institution || "No Institution"}</Badge>
+                {placement.partner?.name ? <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">{placement.partner.name}</Badge> : null}
+                <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">{placement.status}</Badge>
               </span>
             )}
           </DialogDescription>

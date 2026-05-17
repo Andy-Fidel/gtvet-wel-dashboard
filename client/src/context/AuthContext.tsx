@@ -65,7 +65,7 @@ interface AuthContextType {
   }>;
   login: (email: string, password: string) => Promise<{ passwordChangeRequired: boolean }>;
   register: (data: RegisterData) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
   changePassword: (newPassword: string) => Promise<void>;
   syncOfflineQueue: () => Promise<void>;
@@ -229,8 +229,8 @@ const mapOfflineQueueState = (queue: OfflineMutation[]) => (
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
-  const [isLoading, setIsLoading] = useState(!!token);
+  const token: string | null = null;
+  const [isLoading, setIsLoading] = useState(true);
   const [passwordChangeRequired, setPasswordChangeRequired] = useState<boolean>(
     localStorage.getItem('passwordChangeRequired') === 'true'
   );
@@ -275,6 +275,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const syncInFlightRef = useRef(false);
   const isLoggingInRef = useRef(false);
 
+  const getCsrfTokenFromCookie = useCallback(() => {
+    if (typeof document === 'undefined') return null;
+    const cookie = document.cookie
+      .split(';')
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith('gtvets_csrf='));
+    if (!cookie) return null;
+    return decodeURIComponent(cookie.slice('gtvets_csrf='.length));
+  }, []);
+
+  const ensureCsrfToken = useCallback(async () => {
+    const existingToken = getCsrfTokenFromCookie();
+    if (existingToken) return existingToken;
+
+    const response = await fetch(`${API_BASE}/auth/csrf`, {
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      throw new Error('Failed to initialize security token');
+    }
+    const payload = await response.json().catch(() => ({}));
+    return payload.csrfToken || getCsrfTokenFromCookie() || null;
+  }, [getCsrfTokenFromCookie]);
+
   const loadOfflineState = useCallback((scope = getActiveOfflineScope()) => {
     const queue = readOfflineQueue(scope);
     const history = readOfflineSyncHistory(scope);
@@ -288,9 +312,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loadOfflineState(scope);
   }, [loadOfflineState]);
 
-  const hydrateSessionUser = useCallback(async (sessionToken: string, fallbackUser?: User | null) => {
+  const hydrateSessionUser = useCallback(async (fallbackUser?: User | null) => {
     const response = await fetch(`${API_BASE}/auth/me`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -307,16 +331,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearLegacyOfflineStorage();
   }, []);
 
-  // Load user from token on mount (skipped during login to avoid race conditions)
+  // Load user from session cookie on mount (skipped during login to avoid race conditions)
   useEffect(() => {
-    if (!token || isLoggingInRef.current) return;
+    if (isLoggingInRef.current) return;
 
     let isMounted = true;
     fetch(`${API_BASE}/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
     })
       .then(res => {
-        if (!res.ok) throw new Error('Invalid token');
+        if (!res.ok) throw new Error('Invalid session');
         return res.json();
       })
       .then(userData => {
@@ -328,9 +352,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         if (isMounted) {
-            localStorage.removeItem('token');
             setActiveOfflineScope(null);
-            setToken(null);
             setUser(null);
             loadOfflineState(null);
             setIsLoading(false);
@@ -338,12 +360,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       
     return () => { isMounted = false; };
-  }, [token]);
+  }, [activateOfflineScope, loadOfflineState]);
 
   const login = useCallback(async (email: string, password: string) => {
+    const csrfToken = await ensureCsrfToken();
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+      },
+      credentials: 'include',
       body: JSON.stringify({ email, password }),
     });
 
@@ -365,8 +392,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
     activateOfflineScope(getOfflineScopeForUser(data.user));
     setIsLoading(true);
-    localStorage.setItem('token', data.token);
-    setToken(data.token);
 
     // Handle password change requirement
     if (data.passwordChangeRequired) {
@@ -379,19 +404,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       // Hydrate with full server data (populated fields like partnerId)
-      await hydrateSessionUser(data.token, data.user);
+      await hydrateSessionUser(data.user);
     } finally {
       setIsLoading(false);
       isLoggingInRef.current = false;
     }
 
     return { passwordChangeRequired: data.passwordChangeRequired || false };
-  }, [hydrateSessionUser, queryClient]);
+  }, [activateOfflineScope, ensureCsrfToken, hydrateSessionUser, queryClient]);
 
   const register = useCallback(async (registerData: RegisterData) => {
+    const csrfToken = await ensureCsrfToken();
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+      },
+      credentials: 'include',
       body: JSON.stringify(registerData),
     });
 
@@ -401,18 +431,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const data = await res.json();
-    localStorage.setItem('token', data.token);
-    setToken(data.token);
     setUser(data.user);
     activateOfflineScope(getOfflineScopeForUser(data.user));
-  }, [activateOfflineScope]);
+  }, [activateOfflineScope, ensureCsrfToken]);
 
-  const logout = useCallback(() => {
-    localStorage.removeItem('token');
+  const logout = useCallback(async () => {
+    const csrfToken = await ensureCsrfToken();
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined,
+    }).catch(() => undefined);
+
     localStorage.removeItem('passwordChangeRequired');
     clearLegacyOfflineStorage();
     queryClient.clear();
-    setToken(null);
     setUser(null);
     setActiveOfflineScope(null);
     setOfflineQueue([]);
@@ -420,10 +453,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOfflineSyncHistory([]);
     setPasswordChangeRequired(false);
     setIsLoading(false);
-  }, [queryClient]);
+  }, [ensureCsrfToken, queryClient]);
 
   const syncOfflineQueue = useCallback(async () => {
-    if (!token || typeof window === 'undefined' || !window.navigator.onLine || syncInFlightRef.current) {
+    if (!user || typeof window === 'undefined' || !window.navigator.onLine || syncInFlightRef.current) {
       return;
     }
 
@@ -441,6 +474,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const remaining: OfflineMutation[] = [];
     const history = readOfflineSyncHistory(activeScope);
     let syncedCount = 0;
+    const csrfToken = await ensureCsrfToken();
 
     for (const request of queuedRequests) {
       try {
@@ -448,8 +482,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           method: request.method,
           headers: {
             ...request.headers,
-            Authorization: `Bearer ${token}`,
+            ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
           },
+          credentials: 'include',
           body: request.body,
         });
 
@@ -519,7 +554,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (syncedCount > 0) {
       toast.success(`${syncedCount} offline action${syncedCount === 1 ? '' : 's'} synced successfully.`);
     }
-  }, [token]);
+  }, [ensureCsrfToken, user]);
 
   const removeOfflineQueueItem = useCallback((id: string) => {
     const nextQueue = readOfflineQueue().filter((item) => item.id !== id);
@@ -537,17 +572,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     const method = (options.method || 'GET').toUpperCase();
     const isFormData = options.body instanceof FormData;
+    const csrfToken = !['GET', 'HEAD', 'OPTIONS'].includes(method) ? await ensureCsrfToken() : null;
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
       ...options.headers,
     };
 
     try {
-      return await fetch(url, {
+      const response = await fetch(url, {
         ...options,
         headers,
+        credentials: 'include',
       });
+
+      if (response.status === 401) {
+        localStorage.removeItem('passwordChangeRequired');
+        queryClient.clear();
+        setUser(null);
+        setPasswordChangeRequired(false);
+        setActiveOfflineScope(null);
+        setOfflineQueue([]);
+        setOfflineQueueCount(0);
+        setOfflineSyncHistory([]);
+      }
+
+      return response;
     } catch (error) {
       if (isQueueableMutation(url, options)) {
         const activeScope = getActiveOfflineScope();
@@ -589,13 +639,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       throw error;
     }
-  }, [token]);
+  }, [ensureCsrfToken, queryClient]);
 
-  const changePassword = useCallback(async (newPassword: string) => {
+  const changePassword = useCallback(async (newPassword: string, currentPassword?: string) => {
     const res = await authFetch(`${API_BASE}/auth/change-password`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newPassword }),
+      body: JSON.stringify({ newPassword, ...(currentPassword ? { currentPassword } : {}) }),
     });
 
     if (!res.ok) {
@@ -605,16 +655,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     localStorage.removeItem('passwordChangeRequired');
     setPasswordChangeRequired(false);
-    if (token) {
-      queryClient.clear();
-      await hydrateSessionUser(token, user);
-    }
-  }, [authFetch, hydrateSessionUser, queryClient, token, user]);
+    queryClient.clear();
+    await hydrateSessionUser(user);
+  }, [authFetch, hydrateSessionUser, queryClient, user]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!user) return;
     syncOfflineQueue();
-  }, [token, syncOfflineQueue]);
+  }, [user, syncOfflineQueue]);
 
   useEffect(() => {
     const handleOnline = () => {

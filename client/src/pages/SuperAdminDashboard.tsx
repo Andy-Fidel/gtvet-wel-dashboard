@@ -44,14 +44,14 @@ interface RegionalStat {
   institutionCount: number;
   placementRate: number;
   completionRate: number;
-  currentMonthPlacements: number;
-  previousMonthPlacements: number;
-  monthOverMonthDelta: number;
-  monthOverMonthPercent: number;
+  currentSemesterPlacements: number;
+  previousSemesterPlacements: number;
+  semesterOverSemesterDelta: number;
+  semesterOverSemesterPercent: number;
   movementDirection: "up" | "down" | "flat";
   needsIntervention: boolean;
   interventionReasons: string[];
-  sparkline: { month: string; count: number }[];
+  sparkline: { period: string; count: number }[];
 }
 
 interface OverviewData {
@@ -177,7 +177,7 @@ export default function SuperAdminDashboard() {
   const [editingInstitution, setEditingInstitution] = useState<any | null>(null);
   const [instSearch, setInstSearch] = useState('');
   const [expandedRegions, setExpandedRegions] = useState<string[]>([]);
-  const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "monthOverMonthPercent">("placementRate");
+  const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "semesterOverSemesterPercent">("placementRate");
   const { authFetch } = useAuth();
   const navigate = useNavigate();
 
@@ -303,8 +303,8 @@ export default function SuperAdminDashboard() {
       return b.placementRate - a.placementRate;
     }
 
-    if (regionalSortBy === "monthOverMonthPercent") {
-      if (b.monthOverMonthPercent !== a.monthOverMonthPercent) return b.monthOverMonthPercent - a.monthOverMonthPercent;
+    if (regionalSortBy === "semesterOverSemesterPercent") {
+      if (b.semesterOverSemesterPercent !== a.semesterOverSemesterPercent) return b.semesterOverSemesterPercent - a.semesterOverSemesterPercent;
       return b.placementRate - a.placementRate;
     }
 
@@ -512,7 +512,7 @@ export default function SuperAdminDashboard() {
             <div>
               <CardTitle className="text-2xl font-black">Regional Performance League Table</CardTitle>
               <CardDescription className="text-base font-bold text-gray-400 mt-2">
-                Placement rate, completion rate, intervention risk, and month-over-month placement movement by region.
+                Placement rate, completion rate, intervention risk, and semester-on-semester placement movement by region.
               </CardDescription>
             </div>
             <Button
@@ -539,10 +539,10 @@ export default function SuperAdminDashboard() {
               Completion Rate
             </button>
             <button
-              onClick={() => setRegionalSortBy("monthOverMonthPercent")}
-              className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "monthOverMonthPercent" ? "bg-green-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+              onClick={() => setRegionalSortBy("semesterOverSemesterPercent")}
+              className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "semesterOverSemesterPercent" ? "bg-green-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
             >
-              MoM Movement
+              SoS Movement
             </button>
           </div>
         </CardHeader>
@@ -587,9 +587,9 @@ export default function SuperAdminDashboard() {
                         <MovementIcon className="h-4 w-4" />
                         <span>
                           {region.movementDirection === "up" ? "+" : region.movementDirection === "down" ? "" : ""}
-                          {region.monthOverMonthPercent}%
+                          {region.semesterOverSemesterPercent}%
                         </span>
-                        <span className="text-xs font-bold opacity-70">MoM</span>
+                        <span className="text-xs font-bold opacity-70">SoS</span>
                       </div>
                     </div>
 
@@ -607,12 +607,12 @@ export default function SuperAdminDashboard() {
                         </span>
                       </div>
                       <div className="bg-white p-4 rounded-2xl border border-gray-100">
-                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Current Month</span>
-                        <span className="text-2xl font-black text-gray-900">{region.currentMonthPlacements}</span>
+                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Current Semester</span>
+                        <span className="text-2xl font-black text-gray-900">{region.currentSemesterPlacements}</span>
                       </div>
                       <div className="bg-white p-4 rounded-2xl border border-gray-100">
-                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Previous Month</span>
-                        <span className="text-2xl font-black text-gray-900">{region.previousMonthPlacements}</span>
+                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Previous Semester</span>
+                        <span className="text-2xl font-black text-gray-900">{region.previousSemesterPlacements}</span>
                       </div>
                       <div className="bg-white p-4 rounded-2xl border border-gray-100">
                         <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Completed</span>
@@ -643,9 +643,9 @@ export default function SuperAdminDashboard() {
 
                     <div className="mt-4 rounded-2xl bg-white border border-gray-100 p-4">
                       <div className="flex items-center justify-between mb-3">
-                        <p className="text-xs font-black uppercase tracking-widest text-gray-400">6-Month Placement Trend</p>
+                        <p className="text-xs font-black uppercase tracking-widest text-gray-400">4-Semester Placement Trend</p>
                         <p className="text-xs font-bold text-gray-500">
-                          {region.sparkline?.[0]?.month} to {region.sparkline?.[(region.sparkline?.length || 1) - 1]?.month}
+                          {region.sparkline?.[0]?.period} to {region.sparkline?.[(region.sparkline?.length || 1) - 1]?.period}
                         </p>
                       </div>
                       <div className="h-20">
@@ -667,10 +667,10 @@ export default function SuperAdminDashboard() {
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
-                      <div className="mt-2 grid grid-cols-6 gap-2">
+                      <div className="mt-2 grid grid-cols-4 gap-2">
                         {region.sparkline?.map((point) => (
-                          <div key={`${region.region}-${point.month}`} className="text-center">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{point.month}</p>
+                          <div key={`${region.region}-${point.period}`} className="text-center">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{point.period}</p>
                             <p className="text-xs font-bold text-gray-700 mt-1">{point.count}</p>
                           </div>
                         ))}
@@ -1207,6 +1207,9 @@ export default function SuperAdminDashboard() {
                   Companies active in the placement network
                 </CardDescription>
               </div>
+              <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/hq-industry-partners')}>
+                Open Registry
+              </Button>
             </div>
 
             {/* Summary Stats */}

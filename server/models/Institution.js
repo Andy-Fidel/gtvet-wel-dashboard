@@ -20,8 +20,12 @@ const institutionSchema = new mongoose.Schema({
     enum: ['Boys', 'Girls', 'Mixed'], 
     required: true 
   },
+  calendarType: {
+    type: String,
+    enum: ['Single Track', 'Transitional'],
+    default: 'Single Track',
+  },
   programs: [{ type: String }],
 }, { timestamps: true });
 
 export const Institution = mongoose.model('Institution', institutionSchema);
-

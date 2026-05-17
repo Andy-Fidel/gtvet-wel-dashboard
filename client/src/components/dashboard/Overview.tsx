@@ -1,31 +1,22 @@
 
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Cell } from "recharts"
 
-
 const data = [
   {
-    name: "Jan",
-    total: 120,
-  },
-  {
-    name: "Feb",
-    total: 145,
-  },
-  {
-    name: "Mar",
+    name: "2024 S1",
     total: 180,
   },
   {
-    name: "Apr",
-    total: 220,
+    name: "2024 S2",
+    total: 235,
   },
   {
-    name: "May",
-    total: 280,
+    name: "2025 S1",
+    total: 260,
   },
   {
-    name: "Jun",
-    total: 350,
+    name: "2025 S2",
+    total: 320,
   },
 ]
 

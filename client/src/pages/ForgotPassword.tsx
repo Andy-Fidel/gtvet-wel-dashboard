@@ -6,6 +6,15 @@ import { API_BASE } from '@/config';
 import { ArrowLeft, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 
+const ensureCsrfToken = async () => {
+  const response = await fetch(`${API_BASE}/auth/csrf`, { credentials: 'include' });
+  if (!response.ok) {
+    throw new Error('Failed to initialize security token');
+  }
+  const payload = await response.json().catch(() => ({}));
+  return payload.csrfToken as string | undefined;
+};
+
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -17,11 +26,14 @@ export default function ForgotPassword() {
     setIsLoading(true);
 
     try {
+      const csrfToken = await ensureCsrfToken();
       const response = await fetch(`${API_BASE}/auth/forgot-password`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
         },
+        credentials: 'include',
         body: JSON.stringify({ email }),
       });
 

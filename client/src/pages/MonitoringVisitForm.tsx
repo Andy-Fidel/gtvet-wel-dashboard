@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils"
 import { Calendar } from "@/components/ui/Calendar"
 import { safeDateString } from "@/lib/dateUtils"
 import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
+import { toast } from "sonner"
 
 const formSchema = z.object({
   learner: z.string().min(1, "Learner is required"),
@@ -80,7 +81,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
   useEffect(() => { captureLocation(); }, [captureLocation]);
 
   useEffect(() => {
-    authFetch('/api/learners')
+    authFetch('/api/learners/options')
         .then(res => res.json())
         .then(data => setLearners(data))
         .catch(err => console.error("Error fetching learners:", err))
@@ -159,12 +160,16 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         })
-        if (!response.ok) throw new Error('Failed to save visit')
+        if (!response.ok) {
+            const errorPayload = await response.json().catch(() => null)
+            throw new Error(errorPayload?.message || 'Failed to save visit')
+        }
         const data = await response.json()
         clearDraft(draftKey)
         onSuccess(data)
     } catch (error) {
         console.error(error)
+        toast.error(error instanceof Error ? error.message : "Failed to save visit")
     } finally {
         setLoading(false)
     }
@@ -172,14 +177,14 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5 text-gray-900">
         
         {/* Learner */}
         <FormField control={form.control} name="learner" render={({ field }) => (
             <FormItem>
               <FormLabel className="text-sm font-semibold text-gray-900">Learner / Trainee</FormLabel>
               <Select onValueChange={field.onChange} defaultValue={field.value} disabled={!!initialData?.learner}>
-                <FormControl><SelectTrigger><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
+                <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
                 <SelectContent>
                     {learners.map((learner) => (
                         <SelectItem key={learner._id} value={learner._id}>{learner.name}</SelectItem>
@@ -262,7 +267,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Visit Type</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
+                    <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
                     <SelectContent>
                         <SelectItem value="Routine">Routine</SelectItem>
                         <SelectItem value="Urgent">Urgent</SelectItem>
@@ -281,7 +286,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Attendance Status</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger></FormControl>
+                    <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select status" /></SelectTrigger></FormControl>
                     <SelectContent>
                         <SelectItem value="Present">Present</SelectItem>
                         <SelectItem value="Absent">Absent</SelectItem>
@@ -297,7 +302,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Performance Rating (1-5)</FormLabel>
                   <FormControl>
-                    <div className="flex items-center bg-[#F5F5FA] rounded-xl h-12 px-3">
+                    <div className="flex items-center bg-[#F5F5FA] rounded-xl h-12 px-3 text-gray-900">
                        <input type="range" min="1" max="5" step="1" value={normalizeSliderValue(field.value)} onChange={e => field.onChange(Number(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-indigo-500 mx-2" />
                        <span className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm shrink-0">{field.value}</span>
                     </div>

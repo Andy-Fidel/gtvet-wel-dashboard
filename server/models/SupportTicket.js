@@ -71,6 +71,10 @@ const supportTicketSchema = new mongoose.Schema({
   resolvedAt: { type: Date },
   replies: { type: [supportReplySchema], default: [] },
   readStates: { type: [supportReadStateSchema], default: [] },
+  archivedAt: { type: Date, default: null },
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  archiveReason: { type: String, default: '' },
+  archivedAcademicYear: { type: String, default: '' },
 }, { timestamps: true });
 
 supportTicketSchema.index({ requester: 1, createdAt: -1 });
@@ -85,5 +89,6 @@ supportTicketSchema.index({ assignedTo: 1, status: 1 });
 supportTicketSchema.index({ escalatedTo: 1, status: 1 });
 supportTicketSchema.index({ resolutionDueAt: 1, status: 1 });
 supportTicketSchema.index({ 'readStates.user': 1 });
+supportTicketSchema.index({ archivedAt: 1, institution: 1, updatedAt: -1 });
 
 export const SupportTicket = mongoose.model('SupportTicket', supportTicketSchema);

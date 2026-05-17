@@ -71,7 +71,11 @@ export default defineConfig({
     },
   },
   server: {
-    allowedHosts: ["busked-matilde-shamefully.ngrok-free.dev"],
+    allowedHosts: [
+      "localhost",
+      "127.0.0.1",
+      "busked-matilde-shamefully.ngrok-free.dev",
+    ],
     proxy: {
       "/api": {
         target: "http://localhost:5001",

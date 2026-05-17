@@ -22,9 +22,17 @@ const formSchema = z.object({
   entryType: z.enum(["Daily", "Weekly"]),
   periodStart: z.date(),
   periodEnd: z.date(),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Enter start time as HH:MM"),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Enter end time as HH:MM"),
   hoursWorked: z.number().min(0, "Hours cannot be negative"),
   tasksCompleted: z.string().min(5, "Describe the work completed"),
+  skillsDemonstrated: z.string().min(3, "Describe the skills demonstrated"),
   notes: z.string().optional(),
+  learnerSignatureName: z.string().min(2, "Learner signature name is required"),
+  facilitatorComment: z.string().optional(),
+  facilitatorName: z.string().min(2, "Facilitator name is required"),
+  facilitatorSignatureName: z.string().min(2, "Facilitator signature name is required"),
+  facilitatorSignedAt: z.string().min(1, "Facilitator signed date is required"),
 })
 
 type FormValues = z.infer<typeof formSchema>
@@ -38,9 +46,17 @@ interface AttendanceLogFormProps {
     entryType?: "Daily" | "Weekly"
     periodStart?: string
     periodEnd?: string
+    startTime?: string
+    endTime?: string
     hoursWorked?: number
     tasksCompleted?: string
+    skillsDemonstrated?: string
     notes?: string
+    learnerSignatureName?: string
+    facilitatorComment?: string
+    facilitatorName?: string
+    facilitatorSignatureName?: string
+    facilitatorSignedAt?: string
   } | null
   presetLearnerId?: string
 }
@@ -66,9 +82,17 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
       entryType: initialData?.entryType || "Daily",
       periodStart: safeDateString(initialData?.periodStart) || new Date(),
       periodEnd: safeDateString(initialData?.periodEnd) || new Date(),
+      startTime: initialData?.startTime || "08:00",
+      endTime: initialData?.endTime || "17:00",
       hoursWorked: initialData?.hoursWorked || 0,
       tasksCompleted: initialData?.tasksCompleted || "",
+      skillsDemonstrated: initialData?.skillsDemonstrated || "",
       notes: initialData?.notes || "",
+      learnerSignatureName: initialData?.learnerSignatureName || "",
+      facilitatorComment: initialData?.facilitatorComment || "",
+      facilitatorName: initialData?.facilitatorName || user?.name || "",
+      facilitatorSignatureName: initialData?.facilitatorSignatureName || user?.name || "",
+      facilitatorSignedAt: initialData?.facilitatorSignedAt ? String(initialData.facilitatorSignedAt).slice(0, 10) : new Date().toISOString().slice(0, 10),
     },
   })
 
@@ -82,11 +106,19 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
       entryType: draft.entryType === "Weekly" ? "Weekly" : "Daily",
       periodStart: draft.periodStart ? new Date(String(draft.periodStart)) : new Date(),
       periodEnd: draft.periodEnd ? new Date(String(draft.periodEnd)) : new Date(),
+      startTime: typeof draft.startTime === "string" ? draft.startTime : "08:00",
+      endTime: typeof draft.endTime === "string" ? draft.endTime : "17:00",
       hoursWorked: typeof draft.hoursWorked === "number" ? draft.hoursWorked : 0,
       tasksCompleted: typeof draft.tasksCompleted === "string" ? draft.tasksCompleted : "",
+      skillsDemonstrated: typeof draft.skillsDemonstrated === "string" ? draft.skillsDemonstrated : "",
       notes: typeof draft.notes === "string" ? draft.notes : "",
+      learnerSignatureName: typeof draft.learnerSignatureName === "string" ? draft.learnerSignatureName : "",
+      facilitatorComment: typeof draft.facilitatorComment === "string" ? draft.facilitatorComment : "",
+      facilitatorName: typeof draft.facilitatorName === "string" ? draft.facilitatorName : (user?.name || ""),
+      facilitatorSignatureName: typeof draft.facilitatorSignatureName === "string" ? draft.facilitatorSignatureName : (user?.name || ""),
+      facilitatorSignedAt: typeof draft.facilitatorSignedAt === "string" ? draft.facilitatorSignedAt : new Date().toISOString().slice(0, 10),
     })
-  }, [defaultLearner, draftKey, form, initialData?._id])
+  }, [defaultLearner, draftKey, form, initialData?._id, user?.name])
 
   useEffect(() => {
     if (initialData?._id) return
@@ -105,10 +137,17 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
   const selectedLearner = learners.find((learner) => learner._id === selectedLearnerId)
 
   useEffect(() => {
+    if (!selectedLearner || initialData?._id) return
+    if (!form.getValues("learnerSignatureName")) {
+      form.setValue("learnerSignatureName", selectedLearner.name)
+    }
+  }, [form, initialData?._id, selectedLearner])
+
+  useEffect(() => {
     const fetchLearners = async () => {
       try {
         if (user?.role === "IndustryPartner") {
-          const res = await authFetch("/api/partner-portal/placements")
+          const res = await authFetch("/api/partner-portal/placements?status=Active")
           const data = await res.json()
           const partnerLearners = (data || [])
             .filter((placement: { assignedToCurrentSupervisor?: boolean; partnerSupervisor?: { _id: string } | null }) => {
@@ -121,7 +160,7 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
           return
         }
 
-        const res = await authFetch("/api/learners")
+        const res = await authFetch("/api/learners/options")
         const data = await res.json()
         setLearners(data)
       } catch (err) {
@@ -256,6 +295,37 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <FormField
             control={form.control}
+            name="startTime"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-gray-800">Start Time</FormLabel>
+                <FormControl>
+                  <Input type="time" value={field.value} onChange={field.onChange} className="bg-[#F5F5FA] border-transparent rounded-xl" />
+                </FormControl>
+                <FormDescription>Capture the shift or reporting start time used in the logbook.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="endTime"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-gray-800">End Time</FormLabel>
+                <FormControl>
+                  <Input type="time" value={field.value} onChange={field.onChange} className="bg-[#F5F5FA] border-transparent rounded-xl" />
+                </FormControl>
+                <FormDescription>Capture the shift or reporting end time used in the logbook.</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <FormField
+            control={form.control}
             name="periodStart"
             render={({ field }) => (
               <FormItem className="flex flex-col">
@@ -352,17 +422,111 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
 
         <FormField
           control={form.control}
+          name="skillsDemonstrated"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-sm font-semibold text-gray-800">Skills Demonstrated</FormLabel>
+              <FormControl>
+                <Textarea placeholder="List the practical, technical, or soft skills the learner demonstrated..." {...field} />
+              </FormControl>
+              <FormDescription>This maps to the separate “Skills Demonstrated” field in the WEL logbook.</FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
           name="notes"
           render={({ field }) => (
             <FormItem>
-              <FormLabel className="text-sm font-semibold text-gray-800">Notes</FormLabel>
+              <FormLabel className="text-sm font-semibold text-gray-800">Remarks / Notes</FormLabel>
               <FormControl>
-                <Textarea placeholder="Optional notes about attendance, overtime, or issues encountered." {...field} />
+                <Textarea placeholder="Optional remarks about attendance, overtime, challenges, incidents, or follow-up actions." {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
           )}
         />
+
+        <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-5 space-y-5">
+          <div>
+            <p className="text-sm font-black text-gray-900">Logbook Signatures & Review</p>
+            <p className="text-sm text-gray-600 mt-1">These fields complete the learner and WEL facilitator section of the formal logbook.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <FormField
+              control={form.control}
+              name="learnerSignatureName"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Learner Signature Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Type learner full name as signature" {...field} className="bg-white border-gray-200 rounded-xl" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="facilitatorSignedAt"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Facilitator Review Date</FormLabel>
+                  <FormControl>
+                    <Input type="date" {...field} className="bg-white border-gray-200 rounded-xl" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <FormField
+            control={form.control}
+            name="facilitatorComment"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-gray-800">WEL Facilitator Comments</FormLabel>
+                <FormControl>
+                  <Textarea placeholder="Capture facilitator comments for the learner's weekly log..." {...field} className="bg-white border-gray-200 rounded-xl" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <FormField
+              control={form.control}
+              name="facilitatorName"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-800">WEL Facilitator Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Facilitator full name" {...field} className="bg-white border-gray-200 rounded-xl" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="facilitatorSignatureName"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Facilitator Signature Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Type facilitator name as signature" {...field} className="bg-white border-gray-200 rounded-xl" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </div>
 
         <Button type="submit" className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm" disabled={loading}>
           {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

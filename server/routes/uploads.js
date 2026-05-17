@@ -19,6 +19,70 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const localUploadRoot = path.resolve(__dirname, '../local-uploads');
+const canManageInstitutionRecord = (user, institution) => {
+  if (!institution) return false;
+  if (user.role === 'SuperAdmin') return true;
+  if (user.role === 'RegionalAdmin') return true;
+  return user.institution === institution;
+};
+
+const getUserPartnerId = (user) => user?.partnerId?._id?.toString?.() || user?.partnerId?.toString?.() || null;
+
+const canAccessLearner = (user, learner) => {
+  if (!learner) return false;
+  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (user.role === 'Guardian') {
+    return (user.linkedLearners || []).some((linkedLearner) => linkedLearner._id?.toString?.() === learner._id.toString());
+  }
+  if (user.role === 'IndustryPartner') return false;
+  if (learner.owner?.toString?.() === user._id.toString()) return true;
+  return learner.institution === user.institution;
+};
+
+const canAccessPlacement = (user, placement) => {
+  if (!placement) return false;
+  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (user.role === 'IndustryPartner') {
+    const userPartnerId = getUserPartnerId(user);
+    const placementPartnerId = placement.partner?.toString?.();
+    if (!userPartnerId || !placementPartnerId || userPartnerId !== placementPartnerId) return false;
+    if (!placement.partnerSupervisor) return true;
+    return placement.partnerSupervisor.toString() === user._id.toString();
+  }
+  if (placement.delegate?.toString?.() === user._id.toString()) return true;
+  if (placement.owner?.toString?.() === user._id.toString()) return true;
+  return placement.institution === user.institution;
+};
+
+const canAccessSupportTicket = (user, ticket) => {
+  if (!ticket) return false;
+  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (user.role === 'IndustryPartner') {
+    return ticket.partnerId?.toString?.() === getUserPartnerId(user);
+  }
+  if (user.role === 'Guardian') {
+    return ticket.requester?.toString?.() === user._id.toString();
+  }
+  if (ticket.requester?.toString?.() === user._id.toString()) return true;
+  return ticket.institution === user.institution;
+};
+
+const canAccessMonitoringVisit = (user, visit) => {
+  if (!visit) return false;
+  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (visit.submittedBy?.toString?.() === user._id.toString()) return true;
+  return visit.institution === user.institution;
+};
+
+const canAccessEmployerEvaluation = async (user, evaluation) => {
+  if (!evaluation) return false;
+  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (user.role === 'IndustryPartner') {
+    return evaluation.partner?.toString?.() === getUserPartnerId(user);
+  }
+  const learner = await Learner.findById(evaluation.learner).select('institution owner');
+  return canAccessLearner(user, learner);
+};
 
 const ensureDirectory = async (dirPath) => {
   await fs.mkdir(dirPath, { recursive: true });
@@ -125,8 +189,11 @@ router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (re
       return res.status(400).json({ message: 'No image uploaded' });
     }
 
-    const learner = await Learner.findById(req.params.learnerId);
+    const learner = await Learner.findById(req.params.learnerId).select('profilePicture institution owner name');
     if (!learner) return res.status(404).json({ message: 'Learner not found' });
+    if (!canAccessLearner(req.user, learner)) {
+      return res.status(403).json({ message: 'Not authorized to update this learner profile picture' });
+    }
 
     // Delete previous profile picture if it exists
     if (learner.profilePicture) {
@@ -288,26 +355,39 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     let partnerId = req.user.partnerId?._id || req.user.partnerId || undefined;
 
     if (learnerId) {
-      const learner = await Learner.findById(learnerId).select('institution');
+      const learner = await Learner.findById(learnerId).select('institution owner');
+      if (!learner) return res.status(404).json({ message: 'Learner not found' });
+      if (!canAccessLearner(req.user, learner)) {
+        return res.status(403).json({ message: 'Not authorized to upload documents for this learner' });
+      }
       if (learner?.institution) institution = learner.institution;
     }
 
     if (placementId) {
-      const placement = await Placement.findById(placementId).select('institution partner');
+      const placement = await Placement.findById(placementId).select('institution partner owner delegate partnerSupervisor');
       if (!placement) return res.status(404).json({ message: 'Placement not found' });
+      if (!canAccessPlacement(req.user, placement)) {
+        return res.status(403).json({ message: 'Not authorized to upload documents for this placement' });
+      }
       if (placement.institution) institution = placement.institution;
       if (placement.partner) partnerId = placement.partner;
     }
 
     if (monitoringVisitId) {
-      const visit = await MonitoringVisit.findById(monitoringVisitId).select('institution');
+      const visit = await MonitoringVisit.findById(monitoringVisitId).select('institution submittedBy');
       if (!visit) return res.status(404).json({ message: 'Monitoring visit not found' });
+      if (!canAccessMonitoringVisit(req.user, visit)) {
+        return res.status(403).json({ message: 'Not authorized to upload documents for this monitoring visit' });
+      }
       if (visit.institution) institution = visit.institution;
     }
 
     if (supportTicketId) {
-      const ticket = await SupportTicket.findById(supportTicketId).select('institution partnerId');
+      const ticket = await SupportTicket.findById(supportTicketId).select('institution partnerId requester');
       if (!ticket) return res.status(404).json({ message: 'Support ticket not found' });
+      if (!canAccessSupportTicket(req.user, ticket)) {
+        return res.status(403).json({ message: 'Not authorized to upload documents for this support ticket' });
+      }
       if (ticket.institution) institution = ticket.institution;
       if (ticket.partnerId) partnerId = ticket.partnerId;
     }
@@ -315,6 +395,9 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     if (employerEvaluationId) {
       const evaluation = await EmployerEvaluation.findById(employerEvaluationId).select('partner learner');
       if (!evaluation) return res.status(404).json({ message: 'Employer evaluation not found' });
+      if (!(await canAccessEmployerEvaluation(req.user, evaluation))) {
+        return res.status(403).json({ message: 'Not authorized to upload documents for this employer evaluation' });
+      }
       if (evaluation.partner) partnerId = evaluation.partner;
       if (evaluation.learner) {
         const learner = await Learner.findById(evaluation.learner).select('institution');
@@ -436,8 +519,11 @@ router.delete('/:id', async (req, res) => {
 
     // Only the uploader, Admin, or SuperAdmin can delete
     const isOwner = doc.uploadedBy.toString() === req.user._id.toString();
-    const isAdmin = ['Admin', 'SuperAdmin'].includes(req.user.role);
-    if (!isOwner && !isAdmin) {
+    const isSuperAdmin = req.user.role === 'SuperAdmin';
+    const isRegionalAdmin = req.user.role === 'RegionalAdmin';
+    const isInstitutionAdmin = req.user.role === 'Admin' && canManageInstitutionRecord(req.user, doc.institution);
+    const isPartnerScoped = req.user.role === 'IndustryPartner' && doc.partnerId?.toString?.() === getUserPartnerId(req.user);
+    if (!isOwner && !isSuperAdmin && !isRegionalAdmin && !isInstitutionAdmin && !isPartnerScoped) {
       return res.status(403).json({ message: 'Not authorized to delete this document' });
     }
 

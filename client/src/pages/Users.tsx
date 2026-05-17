@@ -91,11 +91,76 @@ interface BulkSuspendResult {
     blockers?: DeactivationImpact["blockers"]
 }
 
+interface HqGovernanceOverview {
+    totalUsers: number
+    roleCounts: Record<string, number>
+    regionStats: Array<{
+        region: string
+        totalUsers: number
+        privilegedUsers: number
+        invitedUsers: number
+    }>
+    riskyAccounts: {
+        items: User[]
+        total: number
+        page: number
+        totalPages: number
+    }
+    dormantPrivilegedAccounts: {
+        items: User[]
+        total: number
+        page: number
+        totalPages: number
+    }
+}
+
+interface RegionalOversightOverview {
+    visibleUsers: number
+    institutions: Array<{
+        institution: string
+        totalUsers: number
+        activeUsers: number
+        admins: number
+        invited: number
+        passwordResetsPending: number
+        adminDetails: Array<{ _id: string; name: string; email: string; status: string }>
+    }>
+    summary: {
+        institutions: number
+        institutionsMissingAdmin: number
+        invitedUsers: number
+        passwordResetsPending: number
+    }
+}
+
+interface InstitutionTeamOverview {
+    summary: {
+        teamMembers: number
+        managers: number
+        guardians: number
+        pendingInvites: number
+        suspended: number
+    }
+    teamUsers: User[]
+    workloadOwners: Array<User & { totalAssigned: number }>
+    suspendCandidates: User[]
+    reassignmentCandidates: User[]
+}
+
 export default function Users() {
     const GOVERNANCE_PAGE_SIZE = 6
     const [data, setData] = useState<User[]>([])
+    const [tableData, setTableData] = useState<User[]>([])
     const [accessApprovalQueue, setAccessApprovalQueue] = useState<AccessApprovalQueueItem[]>([])
     const [loading, setLoading] = useState(true)
+    const [tableLoading, setTableLoading] = useState(true)
+    const [registryPage, setRegistryPage] = useState(1)
+    const [registryPageSize] = useState(12)
+    const [registryTotal, setRegistryTotal] = useState(0)
+    const [registryTotalPages, setRegistryTotalPages] = useState(0)
+    const [hqGovernanceOverview, setHqGovernanceOverview] = useState<HqGovernanceOverview | null>(null)
+    const [regionalOversightOverview, setRegionalOversightOverview] = useState<RegionalOversightOverview | null>(null)
+    const [institutionTeamOverview, setInstitutionTeamOverview] = useState<InstitutionTeamOverview | null>(null)
     const [open, setOpen] = useState(false)
     const [editingUser, setEditingUser] = useState<User | null>(null)
     const [refreshKey, setRefreshKey] = useState(0)
@@ -160,19 +225,24 @@ export default function Users() {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const requests = [authFetch('/api/users')]
+                const shouldFetchFullUsers = Boolean(governanceFilter)
+                const requests = shouldFetchFullUsers ? [authFetch('/api/users')] : []
                 if (user?.role === "SuperAdmin") {
                     requests.push(authFetch('/api/access-approvals'))
                 }
 
                 const responses = await Promise.all(requests)
-                const usersResponse = responses[0]
-                if (!usersResponse.ok) throw new Error("Failed to fetch")
-                const usersData = await usersResponse.json()
-                setData(usersData)
+                if (shouldFetchFullUsers) {
+                    const usersResponse = responses[0]
+                    if (!usersResponse.ok) throw new Error("Failed to fetch")
+                    const usersData = await usersResponse.json()
+                    setData(usersData)
+                } else {
+                    setData([])
+                }
 
-                if (user?.role === "SuperAdmin" && responses[1]) {
-                    const queueResponse = responses[1]
+                if (user?.role === "SuperAdmin") {
+                    const queueResponse = responses[shouldFetchFullUsers ? 1 : 0]
                     const queuePayload = queueResponse.ok ? await queueResponse.json() : []
                     setAccessApprovalQueue(
                         Array.isArray(queuePayload) ? queuePayload : []
@@ -188,7 +258,103 @@ export default function Users() {
             }
         }
         fetchData()
-    }, [refreshKey, authFetch, user?.role])
+    }, [refreshKey, authFetch, user?.role, governanceFilter])
+
+    useEffect(() => {
+        if (user?.role !== "SuperAdmin" || governanceFilter) {
+            setHqGovernanceOverview(null)
+            return
+        }
+
+        const fetchHqGovernanceOverview = async () => {
+            try {
+                const params = new URLSearchParams()
+                params.set("anomalyPage", String(anomalyPage))
+                params.set("dormantPage", String(dormantPage))
+                params.set("pageSize", String(GOVERNANCE_PAGE_SIZE))
+                const res = await authFetch(`/api/users/governance/overview?${params.toString()}`)
+                if (!res.ok) throw new Error("Failed to fetch governance overview")
+                const payload = await res.json()
+                setHqGovernanceOverview(payload)
+            } catch (error) {
+                console.error("Error fetching user governance overview:", error)
+                toast.error("Failed to load governance overview")
+            }
+        }
+
+        fetchHqGovernanceOverview()
+    }, [authFetch, anomalyPage, dormantPage, governanceFilter, user?.role])
+
+    useEffect(() => {
+        if (user?.role !== "RegionalAdmin" || governanceFilter) {
+            setRegionalOversightOverview(null)
+            return
+        }
+
+        authFetch("/api/users/regional-oversight")
+            .then(async (res) => {
+                if (!res.ok) throw new Error("Failed to fetch regional oversight")
+                return res.json()
+            })
+            .then(setRegionalOversightOverview)
+            .catch((error) => {
+                console.error("Error fetching regional oversight:", error)
+                toast.error("Failed to load regional oversight")
+            })
+    }, [authFetch, governanceFilter, refreshKey, user?.role])
+
+    useEffect(() => {
+        if (user?.role !== "Admin" || governanceFilter) {
+            setInstitutionTeamOverview(null)
+            return
+        }
+
+        authFetch("/api/users/institution-team-overview")
+            .then(async (res) => {
+                if (!res.ok) throw new Error("Failed to fetch institution team overview")
+                return res.json()
+            })
+            .then(setInstitutionTeamOverview)
+            .catch((error) => {
+                console.error("Error fetching institution team overview:", error)
+                toast.error("Failed to load institution team overview")
+            })
+    }, [authFetch, governanceFilter, refreshKey, user?.role])
+
+    useEffect(() => {
+        if (governanceFilter) {
+            setTableLoading(false)
+            return
+        }
+
+        const fetchRegistry = async () => {
+            setTableLoading(true)
+            try {
+                const params = new URLSearchParams()
+                if (roleFilter) params.set("role", roleFilter)
+                if (statusFilter) params.set("status", statusFilter)
+                if (institutionFilter) params.set("institution", institutionFilter)
+                if (regionFilter) params.set("region", regionFilter)
+                params.set("page", String(registryPage))
+                params.set("pageSize", String(registryPageSize))
+
+                const res = await authFetch(`/api/users/registry?${params.toString()}`)
+                if (!res.ok) throw new Error("Failed to fetch user registry")
+                const payload = await res.json()
+                setTableData(Array.isArray(payload.items) ? payload.items : [])
+                setRegistryTotal(typeof payload.total === "number" ? payload.total : 0)
+                setRegistryTotalPages(typeof payload.totalPages === "number" ? payload.totalPages : 0)
+                setRegistryPage(typeof payload.page === "number" ? payload.page : 1)
+            } catch (error) {
+                console.error("Error fetching user registry:", error)
+                toast.error("Failed to load user registry")
+            } finally {
+                setTableLoading(false)
+            }
+        }
+
+        fetchRegistry()
+    }, [authFetch, governanceFilter, institutionFilter, refreshKey, regionFilter, registryPage, registryPageSize, roleFilter, statusFilter])
 
     useEffect(() => {
         if (createMode !== "guardian" || !linkedLearnerId || open || editingUser) return
@@ -439,6 +605,10 @@ export default function Users() {
         governanceFilter === "owned-workload" ? "View: Staff with assigned work" : "",
     ].filter(Boolean)
 
+    useEffect(() => {
+        setRegistryPage(1)
+    }, [roleFilter, statusFilter, institutionFilter, regionFilter, governanceFilter])
+
     const clearFilters = () => setSearchParams({})
 
     const regionalInstitutionStats = useMemo(() => {
@@ -530,8 +700,14 @@ export default function Users() {
 
     const hqRegionOptions = useMemo(() => {
         if (user?.role !== "SuperAdmin") return []
+        if (hqGovernanceOverview) {
+            return hqGovernanceOverview.regionStats
+                .map((entry) => entry.region)
+                .filter((region) => Boolean(region) && region !== "Unassigned")
+                .sort()
+        }
         return [...new Set(data.map((entry) => entry.effectiveRegion).filter((region): region is string => Boolean(region)))].sort()
-    }, [data, user?.role])
+    }, [data, hqGovernanceOverview, user?.role])
 
     const hqRoleGovernance = useMemo(() => {
         if (user?.role !== "SuperAdmin") return null
@@ -636,14 +812,16 @@ export default function Users() {
     }, [GOVERNANCE_PAGE_SIZE, approvalQueueItems.length, approvalQueuePage])
 
     useEffect(() => {
-        const maxPage = Math.max(1, Math.ceil((hqRoleGovernance?.riskyAccounts.length || 0) / GOVERNANCE_PAGE_SIZE))
+        const riskyCount = hqGovernanceOverview?.riskyAccounts.total ?? hqRoleGovernance?.riskyAccounts.length ?? 0
+        const maxPage = Math.max(1, Math.ceil(riskyCount / GOVERNANCE_PAGE_SIZE))
         if (anomalyPage > maxPage) setAnomalyPage(maxPage)
-    }, [GOVERNANCE_PAGE_SIZE, anomalyPage, hqRoleGovernance?.riskyAccounts.length])
+    }, [GOVERNANCE_PAGE_SIZE, anomalyPage, hqGovernanceOverview?.riskyAccounts.total, hqRoleGovernance?.riskyAccounts.length])
 
     useEffect(() => {
-        const maxPage = Math.max(1, Math.ceil((hqRoleGovernance?.dormantPrivilegedAccounts.length || 0) / GOVERNANCE_PAGE_SIZE))
+        const dormantCount = hqGovernanceOverview?.dormantPrivilegedAccounts.total ?? hqRoleGovernance?.dormantPrivilegedAccounts.length ?? 0
+        const maxPage = Math.max(1, Math.ceil(dormantCount / GOVERNANCE_PAGE_SIZE))
         if (dormantPage > maxPage) setDormantPage(maxPage)
-    }, [GOVERNANCE_PAGE_SIZE, dormantPage, hqRoleGovernance?.dormantPrivilegedAccounts.length])
+    }, [GOVERNANCE_PAGE_SIZE, dormantPage, hqGovernanceOverview?.dormantPrivilegedAccounts.total, hqRoleGovernance?.dormantPrivilegedAccounts.length])
 
     const institutionTeamStats = useMemo(() => {
         if (user?.role !== "Admin") return null
@@ -674,11 +852,13 @@ export default function Users() {
     }, [data, user?.role])
 
     const institutionSuspendCandidates = useMemo(() => {
+        if (institutionTeamOverview && !governanceFilter) return institutionTeamOverview.suspendCandidates.filter((entry) => canManageUser(entry))
         if (!institutionTeamStats) return []
         return institutionTeamStats.teamUsers.filter((entry) => entry.status === "Active" && canManageUser(entry))
-    }, [institutionTeamStats, user?.role])
+    }, [governanceFilter, institutionTeamOverview, institutionTeamStats, user?.role])
 
     const institutionReassignmentCandidates = useMemo(() => {
+        if (institutionTeamOverview && !governanceFilter) return institutionTeamOverview.reassignmentCandidates.filter((entry) => canManageUser(entry))
         if (!institutionTeamStats) return []
         return institutionTeamStats.teamUsers
             .filter((entry) => canManageUser(entry))
@@ -696,7 +876,7 @@ export default function Users() {
                 const bAssignments = (b.workloadSummary?.learnersOwned ?? 0) + (b.workloadSummary?.activePlacementsOwned ?? 0)
                 return bAssignments - aAssignments || a.name.localeCompare(b.name)
             })
-    }, [institutionTeamStats, user?.role])
+    }, [governanceFilter, institutionTeamOverview, institutionTeamStats, user?.role])
 
     const currentReassignmentTarget = blockedUser
 
@@ -713,7 +893,8 @@ export default function Users() {
 
     const handleWorkspaceUserChange = async (userId: string) => {
         setReassignmentWorkspaceUserId(userId)
-        const targetUser = institutionReassignmentCandidates.find((entry) => entry._id === userId) || data.find((entry) => entry._id === userId) || null
+        const teamLookup = institutionTeamOverview?.teamUsers || data
+        const targetUser = institutionReassignmentCandidates.find((entry) => entry._id === userId) || teamLookup.find((entry) => entry._id === userId) || null
         if (!targetUser) return
         await openReassignmentWorkspace(targetUser)
     }
@@ -1139,7 +1320,9 @@ export default function Users() {
                                                         variant="outline"
                                                         className="rounded-xl"
                                                         onClick={() => {
-                                                            const targetUser = institutionSuspendCandidates.find((entry) => entry._id === result.userId) || data.find((entry) => entry._id === result.userId)
+                                                            const targetUser = institutionSuspendCandidates.find((entry) => entry._id === result.userId)
+                                                                || institutionTeamOverview?.teamUsers.find((entry) => entry._id === result.userId)
+                                                                || data.find((entry) => entry._id === result.userId)
                                                             if (!targetUser) return
                                                             setBulkSuspendOpen(false)
                                                             setBulkSuspendSelection([])
@@ -1456,7 +1639,7 @@ export default function Users() {
                             Escalate to HQ
                         </Button>
                     ) : null}
-                    <Button onClick={() => { setEditingUser(null); setUserFormPrefill(null); setImplementationApprovalId(null); setOpen(true); }} className="w-full sm:w-auto bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-8 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
+                    <Button data-help-id="users-add" onClick={() => { setEditingUser(null); setUserFormPrefill(null); setImplementationApprovalId(null); setOpen(true); }} className="w-full sm:w-auto bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-8 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
                         <Plus className="mr-3 h-5 w-5" /> Add User
                     </Button>
                     <Dialog open={open} onOpenChange={setOpen}>
@@ -1477,9 +1660,9 @@ export default function Users() {
                 </div>
             </div>
 
-            {user?.role === "SuperAdmin" && hqRoleGovernance ? (
+            {user?.role === "SuperAdmin" && (hqGovernanceOverview || hqRoleGovernance) ? (
                 <>
-                    <Card className="rounded-[2.5rem] border-none shadow-lg bg-gradient-to-r from-[#0f172a] via-[#111827] to-[#172554] text-white overflow-hidden">
+                    <Card data-help-id="users-governance" className="rounded-[2.5rem] border-none shadow-lg bg-gradient-to-r from-[#0f172a] via-[#111827] to-[#172554] text-white overflow-hidden">
                         <CardContent className="p-6 md:p-7 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5">
                             <div>
                                 <p className="text-xs font-black uppercase tracking-[0.3em] text-slate-300">HQ Governance</p>
@@ -1516,11 +1699,11 @@ export default function Users() {
                     </Card>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4 px-4 sm:px-0">
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Total Users</p><p className="text-3xl font-black text-gray-900 mt-1">{data.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Regions</p><p className="text-3xl font-black text-gray-900 mt-1">{hqRoleGovernance.regionStats.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Risky Accounts</p><p className="text-3xl font-black text-red-600 mt-1">{hqRoleGovernance.riskyAccounts.length}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Total Users</p><p className="text-3xl font-black text-gray-900 mt-1">{hqGovernanceOverview?.totalUsers ?? data.length}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Regions</p><p className="text-3xl font-black text-gray-900 mt-1">{hqGovernanceOverview?.regionStats.length ?? hqRoleGovernance?.regionStats.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Risky Accounts</p><p className="text-3xl font-black text-red-600 mt-1">{hqGovernanceOverview?.riskyAccounts.total ?? hqRoleGovernance?.riskyAccounts.length ?? 0}</p></CardContent></Card>
                         <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Pending Approvals</p><p className="text-3xl font-black text-amber-600 mt-1">{accessApprovalViews.pending.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Dormant Privileged</p><p className="text-3xl font-black text-sky-600 mt-1">{hqRoleGovernance.dormantPrivilegedAccounts.length}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Dormant Privileged</p><p className="text-3xl font-black text-sky-600 mt-1">{hqGovernanceOverview?.dormantPrivilegedAccounts.total ?? hqRoleGovernance?.dormantPrivilegedAccounts.length ?? 0}</p></CardContent></Card>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 px-4 sm:px-0">
@@ -1581,7 +1764,7 @@ export default function Users() {
                             </CardHeader>
                             <CardContent className="p-6 pt-0 space-y-5">
                                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                                    {Object.entries(hqRoleGovernance.roleCounts)
+                                    {Object.entries(hqGovernanceOverview?.roleCounts ?? hqRoleGovernance?.roleCounts ?? {})
                                         .sort((a, b) => b[1] - a[1])
                                         .map(([role, count]) => (
                                             <button
@@ -1602,7 +1785,7 @@ export default function Users() {
                                 <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
                                     <p className="text-sm font-black text-gray-900">Cross-Region Distribution</p>
                                     <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        {hqRoleGovernance.regionStats.map((entry) => (
+                                        {(hqGovernanceOverview?.regionStats ?? hqRoleGovernance?.regionStats ?? []).map((entry) => (
                                             <button
                                                 key={entry.region}
                                                 type="button"
@@ -1747,7 +1930,7 @@ export default function Users() {
                                 <CardTitle className="text-xl font-black text-gray-900">Anomaly Flags</CardTitle>
                             </CardHeader>
                             <CardContent className="p-6 pt-0 space-y-3">
-                                {hqRoleGovernance.riskyAccounts.length ? paginatedAnomalyItems.map((entry) => {
+                                {(hqGovernanceOverview?.riskyAccounts.items ?? paginatedAnomalyItems).length ? (hqGovernanceOverview?.riskyAccounts.items ?? paginatedAnomalyItems).map((entry) => {
                                     const failedLogins = entry.auditSummary?.failedLoginCount ?? 0
                                     const reasons = [
                                         failedLogins >= 5 ? `${failedLogins} failed logins` : "",
@@ -1778,10 +1961,10 @@ export default function Users() {
                                         No risky accounts are currently flagged by the user governance rules.
                                     </div>
                                 )}
-                                {hqRoleGovernance.riskyAccounts.length > GOVERNANCE_PAGE_SIZE ? (
+                                {(hqGovernanceOverview?.riskyAccounts.total ?? hqRoleGovernance?.riskyAccounts.length ?? 0) > GOVERNANCE_PAGE_SIZE ? (
                                     <div className="flex items-center justify-between pt-2">
                                         <p className="text-xs text-gray-500">
-                                            Page {anomalyPage} of {Math.max(1, Math.ceil(hqRoleGovernance.riskyAccounts.length / GOVERNANCE_PAGE_SIZE))}
+                                            Page {anomalyPage} of {Math.max(1, hqGovernanceOverview?.riskyAccounts.totalPages ?? Math.ceil((hqRoleGovernance?.riskyAccounts.length ?? 0) / GOVERNANCE_PAGE_SIZE))}
                                         </p>
                                         <div className="flex gap-2">
                                             <Button variant="outline" className="rounded-xl" disabled={anomalyPage === 1} onClick={() => setAnomalyPage((page) => Math.max(1, page - 1))}>
@@ -1790,7 +1973,7 @@ export default function Users() {
                                             <Button
                                                 variant="outline"
                                                 className="rounded-xl"
-                                                disabled={anomalyPage >= Math.ceil(hqRoleGovernance.riskyAccounts.length / GOVERNANCE_PAGE_SIZE)}
+                                                disabled={anomalyPage >= Math.max(1, hqGovernanceOverview?.riskyAccounts.totalPages ?? Math.ceil((hqRoleGovernance?.riskyAccounts.length ?? 0) / GOVERNANCE_PAGE_SIZE))}
                                                 onClick={() => setAnomalyPage((page) => page + 1)}
                                             >
                                                 Next
@@ -1806,7 +1989,7 @@ export default function Users() {
                                 <CardTitle className="text-xl font-black text-gray-900">Dormant Privileged Accounts</CardTitle>
                             </CardHeader>
                             <CardContent className="p-6 pt-0 space-y-3">
-                                {hqRoleGovernance.dormantPrivilegedAccounts.length ? paginatedDormantItems.map((entry) => {
+                                {(hqGovernanceOverview?.dormantPrivilegedAccounts.items ?? paginatedDormantItems).length ? (hqGovernanceOverview?.dormantPrivilegedAccounts.items ?? paginatedDormantItems).map((entry) => {
                                     const dormantDays = entry.lastLoginAt
                                         ? Math.max(0, Math.floor((Date.now() - new Date(entry.lastLoginAt).getTime()) / (1000 * 60 * 60 * 24)))
                                         : null
@@ -1836,10 +2019,10 @@ export default function Users() {
                                         No dormant privileged accounts are currently flagged.
                                     </div>
                                 )}
-                                {hqRoleGovernance.dormantPrivilegedAccounts.length > GOVERNANCE_PAGE_SIZE ? (
+                                {(hqGovernanceOverview?.dormantPrivilegedAccounts.total ?? hqRoleGovernance?.dormantPrivilegedAccounts.length ?? 0) > GOVERNANCE_PAGE_SIZE ? (
                                     <div className="flex items-center justify-between pt-2">
                                         <p className="text-xs text-gray-500">
-                                            Page {dormantPage} of {Math.max(1, Math.ceil(hqRoleGovernance.dormantPrivilegedAccounts.length / GOVERNANCE_PAGE_SIZE))}
+                                            Page {dormantPage} of {Math.max(1, hqGovernanceOverview?.dormantPrivilegedAccounts.totalPages ?? Math.ceil((hqRoleGovernance?.dormantPrivilegedAccounts.length ?? 0) / GOVERNANCE_PAGE_SIZE))}
                                         </p>
                                         <div className="flex gap-2">
                                             <Button variant="outline" className="rounded-xl" disabled={dormantPage === 1} onClick={() => setDormantPage((page) => Math.max(1, page - 1))}>
@@ -1848,7 +2031,7 @@ export default function Users() {
                                             <Button
                                                 variant="outline"
                                                 className="rounded-xl"
-                                                disabled={dormantPage >= Math.ceil(hqRoleGovernance.dormantPrivilegedAccounts.length / GOVERNANCE_PAGE_SIZE)}
+                                                disabled={dormantPage >= Math.max(1, hqGovernanceOverview?.dormantPrivilegedAccounts.totalPages ?? Math.ceil((hqRoleGovernance?.dormantPrivilegedAccounts.length ?? 0) / GOVERNANCE_PAGE_SIZE))}
                                                 onClick={() => setDormantPage((page) => page + 1)}
                                             >
                                                 Next
@@ -1862,7 +2045,7 @@ export default function Users() {
                 </>
             ) : null}
 
-            {user?.role === "RegionalAdmin" && regionalOversightStats ? (
+            {user?.role === "RegionalAdmin" && (regionalOversightOverview || regionalOversightStats) ? (
                 <>
                     <Card className="rounded-[2.5rem] border-none shadow-lg bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 text-white overflow-hidden">
                         <CardContent className="p-6 md:p-7 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
@@ -1875,20 +2058,20 @@ export default function Users() {
                             </div>
                             <div className="flex flex-wrap gap-2">
                                 <Badge className="bg-white/10 text-white border-white/20 rounded-full px-4 py-1.5">
-                                    {filteredData.length} visible users
+                                    {regionalOversightOverview?.visibleUsers ?? filteredData.length} visible users
                                 </Badge>
                                 <Badge className="bg-white/10 text-white border-white/20 rounded-full px-4 py-1.5">
-                                    {regionalOversightStats.institutions} institutions in scope
+                                    {regionalOversightOverview?.summary.institutions ?? regionalOversightStats?.institutions ?? 0} institutions in scope
                                 </Badge>
                             </div>
                         </CardContent>
                     </Card>
 
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 sm:px-0">
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Institutions</p><p className="text-3xl font-black text-gray-900 mt-1">{regionalOversightStats.institutions}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Missing Active Admin</p><p className="text-3xl font-black text-red-600 mt-1">{regionalOversightStats.institutionsMissingAdmin}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Invited Users</p><p className="text-3xl font-black text-amber-600 mt-1">{regionalOversightStats.invitedUsers}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Password Setup Pending</p><p className="text-3xl font-black text-sky-600 mt-1">{regionalOversightStats.passwordResetsPending}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Institutions</p><p className="text-3xl font-black text-gray-900 mt-1">{regionalOversightOverview?.summary.institutions ?? regionalOversightStats?.institutions ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Missing Active Admin</p><p className="text-3xl font-black text-red-600 mt-1">{regionalOversightOverview?.summary.institutionsMissingAdmin ?? regionalOversightStats?.institutionsMissingAdmin ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Invited Users</p><p className="text-3xl font-black text-amber-600 mt-1">{regionalOversightOverview?.summary.invitedUsers ?? regionalOversightStats?.invitedUsers ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Password Setup Pending</p><p className="text-3xl font-black text-sky-600 mt-1">{regionalOversightOverview?.summary.passwordResetsPending ?? regionalOversightStats?.passwordResetsPending ?? 0}</p></CardContent></Card>
                     </div>
 
                     <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden">
@@ -1897,7 +2080,7 @@ export default function Users() {
                         </CardHeader>
                         <CardContent className="p-6 pt-0">
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                                {regionalInstitutionStats.map((entry) => (
+                                {(regionalOversightOverview?.institutions ?? regionalInstitutionStats).map((entry) => (
                                     <div key={entry.institution} className="rounded-2xl border border-gray-100 bg-gray-50/80 p-4 space-y-3">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
@@ -1970,7 +2153,7 @@ export default function Users() {
                 </>
             ) : null}
 
-            {user?.role === "Admin" && institutionTeamStats ? (
+            {user?.role === "Admin" && (institutionTeamOverview || institutionTeamStats) ? (
                 <>
                     <Card className="rounded-[2.5rem] border-none shadow-lg bg-gradient-to-r from-stone-950 via-neutral-900 to-zinc-800 text-white overflow-hidden">
                         <CardContent className="p-6 md:p-7 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5">
@@ -2059,11 +2242,11 @@ export default function Users() {
                     </Card>
 
                     <div className="grid grid-cols-1 md:grid-cols-5 gap-4 px-4 sm:px-0">
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Team Members</p><p className="text-3xl font-black text-gray-900 mt-1">{institutionTeamStats.teamUsers.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Managers</p><p className="text-3xl font-black text-blue-700 mt-1">{institutionTeamStats.managers.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Guardians</p><p className="text-3xl font-black text-teal-700 mt-1">{institutionTeamStats.guardians.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Pending Invites</p><p className="text-3xl font-black text-amber-600 mt-1">{institutionTeamStats.pendingInvites.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Suspended</p><p className="text-3xl font-black text-rose-600 mt-1">{institutionTeamStats.suspended.length}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Team Members</p><p className="text-3xl font-black text-gray-900 mt-1">{institutionTeamOverview?.summary.teamMembers ?? institutionTeamStats?.teamUsers.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Managers</p><p className="text-3xl font-black text-blue-700 mt-1">{institutionTeamOverview?.summary.managers ?? institutionTeamStats?.managers.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Guardians</p><p className="text-3xl font-black text-teal-700 mt-1">{institutionTeamOverview?.summary.guardians ?? institutionTeamStats?.guardians.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Pending Invites</p><p className="text-3xl font-black text-amber-600 mt-1">{institutionTeamOverview?.summary.pendingInvites ?? institutionTeamStats?.pendingInvites.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Suspended</p><p className="text-3xl font-black text-rose-600 mt-1">{institutionTeamOverview?.summary.suspended ?? institutionTeamStats?.suspended.length ?? 0}</p></CardContent></Card>
                     </div>
 
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -2107,7 +2290,7 @@ export default function Users() {
                                 <CardTitle className="text-xl font-black text-gray-900">Staff Workload</CardTitle>
                             </CardHeader>
                             <CardContent className="p-6 pt-0 space-y-3">
-                                {institutionTeamStats.workloadOwners.length ? institutionTeamStats.workloadOwners.slice(0, 8).map((entry) => (
+                                {(institutionTeamOverview?.workloadOwners ?? institutionTeamStats?.workloadOwners.slice(0, 8) ?? []).length ? (institutionTeamOverview?.workloadOwners ?? institutionTeamStats?.workloadOwners.slice(0, 8) ?? []).map((entry) => (
                                     <div key={entry._id} className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
@@ -2154,7 +2337,7 @@ export default function Users() {
             )}
 
             <div className="rounded-none sm:rounded-2xl md:rounded-[2.5rem] border-y sm:border border-gray-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-0 sm:p-2">
-                {loading ? (
+                {loading || tableLoading ? (
                     <div className="p-4 space-y-4">
                         <div className="flex items-center space-x-4">
                            <Skeleton className="h-12 w-full" />
@@ -2167,21 +2350,53 @@ export default function Users() {
                         </div>
                     </div>
                 ) : (
-                    <DataTable 
-                        exportTitle="System Users Report"
-                        data={filteredData} 
-                        columns={columns} 
-                        meta={{ 
-                            onEdit: handleEdit, 
-                            onDelete: handleDelete,
-                            onToggleStatus: handleToggleStatus,
-                            onSendSetupLink: handleSendSetupLink,
-                            onViewAudit: setAuditUser,
-                            canManageUser,
-                        }} 
-                        sorting={sorting}
-                        onSortingChange={setSorting}
-                    />
+                    <>
+                        <DataTable 
+                            exportTitle="System Users Report"
+                            data={governanceFilter ? filteredData : tableData}
+                            columns={columns} 
+                            meta={{ 
+                                onEdit: handleEdit, 
+                                onDelete: handleDelete,
+                                onToggleStatus: handleToggleStatus,
+                                onSendSetupLink: handleSendSetupLink,
+                                onViewAudit: setAuditUser,
+                                canManageUser,
+                            }} 
+                            sorting={sorting}
+                            onSortingChange={setSorting}
+                            disablePagination={!governanceFilter}
+                        />
+                        {!governanceFilter ? (
+                            <div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                                <p className="text-sm font-medium text-gray-500">
+                                    Showing {registryTotal === 0 ? 0 : (registryPage - 1) * registryPageSize + 1}-
+                                    {Math.min(registryPage * registryPageSize, registryTotal)} of {registryTotal} users
+                                </p>
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        className="rounded-xl"
+                                        disabled={registryPage <= 1}
+                                        onClick={() => setRegistryPage((page) => Math.max(1, page - 1))}
+                                    >
+                                        Previous
+                                    </Button>
+                                    <span className="min-w-[96px] text-center text-sm font-medium text-gray-600">
+                                        Page {registryTotal === 0 ? 0 : registryPage} of {Math.max(registryTotalPages, 1)}
+                                    </span>
+                                    <Button
+                                        variant="outline"
+                                        className="rounded-xl"
+                                        disabled={registryTotal === 0 || registryPage >= registryTotalPages}
+                                        onClick={() => setRegistryPage((page) => Math.min(page + 1, Math.max(registryTotalPages, 1)))}
+                                    >
+                                        Next
+                                    </Button>
+                                </div>
+                            </div>
+                        ) : null}
+                    </>
                 )}
             </div>
         </div>

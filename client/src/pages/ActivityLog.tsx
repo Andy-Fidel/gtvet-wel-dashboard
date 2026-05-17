@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { format } from "date-fns"
 import { toast } from "sonner"
 import { Activity, AlertTriangle, Download, Eye, Filter, ShieldCheck } from "lucide-react"
@@ -46,6 +46,7 @@ const ALL_ACTIONS = "__all_actions"
 const ALL_ENTITIES = "__all_entities"
 
 export default function ActivityLog() {
+  const RECENT_EVENTS_PAGE_SIZE = 10
   const { authFetch } = useAuth()
   const [logs, setLogs] = useState<AuditLogEntry[]>([])
   const [anomalies, setAnomalies] = useState<AuditAnomalies | null>(null)
@@ -58,6 +59,16 @@ export default function ActivityLog() {
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
   const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null)
+  const [recentEventsPage, setRecentEventsPage] = useState(1)
+  const [recentEventsTotal, setRecentEventsTotal] = useState(0)
+  const [entityOptions, setEntityOptions] = useState<string[]>([])
+  const [actorOptions, setActorOptions] = useState<Array<{ actorId: string; actorName: string; actorRole: string }>>([])
+  const [stats, setStats] = useState({
+    total: 0,
+    creates: 0,
+    updates: 0,
+    deletes: 0,
+  })
 
   const buildParams = () => {
     const params = new URLSearchParams()
@@ -75,10 +86,16 @@ export default function ActivityLog() {
     setLoading(true)
     try {
       const params = buildParams()
+      params.set("page", String(recentEventsPage))
+      params.set("pageSize", String(RECENT_EVENTS_PAGE_SIZE))
       const res = await authFetch(`/api/audit-logs?${params.toString()}`)
       if (!res.ok) throw new Error("Failed to fetch audit logs")
       const data = await res.json()
-      setLogs(data)
+      setLogs(Array.isArray(data.items) ? data.items : [])
+      setRecentEventsTotal(typeof data.total === "number" ? data.total : 0)
+      setStats(data.stats ?? { total: 0, creates: 0, updates: 0, deletes: 0 })
+      setEntityOptions(Array.isArray(data.entityOptions) ? data.entityOptions : [])
+      setActorOptions(Array.isArray(data.actorOptions) ? data.actorOptions : [])
     } catch (error) {
       console.error("Error fetching audit logs:", error)
       toast.error("Failed to load activity log")
@@ -102,28 +119,22 @@ export default function ActivityLog() {
   useEffect(() => {
     fetchLogs()
     fetchAnomalies()
+  }, [actionFilter, entityFilter, actorFilter, dateFrom, dateTo, recentEventsPage])
+
+  useEffect(() => {
+    setRecentEventsPage(1)
   }, [actionFilter, entityFilter, actorFilter, dateFrom, dateTo])
 
-  const entityOptions = useMemo(() => {
-    return [...new Set(logs.map((log) => log.entityType))].sort()
-  }, [logs])
+  const handleSearchSubmit = () => {
+    if (recentEventsPage !== 1) {
+      setRecentEventsPage(1)
+      return
+    }
+    fetchLogs()
+  }
 
-  const actorOptions = useMemo(() => {
-    const seen = new Map<string, { actorId: string; actorName: string; actorRole: string }>()
-    logs.forEach((log) => {
-      if (log.actorId && !seen.has(log.actorId)) {
-        seen.set(log.actorId, { actorId: log.actorId, actorName: log.actorName, actorRole: log.actorRole })
-      }
-    })
-    return [...seen.values()].sort((a, b) => a.actorName.localeCompare(b.actorName))
-  }, [logs])
-
-  const stats = useMemo(() => ({
-    total: logs.length,
-    creates: logs.filter((log) => log.action === "CREATE").length,
-    updates: logs.filter((log) => log.action === "UPDATE" || log.action === "STATUS_CHANGE").length,
-    deletes: logs.filter((log) => log.action === "DELETE").length,
-  }), [logs])
+  const recentEventsTotalPages = Math.max(1, Math.ceil(recentEventsTotal / RECENT_EVENTS_PAGE_SIZE))
+  const safeRecentEventsPage = Math.min(recentEventsPage, recentEventsTotalPages)
 
   const getActionBadge = (action: AuditAction) => {
     if (action === "DELETE") return <Badge className="bg-red-100 text-red-700 border-red-200">Delete</Badge>
@@ -318,14 +329,14 @@ export default function ActivityLog() {
         </Card>
       ) : null}
 
-      <Card className="bg-white border-none shadow-xl rounded-[2rem]">
+      <Card data-help-id="activity-log-filters" className="bg-white border-none shadow-xl rounded-[2rem]">
         <CardContent className="p-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Input
               placeholder="Search summary, actor, entity, or ID..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && fetchLogs()}
+              onKeyDown={(e) => e.key === "Enter" && handleSearchSubmit()}
               className="rounded-xl bg-gray-50 border-gray-200"
             />
             <Select value={actionFilter || ALL_ACTIONS} onValueChange={(value) => setActionFilter(value === ALL_ACTIONS ? "" : value)}>
@@ -372,7 +383,7 @@ export default function ActivityLog() {
               placeholder="Filter by entity ID..."
               value={entityIdFilter}
               onChange={(e) => setEntityIdFilter(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && fetchLogs()}
+              onKeyDown={(e) => e.key === "Enter" && handleSearchSubmit()}
               className="rounded-xl bg-gray-50 border-gray-200"
             />
             <Input
@@ -389,19 +400,46 @@ export default function ActivityLog() {
             />
           </div>
           <div className="mt-4">
-            <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={fetchLogs}>
+            <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={handleSearchSubmit}>
               Search Audit Log
             </Button>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+      <Card data-help-id="activity-log-recent-events" className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
         <CardHeader>
-          <CardTitle className="text-lg font-black text-gray-900 flex items-center gap-2">
-            <Activity className="h-5 w-5 text-[#FFB800]" />
-            Recent Events
-          </CardTitle>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <CardTitle className="text-lg font-black text-gray-900 flex items-center gap-2">
+              <Activity className="h-5 w-5 text-[#FFB800]" />
+              Recent Events
+            </CardTitle>
+            {logs.length > RECENT_EVENTS_PAGE_SIZE ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl"
+                  disabled={safeRecentEventsPage === 1}
+                  onClick={() => setRecentEventsPage((page) => Math.max(1, page - 1))}
+                >
+                  Previous
+                </Button>
+                <span className="text-xs font-bold text-gray-500">
+                  {safeRecentEventsPage} / {recentEventsTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl"
+                  disabled={safeRecentEventsPage >= recentEventsTotalPages}
+                  onClick={() => setRecentEventsPage((page) => Math.min(recentEventsTotalPages, page + 1))}
+                >
+                  Next
+                </Button>
+              </div>
+            ) : null}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (

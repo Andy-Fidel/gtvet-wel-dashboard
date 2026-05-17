@@ -242,7 +242,7 @@ export default function SemesterReportDetail() {
 
       {/* --- Auto-Generated Metrics Strip --- */}
       {m && (
-        <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+        <div data-help-id="semester-report-detail-metrics" className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
           {[
             { label: 'Placement Rate', value: `${m.placementRate}%`, icon: <Briefcase className="h-4 w-4" />, color: m.placementRate >= 60 ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50' },
             { label: 'Avg Health', value: `${m.avgHealthScore}`, icon: <HeartPulse className="h-4 w-4" />, color: m.avgHealthScore >= 60 ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50' },
@@ -430,7 +430,7 @@ export default function SemesterReportDetail() {
       </Card>
 
       {/* --- Institution Commentary --- */}
-      <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl">
+      <Card data-help-id="semester-report-detail-commentary" className="bg-white border-gray-100 rounded-[2rem] shadow-xl">
         <CardHeader className="p-8 pb-0">
           <div className="flex items-center gap-3">
             <MessageSquare className="h-5 w-5 text-indigo-500" />
@@ -470,7 +470,7 @@ export default function SemesterReportDetail() {
 
       {/* --- Certify & Submit Actions --- */}
       {!isApproved && (
-        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl">
+        <Card data-help-id="semester-report-detail-actions" className="bg-white border-gray-100 rounded-[2rem] shadow-xl">
           <CardContent className="p-8">
             <div className="flex flex-col gap-5">
               {/* Certification info */}
@@ -559,7 +559,7 @@ export default function SemesterReportDetail() {
 
       {/* --- Review History --- */}
       {(report.reviewedByRegional || report.reviewedByHQ || report.regionalComment || report.hqComment) && (
-        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl">
+        <Card data-help-id="semester-report-detail-review-history" className="bg-white border-gray-100 rounded-[2rem] shadow-xl">
           <CardHeader className="p-8 pb-0">
             <CardTitle className="text-xl font-black">Review History</CardTitle>
           </CardHeader>

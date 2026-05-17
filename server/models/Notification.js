@@ -24,6 +24,8 @@ const NotificationSchema = new mongoose.Schema({
   whatsAppError: { type: String },
   link: { type: String }, // frontend route to redirect to
   dedupeKey: { type: String, index: true },
+  archivedAt: { type: Date, default: null, index: true },
+  archiveReason: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now, index: true }
 });
 

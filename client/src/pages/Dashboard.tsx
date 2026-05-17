@@ -5,14 +5,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Overview } from "@/components/dashboard/Overview"
 import { ActionRequiredWidget } from "@/components/dashboard/ActionRequiredWidget"
-import { Users, Briefcase, Clock, ArrowUpRight, Download, Building2, ClipboardList, FileText, TrendingUp, Timer, Plus, FileSpreadsheet, GraduationCap, Handshake } from "lucide-react"
+import { Users, Briefcase, Clock, ArrowUpRight, Download, Building2, ClipboardList, FileText, TrendingUp, Timer, Plus, FileSpreadsheet, GraduationCap, Handshake, CheckCircle2, LifeBuoy, ShieldCheck, AlertTriangle, ArrowRight, TrendingDown, Minus } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Cell, PieChart, Pie } from "recharts"
+import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Cell, PieChart, Pie, Line, LineChart } from "recharts"
 import { useQuery } from '@tanstack/react-query'
+import { formatDistanceToNow } from "date-fns"
 
 interface SimpleLearner {
   _id: string;
@@ -63,11 +65,235 @@ interface DashboardStats {
   };
 }
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton"
-import { useEffect } from "react";
+import { GeolocatedMonitoringMap } from "@/components/dashboard/GeolocatedMonitoringMap"
+import { useEffect, useState } from "react";
+
+interface ApprovalQueueItem {
+  _id: string;
+  institution: string;
+  title: string;
+  status: string;
+  createdAt: string;
+  ageDays: number;
+}
+
+interface SupportQueueItem {
+  _id: string;
+  subject: string;
+  priority: string;
+  status: string;
+  institution: string;
+  region: string;
+  requesterName: string;
+  createdAt: string;
+  updatedAt: string;
+  replyCount: number;
+}
+
+interface SensitiveEvent {
+  _id: string;
+  action: string;
+  entityType: string;
+  summary: string;
+  actorName: string;
+  actorRole: string;
+  institution: string;
+  createdAt: string;
+}
+
+interface RegionalStat {
+  region: string;
+  totalLearners: number;
+  currentEnrolled: number;
+  academicGraduated: number;
+  placed: number;
+  completed: number;
+  institutionCount: number;
+  placementRate: number;
+  completionRate: number;
+  currentSemesterPlacements: number;
+  previousSemesterPlacements: number;
+  semesterOverSemesterDelta: number;
+  semesterOverSemesterPercent: number;
+  movementDirection: "up" | "down" | "flat";
+  needsIntervention: boolean;
+  interventionReasons: string[];
+  sparkline: { period: string; count: number }[];
+}
+
+type AdminOverviewStats = DashboardStats & {
+  totalInstitutions: number;
+  totalUsers: number;
+  totalPlacements: number;
+  totalVisits: number;
+  totalReports: number;
+  totalPartners?: number;
+  overallPlacementRate: number;
+  academicSummary?: {
+    currentEnrolled: number;
+    active: number;
+    graduating: number;
+    graduated: number;
+    dropped: number;
+  };
+  intakeCohorts?: {
+    intakeAcademicYear: string;
+    totalLearners: number;
+    currentEnrolled: number;
+    graduating: number;
+    graduated: number;
+    regionCount: number;
+    institutionCount: number;
+    riskLevel?: string;
+    riskReasons?: string[];
+  }[];
+  regionalCohortBreakdown?: {
+    region: string;
+    intakeAcademicYear: string;
+    totalLearners: number;
+    currentEnrolled: number;
+    graduating: number;
+    graduated: number;
+    institutionCount: number;
+  }[];
+  institutionCohortBreakdown?: {
+    institution: string;
+    region: string;
+    intakeAcademicYear: string;
+    totalLearners: number;
+    currentEnrolled: number;
+    graduating: number;
+    graduated: number;
+  }[];
+  placementTrend: { name: string; year: number; month: number; count: number }[];
+  regionalStats: RegionalStat[];
+  institutionStats: {
+    _id: string;
+    totalLearners: number;
+    currentEnrolled: number;
+    academicActive: number;
+    academicGraduating: number;
+    academicGraduated: number;
+    placed: number;
+    pending: number;
+    completed: number;
+    dropped: number;
+  }[];
+  genderDistribution: { gender: string; count: number }[];
+  programDistribution: { program: string; count: number }[];
+  learnerProgressSummary?: {
+    totalLearners: number;
+    averageProgress: number;
+    atRiskCount: number;
+    completedCount: number;
+    placedCount: number;
+    ownershipSummary: {
+      assignedCount: number;
+      unassignedCount: number;
+      atRiskOwnedCount: number;
+    };
+  };
+  learnerQualitySummary?: {
+    activeLearnerCount: number;
+    overdueAttendanceRate: number;
+    monitoringCoverageRate: number;
+    gpsVerifiedRate: number;
+    avgVisitRating: number;
+    assessmentCompletionRate: number;
+    avgAssessmentScore: number;
+    employerEvaluationCoverageRate: number;
+    avgEmployerScore: number;
+    wouldHireRate: number;
+    assessmentScoreTrend: { name: string; count: number; avgScore: number }[];
+    employerOutcomeTrend: { name: string; count: number; avgScore: number; wouldHireRate: number }[];
+  };
+  pendingReports: number;
+  reportPipeline: { status: string; count: number }[];
+  approvalInbox?: {
+    pendingCount: number;
+    overdueCount: number;
+    recentRejectedCount: number;
+    queue: ApprovalQueueItem[];
+  };
+  supportSummary?: {
+    total: number;
+    open: number;
+    inProgress: number;
+    urgentOpen: number;
+    oldestOpenAgeDays: number;
+    categoryBreakdown: { category: string; count: number }[];
+    regionBreakdown: { region: string; count: number }[];
+    queue: SupportQueueItem[];
+  };
+  auditSummary?: {
+    eventsLast7Days: number;
+    destructiveEventsLast7Days: number;
+    authEventsLast7Days: number;
+    statusChangesLast7Days: number;
+    topActors: { actorId?: string; actorName: string; actorRole: string; count: number }[];
+    recentSensitiveEvents: SensitiveEvent[];
+  };
+  dataQualityAlerts?: {
+    stalePendingLearners: number;
+    placementsMissingSupervisor: number;
+    pendingAttendanceSignOff: number;
+    activePlacementsWithoutVisits: number;
+  };
+  userGovernance?: {
+    inactiveUsers: number;
+    pendingPasswordResets: number;
+    institutionsWithoutActiveAdmins: { _id: string; name: string; region: string; code: string }[];
+    privilegedUserAnomalies: {
+      institution: string;
+      adminCount: number;
+      managerCount: number;
+      privilegedCount: number;
+      activePrivilegedCount: number;
+      reasons: string[];
+    }[];
+    roleBreakdown: { role: string; count: number }[];
+  };
+  deadlineRisk?: {
+    upcomingDeadlines: {
+      _id: string;
+      title: string;
+      startDate: string;
+      endDate: string;
+      semester: string;
+      academicYear: string;
+      description: string;
+      daysRemaining: number;
+    }[];
+    currentCycle: {
+      title: string;
+      semester: string;
+      academicYear: string;
+      endDate: string;
+      daysRemaining: number;
+      isOverdue: boolean;
+    } | null;
+    overdueInstitutionSubmissions: {
+      _id: string;
+      institution: string;
+      region: string;
+      status: string;
+      code: string;
+    }[];
+    atRiskInstitutions: {
+      _id: string;
+      institution: string;
+      region: string;
+      status: string;
+      code: string;
+      daysRemaining: number;
+    }[];
+  };
+};
 
 export default function Dashboard() {
   const { authFetch, user } = useAuth();
   const navigate = useNavigate();
+  const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "semesterOverSemesterPercent">("placementRate");
 
   const openLearnerRegister = (params?: Record<string, string>) => {
     const query = new URLSearchParams(params || {}).toString();
@@ -144,75 +370,49 @@ export default function Dashboard() {
 
   // If SuperAdmin or RegionalAdmin, render the Analytics view
   if (isAdminView && stats && 'totalInstitutions' in stats) {
-    const adminData = stats as DashboardStats & {
-      totalInstitutions: number;
-      totalUsers: number;
-      totalPlacements: number;
-      totalVisits: number;
-      totalReports: number;
-      overallPlacementRate: number;
-      academicSummary?: {
-        currentEnrolled: number;
-        active: number;
-        graduating: number;
-        graduated: number;
-        dropped: number;
-      };
-      intakeCohorts?: {
-        intakeAcademicYear: string;
-        totalLearners: number;
-        currentEnrolled: number;
-        graduating: number;
-        graduated: number;
-        regionCount: number;
-        institutionCount: number;
-      }[];
-      regionalCohortBreakdown?: {
-        region: string;
-        intakeAcademicYear: string;
-        totalLearners: number;
-        currentEnrolled: number;
-        graduating: number;
-        graduated: number;
-        institutionCount: number;
-      }[];
-      institutionCohortBreakdown?: {
-        institution: string;
-        region: string;
-        intakeAcademicYear: string;
-        totalLearners: number;
-        currentEnrolled: number;
-        graduating: number;
-        graduated: number;
-      }[];
-      placementTrend: { name: string; year: number; month: number; count: number }[];
-      regionalStats: {
-        region: string;
-        institutionCount: number;
-        totalLearners: number;
-        currentEnrolled: number;
-        academicGraduating: number;
-        academicGraduated: number;
-        placementRate: number;
-      }[];
-      institutionStats: {
-        _id: string;
-        totalLearners: number;
-        currentEnrolled: number;
-        academicActive: number;
-        academicGraduating: number;
-        academicGraduated: number;
-        placed: number;
-        pending: number;
-        completed: number;
-        dropped: number;
-      }[];
-      genderDistribution: { gender: string; count: number }[];
-      programDistribution: { program: string; count: number }[];
-      avgTimeToPlacement: number;
-      pendingReports: number;
-      reportPipeline: { status: string; count: number }[];
-    };
+    const adminData = stats as AdminOverviewStats;
+    const qualityAlertItems = [
+      {
+        label: "Pending learners older than 14 days",
+        count: adminData.dataQualityAlerts?.stalePendingLearners || 0,
+        tone: "text-amber-700 bg-amber-50",
+        target: "/learners",
+      },
+      {
+        label: "Active placements missing supervisor details",
+        count: adminData.dataQualityAlerts?.placementsMissingSupervisor || 0,
+        tone: "text-red-700 bg-red-50",
+        target: "/placements",
+      },
+      {
+        label: "Attendance logs pending sign-off for 3+ days",
+        count: adminData.dataQualityAlerts?.pendingAttendanceSignOff || 0,
+        tone: "text-indigo-700 bg-indigo-50",
+        target: "/attendance-logs",
+      },
+      {
+        label: "Active placements without monitoring visits",
+        count: adminData.dataQualityAlerts?.activePlacementsWithoutVisits || 0,
+        tone: "text-orange-700 bg-orange-50",
+        target: "/monitoring-visits",
+      },
+    ];
+
+    const sortedRegionalStats = [...(adminData.regionalStats || [])].sort((a, b) => {
+      if (regionalSortBy === "completionRate") {
+        if (b.completionRate !== a.completionRate) return b.completionRate - a.completionRate;
+        return b.placementRate - a.placementRate;
+      }
+
+      if (regionalSortBy === "semesterOverSemesterPercent") {
+        if (b.semesterOverSemesterPercent !== a.semesterOverSemesterPercent) return b.semesterOverSemesterPercent - a.semesterOverSemesterPercent;
+        return b.placementRate - a.placementRate;
+      }
+
+      if (b.placementRate !== a.placementRate) return b.placementRate - a.placementRate;
+      return b.completionRate - a.completionRate;
+    });
+
     return (
       <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-2 px-4 sm:px-0">
@@ -348,6 +548,141 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {user?.role === 'RegionalAdmin' && (
+          <>
+            <GeolocatedMonitoringMap />
+
+            <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
+              <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+                <CardHeader className="p-4 md:p-8 pb-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-2xl font-black flex items-center gap-3">
+                        <CheckCircle2 className="h-6 w-6 text-green-600" />
+                        Approval Inbox
+                      </CardTitle>
+                      <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                        Reports in your region waiting for review or follow-up.
+                      </CardDescription>
+                    </div>
+                    <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/semester-reports')}>
+                      Open Reports
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-4 md:p-8 pt-2 space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="rounded-2xl bg-green-50 p-4">
+                      <p className="text-xs font-black uppercase tracking-wider text-green-500">Pending</p>
+                      <p className="text-3xl font-black text-green-700 mt-2">{adminData.approvalInbox?.pendingCount || 0}</p>
+                    </div>
+                    <div className="rounded-2xl bg-amber-50 p-4">
+                      <p className="text-xs font-black uppercase tracking-wider text-amber-500">Over 7 Days</p>
+                      <p className="text-3xl font-black text-amber-700 mt-2">{adminData.approvalInbox?.overdueCount || 0}</p>
+                    </div>
+                    <div className="rounded-2xl bg-red-50 p-4">
+                      <p className="text-xs font-black uppercase tracking-wider text-red-500">Recent Rejections</p>
+                      <p className="text-3xl font-black text-red-700 mt-2">{adminData.approvalInbox?.recentRejectedCount || 0}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {adminData.approvalInbox?.queue?.length ? (
+                      adminData.approvalInbox.queue.map((item) => (
+                        <div key={item._id} className="rounded-2xl border border-gray-100 p-4 bg-gray-50">
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <p className="font-black text-gray-900">{item.institution}</p>
+                              <p className="text-sm font-medium text-gray-500">{item.title}</p>
+                            </div>
+                            <Badge className="bg-amber-100 text-amber-700 border-0">{item.ageDays}d waiting</Badge>
+                          </div>
+                          <p className="text-xs font-bold text-gray-400 mt-2">
+                            Submitted {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm font-medium text-gray-500">No reports are currently waiting for regional review.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+                <CardHeader className="p-4 md:p-8 pb-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-2xl font-black flex items-center gap-3">
+                        <LifeBuoy className="h-6 w-6 text-[#FFB800]" />
+                        Support Escalation Queue
+                      </CardTitle>
+                      <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                        Regional support workload and unresolved escalations.
+                      </CardDescription>
+                    </div>
+                    <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/support-center')}>
+                      Open Support
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-4 md:p-8 pt-2 space-y-5">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="rounded-2xl bg-amber-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-amber-500">Open</p><p className="text-3xl font-black text-amber-700 mt-2">{adminData.supportSummary?.open || 0}</p></div>
+                    <div className="rounded-2xl bg-blue-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-blue-500">In Progress</p><p className="text-3xl font-black text-blue-700 mt-2">{adminData.supportSummary?.inProgress || 0}</p></div>
+                    <div className="rounded-2xl bg-red-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-red-500">Urgent</p><p className="text-3xl font-black text-red-700 mt-2">{adminData.supportSummary?.urgentOpen || 0}</p></div>
+                    <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-slate-500">Oldest Age</p><p className="text-3xl font-black text-slate-700 mt-2">{adminData.supportSummary?.oldestOpenAgeDays || 0}d</p></div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-2xl bg-gray-50 p-4 border border-gray-100">
+                      <p className="text-sm font-black text-gray-900 mb-3">By Category</p>
+                      <div className="space-y-2">
+                        {adminData.supportSummary?.categoryBreakdown?.length ? adminData.supportSummary.categoryBreakdown.slice(0, 4).map((item) => (
+                          <div key={item.category} className="flex items-center justify-between text-sm">
+                            <span className="font-medium text-gray-600">{item.category}</span>
+                            <span className="font-black text-gray-900">{item.count}</span>
+                          </div>
+                        )) : <p className="text-sm text-gray-500">No unresolved tickets.</p>}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-gray-50 p-4 border border-gray-100">
+                      <p className="text-sm font-black text-gray-900 mb-3">By Region</p>
+                      <div className="space-y-2">
+                        {adminData.supportSummary?.regionBreakdown?.length ? adminData.supportSummary.regionBreakdown.slice(0, 4).map((item) => (
+                          <div key={item.region} className="flex items-center justify-between text-sm">
+                            <span className="font-medium text-gray-600">{item.region || 'Unassigned'}</span>
+                            <span className="font-black text-gray-900">{item.count}</span>
+                          </div>
+                        )) : <p className="text-sm text-gray-500">No unresolved tickets.</p>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {adminData.supportSummary?.queue?.length ? adminData.supportSummary.queue.slice(0, 4).map((ticket) => (
+                      <div key={ticket._id} className="rounded-2xl border border-gray-100 p-4 bg-gray-50">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="font-black text-gray-900">{ticket.subject}</p>
+                            <p className="text-sm font-medium text-gray-500">{ticket.institution} · {ticket.requesterName}</p>
+                          </div>
+                          <Badge className={ticket.priority === 'Urgent' ? 'bg-red-500 text-white border-0' : ticket.priority === 'High' ? 'bg-orange-100 text-orange-700 border-0' : 'bg-slate-100 text-slate-700 border-0'}>
+                            {ticket.priority}
+                          </Badge>
+                        </div>
+                        <p className="text-xs font-bold text-gray-400 mt-2">
+                          Updated {formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })} · {ticket.replyCount} repl{ticket.replyCount === 1 ? 'y' : 'ies'}
+                        </p>
+                      </div>
+                    )) : <p className="text-sm font-medium text-gray-500">No open support escalations.</p>}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </>
+        )}
 
         {adminData.academicSummary && (
           <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
@@ -500,6 +835,279 @@ export default function Dashboard() {
           </Card>
         )}
 
+        {adminData.learnerProgressSummary && (
+          <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+            <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-2xl font-black">Learner Risk & Progress</CardTitle>
+                  <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                    HQ intervention summary based on learner progress, placement execution, monitoring, and outcomes.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  className="rounded-xl border-gray-200 font-bold"
+                  onClick={() => openInterventionQueue({ risk: 'at-risk' })}
+                >
+                  Open Intervention Queue
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4 md:p-8 space-y-6">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <button
+                  type="button"
+                  onClick={() => openInterventionQueue({ risk: 'at-risk' })}
+                  className="rounded-[1.5rem] border border-red-100 bg-red-50/70 p-5 text-left transition hover:bg-red-100/70"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <AlertTriangle className="h-5 w-5 text-red-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-red-700">At Risk</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-red-700">{adminData.learnerProgressSummary.atRiskCount}</div>
+                  <p className="mt-1 text-sm font-bold text-red-800/70">Learners needing intervention</p>
+                </button>
+
+                <div className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <TrendingUp className="h-5 w-5 text-emerald-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-emerald-700">Progress</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-emerald-700">{adminData.learnerProgressSummary.averageProgress}%</div>
+                  <p className="mt-1 text-sm font-bold text-emerald-800/70">Average learner progress</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => openLearnerRegister({ status: 'Completed' })}
+                  className="rounded-[1.5rem] border border-indigo-100 bg-indigo-50/70 p-5 text-left transition hover:bg-indigo-100/70"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <CheckCircle2 className="h-5 w-5 text-indigo-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-indigo-700">Completed</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-indigo-700">{adminData.learnerProgressSummary.completedCount}</div>
+                  <p className="mt-1 text-sm font-bold text-indigo-800/70">Learners who completed WEL</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openLearnerRegister({ status: 'Placed' })}
+                  className="rounded-[1.5rem] border border-sky-100 bg-sky-50/70 p-5 text-left transition hover:bg-sky-100/70"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="p-3 rounded-2xl bg-white/80">
+                      <Briefcase className="h-5 w-5 text-sky-600" />
+                    </div>
+                    <span className="text-xs font-black uppercase tracking-widest text-sky-700">Placed</span>
+                  </div>
+                  <div className="mt-5 text-3xl font-black text-sky-700">{adminData.learnerProgressSummary.placedCount}</div>
+                  <p className="mt-1 text-sm font-bold text-sky-800/70">Learners currently placed</p>
+                </button>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                  <p className="text-xs font-black uppercase tracking-widest text-gray-400">Owned Cases</p>
+                  <p className="mt-2 text-3xl font-black text-gray-900">{adminData.learnerProgressSummary.ownershipSummary.assignedCount}</p>
+                  <p className="mt-1 text-sm font-medium text-gray-500">Learners already assigned to a responsible officer</p>
+                </div>
+                <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4">
+                  <p className="text-xs font-black uppercase tracking-widest text-amber-500">Unassigned</p>
+                  <p className="mt-2 text-3xl font-black text-amber-700">{adminData.learnerProgressSummary.ownershipSummary.unassignedCount}</p>
+                  <p className="mt-1 text-sm font-medium text-amber-700/80">Learners with no owner assigned</p>
+                </div>
+                <div className="rounded-2xl bg-red-50 border border-red-100 p-4">
+                  <p className="text-xs font-black uppercase tracking-widest text-red-500">At-Risk Owned</p>
+                  <p className="mt-2 text-3xl font-black text-red-700">{adminData.learnerProgressSummary.ownershipSummary.atRiskOwnedCount}</p>
+                  <p className="mt-1 text-sm font-medium text-red-700/80">At-risk learners already sitting with an owner</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {adminData.learnerQualitySummary && (
+          <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-2xl font-black">Attendance Compliance</CardTitle>
+                    <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                      Cadence-based attendance compliance across active placements.
+                    </CardDescription>
+                  </div>
+                  <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/attendance-logs')}>
+                    Open Logs
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8 space-y-4">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-[1.5rem] border border-indigo-100 bg-indigo-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-indigo-700">Active Placements</p>
+                    <p className="mt-4 text-3xl font-black text-indigo-700">{adminData.learnerQualitySummary.activeLearnerCount}</p>
+                    <p className="mt-1 text-sm font-bold text-indigo-800/70">Learners currently in WEL</p>
+                  </div>
+                  <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-amber-700">Overdue Rate</p>
+                    <p className="mt-4 text-3xl font-black text-amber-700">{adminData.learnerQualitySummary.overdueAttendanceRate}%</p>
+                    <p className="mt-1 text-sm font-bold text-amber-800/70">Placements behind attendance cadence</p>
+                  </div>
+                  <div className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-emerald-700">Compliant</p>
+                    <p className="mt-4 text-3xl font-black text-emerald-700">{Math.max(0, 100 - adminData.learnerQualitySummary.overdueAttendanceRate)}%</p>
+                    <p className="mt-1 text-sm font-bold text-emerald-800/70">Active placements on time</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-2xl font-black">Monitoring Quality & GPS</CardTitle>
+                    <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                      Monitoring coverage, site verification, and average observed performance.
+                    </CardDescription>
+                  </div>
+                  <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/monitoring-visits')}>
+                    Open Visits
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8 space-y-4">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-[1.5rem] border border-sky-100 bg-sky-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-sky-700">Coverage</p>
+                    <p className="mt-4 text-3xl font-black text-sky-700">{adminData.learnerQualitySummary.monitoringCoverageRate}%</p>
+                    <p className="mt-1 text-sm font-bold text-sky-800/70">Placements with monitoring in cadence</p>
+                  </div>
+                  <div className="rounded-[1.5rem] border border-violet-100 bg-violet-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-violet-700">GPS Verified</p>
+                    <p className="mt-4 text-3xl font-black text-violet-700">{adminData.learnerQualitySummary.gpsVerifiedRate}%</p>
+                    <p className="mt-1 text-sm font-bold text-violet-800/70">Active placements with verified visit evidence</p>
+                  </div>
+                  <div className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-emerald-700">Avg Rating</p>
+                    <p className="mt-4 text-3xl font-black text-emerald-700">{adminData.learnerQualitySummary.avgVisitRating}</p>
+                    <p className="mt-1 text-sm font-bold text-emerald-800/70">Latest monitoring performance rating</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-2xl font-black">Assessment Outcomes</CardTitle>
+                    <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                      Competency assessment completion and score trend over the last 6 months.
+                    </CardDescription>
+                  </div>
+                  <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/assessments')}>
+                    Open Assessments
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8 space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-[1.5rem] border border-violet-100 bg-violet-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-violet-700">Completion</p>
+                    <p className="mt-4 text-3xl font-black text-violet-700">{adminData.learnerQualitySummary.assessmentCompletionRate}%</p>
+                    <p className="mt-1 text-sm font-bold text-violet-800/70">Active placements with at least one assessment</p>
+                  </div>
+                  <div className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-emerald-700">Avg Score</p>
+                    <p className="mt-4 text-3xl font-black text-emerald-700">{adminData.learnerQualitySummary.avgAssessmentScore}</p>
+                    <p className="mt-1 text-sm font-bold text-emerald-800/70">Average latest assessment score</p>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs font-black uppercase tracking-widest text-gray-400">6-Month Assessment Score Trend</p>
+                    <p className="text-xs font-bold text-gray-500">Average score by month</p>
+                  </div>
+                  <div className="h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={adminData.learnerQualitySummary.assessmentScoreTrend}>
+                        <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                        <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                        <Tooltip
+                          contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)' }}
+                          formatter={(value: number, name: string) => [value, name === 'avgScore' ? 'Avg score' : 'Count']}
+                        />
+                        <Line type="monotone" dataKey="avgScore" stroke="#7c3aed" strokeWidth={3} dot={false} activeDot={{ r: 4, fill: '#7c3aed' }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-2xl font-black">Employer Evaluation Outcomes</CardTitle>
+                    <CardDescription className="text-sm font-bold text-gray-400 mt-1">
+                      Employer feedback coverage, average score, and willingness to hire.
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8 space-y-4">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-[1.5rem] border border-blue-100 bg-blue-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-blue-700">Coverage</p>
+                    <p className="mt-4 text-3xl font-black text-blue-700">{adminData.learnerQualitySummary.employerEvaluationCoverageRate}%</p>
+                    <p className="mt-1 text-sm font-bold text-blue-800/70">Active placements with employer feedback</p>
+                  </div>
+                  <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-amber-700">Avg Score</p>
+                    <p className="mt-4 text-3xl font-black text-amber-700">{adminData.learnerQualitySummary.avgEmployerScore}</p>
+                    <p className="mt-1 text-sm font-bold text-amber-800/70">Average latest employer rating</p>
+                  </div>
+                  <div className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/70 p-5">
+                    <p className="text-xs font-black uppercase tracking-widest text-emerald-700">Would Hire</p>
+                    <p className="mt-4 text-3xl font-black text-emerald-700">{adminData.learnerQualitySummary.wouldHireRate}%</p>
+                    <p className="mt-1 text-sm font-bold text-emerald-800/70">Positive hire intent among evaluated learners</p>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs font-black uppercase tracking-widest text-gray-400">6-Month Employer Trend</p>
+                    <p className="text-xs font-bold text-gray-500">Would-hire rate by month</p>
+                  </div>
+                  <div className="h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={adminData.learnerQualitySummary.employerOutcomeTrend}>
+                        <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                        <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                        <Tooltip
+                          contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)' }}
+                          formatter={(value: number, name: string) => [value, name === 'wouldHireRate' ? 'Would hire %' : 'Avg score']}
+                        />
+                        <Line type="monotone" dataKey="wouldHireRate" stroke="#10b981" strokeWidth={3} dot={false} activeDot={{ r: 4, fill: '#10b981' }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         {/* Report Approval Pipeline — RegionalAdmin only */}
         {user?.role === 'RegionalAdmin' && adminData.reportPipeline && (
           <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
@@ -580,8 +1188,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* Gender Distribution, Trade Distribution, Avg Time */}
-        <div className="grid gap-6 grid-cols-1 lg:grid-cols-3">
+        {/* Gender Distribution and Trade Distribution */}
+        <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
           {/* Gender Distribution */}
           <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
             <CardHeader className="p-4 md:p-8 pb-0">
@@ -666,25 +1274,197 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          {/* Avg Time to Placement */}
-          <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden flex flex-col justify-center items-center">
-            <CardHeader className="p-4 md:p-8 pb-0 text-center">
-              <div className="mx-auto p-4 bg-amber-50 rounded-2xl mb-4">
-                <Timer className="h-8 w-8 text-amber-600" />
+        </div>
+
+        {user?.role === 'RegionalAdmin' && (
+          <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+            <CardHeader className="p-4 md:p-8 pb-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-2xl font-black">Regional Performance League Table</CardTitle>
+                  <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                    Placement rate, completion rate, intervention risk, and semester-on-semester movement across the country.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => downloadCSV(sortedRegionalStats, 'regional-performance-league')}
+                  className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
+                >
+                  <Download className="mr-2 h-4 w-4" /> CSV
+                </Button>
               </div>
-              <CardTitle className="text-xl font-black">Avg. Time to Placement</CardTitle>
-              <CardDescription className="text-sm font-bold text-gray-400 mt-1">
-                From registration to first placement
-              </CardDescription>
+              <div className="flex flex-wrap items-center gap-2 mt-4">
+                <span className="text-xs font-black uppercase tracking-widest text-gray-400">Rank By</span>
+                <button
+                  onClick={() => setRegionalSortBy("placementRate")}
+                  className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "placementRate" ? "bg-[#FFB800] text-gray-900" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                >
+                  Placement Rate
+                </button>
+                <button
+                  onClick={() => setRegionalSortBy("completionRate")}
+                  className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "completionRate" ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                >
+                  Completion Rate
+                </button>
+                <button
+                  onClick={() => setRegionalSortBy("semesterOverSemesterPercent")}
+                  className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "semesterOverSemesterPercent" ? "bg-green-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                >
+                  SoS Movement
+                </button>
+              </div>
             </CardHeader>
-            <CardContent className="p-4 md:p-8 text-center">
-              <div className="text-5xl font-black text-amber-600">
-                {adminData.avgTimeToPlacement || 0}
-              </div>
-              <p className="text-base font-bold text-gray-400 mt-2">days</p>
+            <CardContent className="p-4 md:p-8 pt-2">
+              {(sortedRegionalStats.length || 0) === 0 ? (
+                <p className="text-center text-gray-400 py-8">No regional data available yet.</p>
+              ) : (
+                <div className="space-y-4">
+                  {sortedRegionalStats.map((region, index) => {
+                    const MovementIcon = region.movementDirection === "up"
+                      ? TrendingUp
+                      : region.movementDirection === "down"
+                        ? TrendingDown
+                        : Minus;
+
+                    const movementTone = region.movementDirection === "up"
+                      ? "text-green-700 bg-green-50"
+                      : region.movementDirection === "down"
+                        ? "text-red-700 bg-red-50"
+                        : "text-slate-700 bg-slate-50";
+
+                    return (
+                      <div key={region.region} className="rounded-[1.75rem] border border-gray-100 p-6 bg-gray-50 hover:bg-gray-100 transition-colors">
+                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
+                          <div className="flex items-center gap-4">
+                            <div className={`h-12 w-12 rounded-2xl flex items-center justify-center font-black text-lg ${index < 3 ? 'bg-[#FFB800] text-gray-900' : 'bg-white text-gray-700 border border-gray-200'}`}>
+                              #{index + 1}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-3 flex-wrap">
+                                <h3 className="text-xl font-black text-gray-900">{region.region || 'Unknown'}</h3>
+                                {region.needsIntervention && (
+                                  <Badge className="bg-red-100 text-red-700 border-0">Needs intervention</Badge>
+                                )}
+                              </div>
+                              <p className="text-sm font-medium text-gray-500 mt-1">
+                                {region.institutionCount} institutions • {region.totalLearners} learners
+                              </p>
+                            </div>
+                          </div>
+                          <div className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl font-black ${movementTone}`}>
+                            <MovementIcon className="h-4 w-4" />
+                            <span>{region.movementDirection === "up" ? "+" : region.movementDirection === "down" ? "" : ""}{region.semesterOverSemesterPercent}%</span>
+                            <span className="text-xs font-bold opacity-70">SoS</span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+                          <div className="bg-white p-4 rounded-2xl border border-gray-100">
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Placement Rate</span>
+                            <span className={`text-2xl font-black ${region.placementRate >= 70 ? 'text-green-600' : region.placementRate >= 45 ? 'text-amber-600' : 'text-red-600'}`}>
+                              {Math.round(region.placementRate)}%
+                            </span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-gray-100">
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Completion Rate</span>
+                            <span className={`text-2xl font-black ${region.completionRate >= 35 ? 'text-green-600' : region.completionRate >= 20 ? 'text-amber-600' : 'text-red-600'}`}>
+                              {Math.round(region.completionRate)}%
+                            </span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-gray-100">
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Current Semester</span>
+                            <span className="text-2xl font-black text-gray-900">{region.currentSemesterPlacements}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-gray-100">
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Previous Semester</span>
+                            <span className="text-2xl font-black text-gray-900">{region.previousSemesterPlacements}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-gray-100">
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Completed</span>
+                            <span className="text-2xl font-black text-indigo-600">{region.completed}</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                          <div>
+                            <div className="flex items-center justify-between text-xs font-black text-gray-400 uppercase tracking-widest mb-2">
+                              <span>Placement Progress</span>
+                              <span>{Math.round(region.placementRate)}%</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2.5">
+                              <div className="bg-[#FFB800] h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(region.placementRate, 100)}%` }} />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between text-xs font-black text-gray-400 uppercase tracking-widest mb-2">
+                              <span>Completion Progress</span>
+                              <span>{Math.round(region.completionRate)}%</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2.5">
+                              <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(region.completionRate, 100)}%` }} />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 rounded-2xl bg-white border border-gray-100 p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <p className="text-xs font-black uppercase tracking-widest text-gray-400">4-Semester Placement Trend</p>
+                            <p className="text-xs font-bold text-gray-500">
+                              {region.sparkline?.[0]?.period} to {region.sparkline?.[(region.sparkline?.length || 1) - 1]?.period}
+                            </p>
+                          </div>
+                          <div className="h-20">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={region.sparkline}>
+                                <Tooltip
+                                  cursor={false}
+                                  contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)' }}
+                                  labelStyle={{ color: '#6b7280', fontWeight: 700 }}
+                                />
+                                <Line
+                                  type="monotone"
+                                  dataKey="count"
+                                  stroke={region.needsIntervention ? "#ef4444" : "#f59e0b"}
+                                  strokeWidth={3}
+                                  dot={false}
+                                  activeDot={{ r: 4, fill: region.needsIntervention ? "#ef4444" : "#f59e0b" }}
+                                />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                          <div className="mt-2 grid grid-cols-4 gap-2">
+                            {region.sparkline?.map((point) => (
+                              <div key={`${region.region}-${point.period}`} className="text-center">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{point.period}</p>
+                                <p className="text-xs font-bold text-gray-700 mt-1">{point.count}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {region.needsIntervention && region.interventionReasons.length > 0 && (
+                          <div className="mt-4 rounded-2xl bg-red-50 border border-red-100 px-4 py-3">
+                            <p className="text-xs font-black uppercase tracking-widest text-red-500 mb-2">Intervention Reasons</p>
+                            <div className="flex flex-wrap gap-2">
+                              {region.interventionReasons.map((reason) => (
+                                <Badge key={reason} className="bg-white text-red-700 border border-red-200">
+                                  {reason}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
-        </div>
+        )}
 
         {/* Regional / Institutional breakdown */}
         <div className="grid gap-6 grid-cols-1 lg:grid-cols-2 mt-4">
@@ -765,6 +1545,299 @@ export default function Dashboard() {
               </CardContent>
            </Card>
         </div>
+
+        {user?.role === 'RegionalAdmin' && (
+          <>
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-4 md:p-8 pb-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-2xl font-black">Calendar & Deadline Risk</CardTitle>
+                    <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                      Upcoming deadlines, overdue submissions, and institutions at risk in your region.
+                    </CardDescription>
+                  </div>
+                  <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/semester-reports')}>
+                    Open Reports
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8 pt-2 space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="rounded-2xl bg-blue-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-blue-500">Upcoming Deadlines</p><p className="text-3xl font-black text-blue-700 mt-2">{adminData.deadlineRisk?.upcomingDeadlines?.length || 0}</p></div>
+                  <div className="rounded-2xl bg-red-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-red-500">Overdue Institutions</p><p className="text-3xl font-black text-red-700 mt-2">{adminData.deadlineRisk?.overdueInstitutionSubmissions?.length || 0}</p></div>
+                  <div className="rounded-2xl bg-amber-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-amber-500">At Risk This Cycle</p><p className="text-3xl font-black text-amber-700 mt-2">{adminData.deadlineRisk?.atRiskInstitutions?.length || 0}</p></div>
+                  <div className="rounded-2xl bg-purple-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-purple-500">Current Cycle</p><p className="text-sm font-black text-purple-700 mt-2">{adminData.deadlineRisk?.currentCycle ? `${adminData.deadlineRisk.currentCycle.semester} ${adminData.deadlineRisk.currentCycle.academicYear}` : 'No active cycle'}</p></div>
+                </div>
+
+                {adminData.deadlineRisk?.currentCycle && (
+                  <div className={`rounded-2xl border px-5 py-4 ${adminData.deadlineRisk.currentCycle.isOverdue ? 'bg-red-50 border-red-100' : 'bg-amber-50 border-amber-100'}`}>
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-widest text-gray-500">Current Reporting Cycle</p>
+                        <p className="text-lg font-black text-gray-900 mt-1">{adminData.deadlineRisk.currentCycle.title}</p>
+                        <p className="text-sm font-medium text-gray-600 mt-1">
+                          Due {formatDistanceToNow(new Date(adminData.deadlineRisk.currentCycle.endDate), { addSuffix: true })}
+                        </p>
+                      </div>
+                      <Badge className={adminData.deadlineRisk.currentCycle.isOverdue ? 'bg-red-500 text-white border-0' : 'bg-amber-100 text-amber-700 border-0'}>
+                        {adminData.deadlineRisk.currentCycle.isOverdue ? 'Overdue' : `${adminData.deadlineRisk.currentCycle.daysRemaining} days remaining`}
+                      </Badge>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
+                    <p className="text-sm font-black text-gray-900 mb-4">Upcoming Deadlines</p>
+                    <div className="space-y-3">
+                      {adminData.deadlineRisk?.upcomingDeadlines?.length ? adminData.deadlineRisk.upcomingDeadlines.map((deadline) => (
+                        <div key={deadline._id} className="rounded-xl bg-white border border-gray-100 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-gray-900 text-sm">{deadline.title}</p>
+                              <p className="text-xs font-medium text-gray-500 mt-1">{deadline.semester} {deadline.academicYear}</p>
+                            </div>
+                            <Badge className="bg-blue-100 text-blue-700 border-0">{deadline.daysRemaining}d</Badge>
+                          </div>
+                          <p className="text-xs font-medium text-gray-500 mt-2">
+                            Ends {formatDistanceToNow(new Date(deadline.endDate), { addSuffix: true })}
+                          </p>
+                        </div>
+                      )) : <p className="text-sm text-gray-500">No upcoming deadline events found.</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
+                    <p className="text-sm font-black text-gray-900 mb-4">Overdue Institution Submissions</p>
+                    <div className="space-y-3">
+                      {adminData.deadlineRisk?.overdueInstitutionSubmissions?.length ? adminData.deadlineRisk.overdueInstitutionSubmissions.map((item) => (
+                        <button
+                          key={item._id}
+                          onClick={() => navigate(`/semester-reports?deadlineView=overdue&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(adminData.deadlineRisk?.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(adminData.deadlineRisk?.currentCycle?.academicYear || '')}`)}
+                          className="w-full text-left rounded-xl bg-white border border-gray-100 p-3 hover:bg-gray-50 transition-colors"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-gray-900 text-sm">{item.institution}</p>
+                              <p className="text-xs font-medium text-gray-500 mt-1">{item.region} · {item.code}</p>
+                            </div>
+                            <Badge className="bg-red-100 text-red-700 border-0">{item.status}</Badge>
+                          </div>
+                        </button>
+                      )) : <p className="text-sm text-gray-500">No overdue institution submissions.</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
+                    <p className="text-sm font-black text-gray-900 mb-4">At Risk of Missing Current Cycle</p>
+                    <div className="space-y-3">
+                      {adminData.deadlineRisk?.atRiskInstitutions?.length ? adminData.deadlineRisk.atRiskInstitutions.map((item) => (
+                        <button
+                          key={item._id}
+                          onClick={() => navigate(`/semester-reports?deadlineView=at-risk&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(adminData.deadlineRisk?.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(adminData.deadlineRisk?.currentCycle?.academicYear || '')}`)}
+                          className="w-full text-left rounded-xl bg-white border border-gray-100 p-3 hover:bg-gray-50 transition-colors"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-gray-900 text-sm">{item.institution}</p>
+                              <p className="text-xs font-medium text-gray-500 mt-1">{item.region} · {item.code}</p>
+                            </div>
+                            <Badge className="bg-amber-100 text-amber-700 border-0">{item.daysRemaining}d left</Badge>
+                          </div>
+                          <p className="text-xs font-medium text-gray-500 mt-2">Current report state: {item.status}</p>
+                        </button>
+                      )) : <p className="text-sm text-gray-500">No institutions currently flagged as at risk.</p>}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+              <CardHeader className="p-4 md:p-8 pb-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-2xl font-black">Regional User Governance</CardTitle>
+                    <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                      Role distribution, inactive accounts, orphaned institutions, and privileged-access anomalies in your region.
+                    </CardDescription>
+                  </div>
+                  <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/users')}>
+                    Open Users
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 md:p-8 pt-2 space-y-5">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <button onClick={() => navigate('/users')} className="rounded-2xl bg-blue-50 p-4 text-left hover:bg-blue-100 transition-colors">
+                    <p className="text-xs font-black uppercase tracking-wider text-blue-500">Roles Tracked</p>
+                    <p className="text-3xl font-black text-blue-700 mt-2">{adminData.userGovernance?.roleBreakdown?.length || 0}</p>
+                  </button>
+                  <button onClick={() => navigate('/users?status=Inactive')} className="rounded-2xl bg-red-50 p-4 text-left hover:bg-red-100 transition-colors">
+                    <p className="text-xs font-black uppercase tracking-wider text-red-500">Inactive Users</p>
+                    <p className="text-3xl font-black text-red-700 mt-2">{adminData.userGovernance?.inactiveUsers || 0}</p>
+                  </button>
+                  <button onClick={() => navigate('/users?governance=password-reset-pending')} className="rounded-2xl bg-amber-50 p-4 text-left hover:bg-amber-100 transition-colors">
+                    <p className="text-xs font-black uppercase tracking-wider text-amber-500">Password Resets Pending</p>
+                    <p className="text-3xl font-black text-amber-700 mt-2">{adminData.userGovernance?.pendingPasswordResets || 0}</p>
+                  </button>
+                  <button onClick={() => navigate('/users?governance=orphaned-institutions&role=Admin&status=Active')} className="rounded-2xl bg-purple-50 p-4 text-left hover:bg-purple-100 transition-colors">
+                    <p className="text-xs font-black uppercase tracking-wider text-purple-500">Orphaned Institutions</p>
+                    <p className="text-3xl font-black text-purple-700 mt-2">{adminData.userGovernance?.institutionsWithoutActiveAdmins?.length || 0}</p>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
+                    <p className="text-sm font-black text-gray-900 mb-4">Users by Role</p>
+                    <div className="space-y-3">
+                      {adminData.userGovernance?.roleBreakdown?.length ? adminData.userGovernance.roleBreakdown.map((item) => (
+                        <div key={item.role} className="flex items-center justify-between">
+                          <span className="text-sm font-medium text-gray-600">{item.role}</span>
+                          <Badge className="bg-white text-gray-900 border border-gray-200">{item.count}</Badge>
+                        </div>
+                      )) : <p className="text-sm text-gray-500">No user data available.</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
+                    <p className="text-sm font-black text-gray-900 mb-4">Institutions Without Active Admins</p>
+                    <div className="space-y-3">
+                      {adminData.userGovernance?.institutionsWithoutActiveAdmins?.length ? adminData.userGovernance.institutionsWithoutActiveAdmins.map((institution) => (
+                        <div key={institution._id} className="rounded-xl bg-white border border-gray-100 p-3">
+                          <p className="font-bold text-gray-900 text-sm">{institution.name}</p>
+                          <p className="text-xs font-medium text-gray-500 mt-1">{institution.region} · {institution.code}</p>
+                        </div>
+                      )) : <p className="text-sm text-gray-500">Every institution currently has an active admin.</p>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
+                    <p className="text-sm font-black text-gray-900 mb-4">Privileged Access Anomalies</p>
+                    <div className="space-y-3">
+                      {adminData.userGovernance?.privilegedUserAnomalies?.length ? adminData.userGovernance.privilegedUserAnomalies.map((entry) => (
+                        <div key={entry.institution} className="rounded-xl bg-white border border-gray-100 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-bold text-gray-900 text-sm">{entry.institution}</p>
+                              <p className="text-xs font-medium text-gray-500 mt-1">
+                                {entry.activePrivilegedCount} active privileged users · {entry.adminCount} admins · {entry.managerCount} managers
+                              </p>
+                            </div>
+                            <Badge className="bg-red-100 text-red-700 border-0">Flagged</Badge>
+                          </div>
+                          <div className="flex flex-wrap gap-2 mt-3">
+                            {entry.reasons.map((reason) => (
+                              <Badge key={`${entry.institution}-${reason}`} className="bg-white text-red-700 border border-red-200">
+                                {reason}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )) : <p className="text-sm text-gray-500">No privileged-access anomalies detected.</p>}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
+              <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+                <CardHeader className="p-4 md:p-8 pb-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-2xl font-black flex items-center gap-3">
+                        <ShieldCheck className="h-6 w-6 text-indigo-600" />
+                        Audit & Compliance Snapshot
+                      </CardTitle>
+                      <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                        Sensitive regional activity from the last 7 days.
+                      </CardDescription>
+                    </div>
+                    <Button data-help-id="dashboard-audit-link" variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/activity-log')}>
+                      Open Audit Log
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-4 md:p-8 pt-2 space-y-5">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-slate-500">Events</p><p className="text-3xl font-black text-slate-700 mt-2">{adminData.auditSummary?.eventsLast7Days || 0}</p></div>
+                    <div className="rounded-2xl bg-red-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-red-500">Deletes</p><p className="text-3xl font-black text-red-700 mt-2">{adminData.auditSummary?.destructiveEventsLast7Days || 0}</p></div>
+                    <div className="rounded-2xl bg-amber-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-amber-500">Status Changes</p><p className="text-3xl font-black text-amber-700 mt-2">{adminData.auditSummary?.statusChangesLast7Days || 0}</p></div>
+                    <div className="rounded-2xl bg-blue-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-blue-500">Auth Events</p><p className="text-3xl font-black text-blue-700 mt-2">{adminData.auditSummary?.authEventsLast7Days || 0}</p></div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-2xl bg-gray-50 p-4 border border-gray-100">
+                      <p className="text-sm font-black text-gray-900 mb-3">Top Actors</p>
+                      <div className="space-y-3">
+                        {adminData.auditSummary?.topActors?.length ? adminData.auditSummary.topActors.map((actor) => (
+                          <div key={`${actor.actorId || actor.actorName}-${actor.actorRole}`} className="flex items-center justify-between">
+                            <div>
+                              <p className="font-bold text-gray-900 text-sm">{actor.actorName}</p>
+                              <p className="text-xs font-medium text-gray-500">{actor.actorRole}</p>
+                            </div>
+                            <Badge className="bg-indigo-100 text-indigo-700 border-0">{actor.count} events</Badge>
+                          </div>
+                        )) : <p className="text-sm text-gray-500">No recent audit activity.</p>}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-gray-50 p-4 border border-gray-100">
+                      <p className="text-sm font-black text-gray-900 mb-3">Recent Sensitive Events</p>
+                      <div className="space-y-3">
+                        {adminData.auditSummary?.recentSensitiveEvents?.length ? adminData.auditSummary.recentSensitiveEvents.slice(0, 4).map((event) => (
+                          <div key={event._id}>
+                            <p className="font-bold text-gray-900 text-sm">{event.summary}</p>
+                            <p className="text-xs font-medium text-gray-500">{event.actorName} · {event.action} · {formatDistanceToNow(new Date(event.createdAt), { addSuffix: true })}</p>
+                          </div>
+                        )) : <p className="text-sm text-gray-500">No sensitive events captured in the last week.</p>}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+                <CardHeader className="p-4 md:p-8 pb-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-2xl font-black flex items-center gap-3">
+                        <AlertTriangle className="h-6 w-6 text-red-500" />
+                        Data Quality Alerts
+                      </CardTitle>
+                      <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                        Operational gaps likely to affect compliance or follow-up in your region.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-4 md:p-8 pt-2 space-y-4">
+                  {qualityAlertItems.map((alert) => (
+                    <button
+                      key={alert.label}
+                      onClick={() => navigate(alert.target)}
+                      className="w-full rounded-2xl border border-gray-100 bg-white hover:bg-gray-50 transition-colors p-5 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="font-black text-gray-900">{alert.label}</p>
+                          <p className="text-sm font-medium text-gray-500 mt-1">Open the relevant workspace to investigate and resolve.</p>
+                        </div>
+                        <div className={`px-4 py-3 rounded-2xl font-black text-2xl min-w-[88px] text-center ${alert.tone}`}>
+                          {alert.count}
+                        </div>
+                      </div>
+                      <div className="mt-3 flex items-center gap-2 text-sm font-black text-indigo-600">
+                        Review now <ArrowRight className="h-4 w-4" />
+                      </div>
+                    </button>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
+          </>
+        )}
 
       {/* Institution Breakdown */}
       <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden mt-6">
@@ -996,7 +2069,7 @@ export default function Dashboard() {
                     <button
                       key={p._id}
                       type="button"
-                      onClick={() => navigate('/placements')}
+                      onClick={() => navigate('/delegated-placements')}
                       className="w-full text-left p-4 rounded-2xl bg-white/80 border border-amber-100 hover:border-amber-300 hover:bg-white transition-all"
                     >
                       <div className="flex items-center justify-between">
@@ -1014,7 +2087,7 @@ export default function Dashboard() {
                     <Button
                       variant="ghost"
                       className="w-full text-amber-700 font-bold hover:text-amber-900 hover:bg-amber-100/50"
-                      onClick={() => navigate('/placements')}
+                      onClick={() => navigate('/delegated-placements')}
                     >
                       View all {delegatedPlacements.length} delegated placements
                     </Button>
@@ -1127,18 +2200,9 @@ export default function Dashboard() {
                       )}
                       {cohort.riskLevel && cohort.riskLevel !== 'low' && (
                         <div className="mt-3">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="rounded-xl border-gray-200 bg-white font-bold"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openInterventionQueue({ intakeAcademicYear: cohort.intakeAcademicYear, risk: 'at-risk' });
-                            }}
-                          >
+                          <span className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-bold text-gray-900 shadow-sm">
                             View Intervention Queue
-                          </Button>
+                          </span>
                         </div>
                       )}
                     </button>
@@ -1276,10 +2340,10 @@ export default function Dashboard() {
               <CardHeader className="p-6 md:p-8 pb-0">
                 <CardTitle className="text-xl md:text-2xl font-black border-l-4 border-indigo-500 pl-4">Placement Trends</CardTitle>
                 <CardDescription className="text-sm md:text-base font-bold text-gray-400 mt-2 pl-4">
-                  Monthly placements over the current academic year.
+                  Semester placement trends across recent academic cycles.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="p-4 md:p-8 pt-4">
+              <CardContent data-help-id="dashboard-overview" className="p-4 md:p-8 pt-4">
                 <Overview />
               </CardContent>
             </Card>

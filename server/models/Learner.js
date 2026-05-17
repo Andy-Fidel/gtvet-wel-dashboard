@@ -57,9 +57,19 @@ learnerSchema.virtual('name').get(function() {
 learnerSchema.index({ institution: 1 });
 learnerSchema.index({ owner: 1 });
 learnerSchema.index({ status: 1 });
+learnerSchema.index({ academicStatus: 1 });
 learnerSchema.index({ gender: 1 });
 learnerSchema.index({ program: 1 });
+learnerSchema.index({ year: 1 });
+learnerSchema.index({ intakeAcademicYear: 1 });
+learnerSchema.index({ region: 1 });
 learnerSchema.index({ createdAt: 1 });
+learnerSchema.index({ institution: 1, academicStatus: 1 });
+learnerSchema.index({ institution: 1, status: 1 });
+learnerSchema.index({ institution: 1, intakeAcademicYear: 1 });
+learnerSchema.index({ institution: 1, year: 1 });
+learnerSchema.index({ region: 1, intakeAcademicYear: 1 });
+learnerSchema.index({ region: 1, academicStatus: 1 });
 
 // Auto-generate trackingId before saving
 learnerSchema.pre('save', async function() {

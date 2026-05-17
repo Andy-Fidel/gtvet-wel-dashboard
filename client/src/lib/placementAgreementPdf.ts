@@ -1,4 +1,5 @@
 import jsPDF from "jspdf"
+import gtvetsLogo from "@/assets/gtvets_logo.png"
 
 export interface PlacementAgreementPdfData {
   learnerName: string
@@ -60,7 +61,7 @@ const formatDate = (value?: string | null) => {
 
 const sanitizeFilenamePart = (value: string) => value.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()
 
-export const downloadPlacementAgreementPdf = (data: PlacementAgreementPdfData) => {
+export const downloadPlacementAgreementPdf = async (data: PlacementAgreementPdfData) => {
   const doc = new jsPDF({ unit: "pt", format: "a4" })
   const pageHeight = doc.internal.pageSize.getHeight()
   const pageWidth = doc.internal.pageSize.getWidth()
@@ -94,11 +95,31 @@ export const downloadPlacementAgreementPdf = (data: PlacementAgreementPdfData) =
     writeLine(`${label}: ${value?.trim() ? value : "Not provided"}`, { size: 10 })
   }
 
-  doc.setFont("helvetica", "bold")
-  doc.setFontSize(16)
-  doc.setTextColor(17, 24, 39)
-  doc.text("WEL Placement Agreement", left, y)
-  y += 22
+  try {
+    const img = new Image()
+    img.src = gtvetsLogo
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = reject
+    })
+    doc.addImage(img, "PNG", left, y - 8, 30, 30)
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(16)
+    doc.setTextColor(17, 24, 39)
+    doc.text("WEL Placement Agreement", left + 40, y + 6)
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(10)
+    doc.setTextColor(75, 85, 99)
+    doc.text(`Generated on ${new Date().toLocaleDateString()}`, left + 40, y + 21)
+    y += 34
+  } catch (error) {
+    console.warn("Could not load logo for PDF", error)
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(16)
+    doc.setTextColor(17, 24, 39)
+    doc.text("WEL Placement Agreement", left, y)
+    y += 22
+  }
 
   writeLine("Employer acknowledgement and learner agreement for the current WEL placement.", { size: 10, color: [75, 85, 99] })
 

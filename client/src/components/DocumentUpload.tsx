@@ -41,7 +41,7 @@ export function DocumentUpload({
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { token } = useAuth()
+  const { authFetch } = useAuth()
   const isOffline = typeof navigator !== "undefined" ? !navigator.onLine : false
 
   const handleFile = (f: File) => {
@@ -79,11 +79,8 @@ export function DocumentUpload({
       if (supportTicketId) formData.append('supportTicketId', supportTicketId)
       if (employerEvaluationId) formData.append('employerEvaluationId', employerEvaluationId)
 
-      const res = await fetch('/api/documents/upload', {
+      const res = await authFetch('/api/documents/upload', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
         body: formData,
       })
 

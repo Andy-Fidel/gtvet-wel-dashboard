@@ -9,7 +9,7 @@ import { useState, useRef } from "react";
 import { toast } from "sonner";
 
 export default function UserProfile() {
-  const { user, authFetch, token } = useAuth();
+  const { user, authFetch } = useAuth();
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -27,9 +27,8 @@ export default function UserProfile() {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const res = await fetch('/api/documents/user-profile-picture', {
+      const res = await authFetch('/api/documents/user-profile-picture', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
         body: formData,
       })
       const data = await res.json().catch(() => ({}))

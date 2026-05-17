@@ -3,11 +3,16 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { User } from '../models/User.js';
-import { auth, JWT_SECRET } from '../middleware/auth.js';
+import { auth, JWT_SECRET, clearSessionCookies, issueCsrfToken, setSessionCookies } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { logAuditEvent } from '../utils/audit.js';
 
 const router = express.Router();
+
+router.get('/csrf', (req, res) => {
+  const csrfToken = issueCsrfToken(res);
+  res.json({ csrfToken });
+});
 
 // POST /api/auth/register (SuperAdmin only - used to create initial Institution Admins)
 router.post('/register', auth, (req, res, next) => {
@@ -46,12 +51,12 @@ router.post('/register', auth, (req, res, next) => {
 
     // Generate token
     const token = jwt.sign({ userId: newUser._id }, JWT_SECRET, { expiresIn: '7d' });
+    setSessionCookies(res, token);
 
     const populatedUser = await User.findById(newUser._id)
       .populate('partnerId')
       .populate('linkedLearners', 'name trackingId');
     res.status(201).json({
-      token,
       user: populatedUser.toJSON(),
     });
   } catch (error) {
@@ -129,6 +134,7 @@ router.post('/login', async (req, res) => {
     }
 
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+    setSessionCookies(res, token);
 
     user.lastLoginAt = new Date();
     await user.save();
@@ -144,7 +150,6 @@ router.post('/login', async (req, res) => {
     });
 
     res.json({
-      token,
       user: user.toJSON(),
       passwordChangeRequired: user.passwordChangeRequired || false,
     });
@@ -163,10 +168,15 @@ router.get('/me', auth, async (req, res) => {
   res.json(user.toJSON());
 });
 
+router.post('/logout', (req, res) => {
+  clearSessionCookies(res);
+  res.json({ message: 'Logged out successfully' });
+});
+
 // POST /api/auth/change-password
 router.post('/change-password', auth, async (req, res) => {
   try {
-    const { newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body;
 
     if (!newPassword || newPassword.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
@@ -175,6 +185,17 @@ router.post('/change-password', auth, async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Require current password for voluntary changes (not first-time forced changes)
+    if (!user.passwordChangeRequired) {
+      if (!currentPassword) {
+        return res.status(400).json({ message: 'Current password is required' });
+      }
+      const isMatch = await user.comparePassword(currentPassword);
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Current password is incorrect' });
+      }
     }
 
     user.password = newPassword;

@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge"
 import { Search } from "./Search"
 import { useNotifications } from "@/hooks/useNotifications"
 import { formatDistanceToNow } from "date-fns"
+import { HelpWizard } from "./HelpWizard"
 
 export function Navbar() {
   const location = useLocation()
@@ -27,7 +28,9 @@ export function Navbar() {
     switch(pathname) {
       case '/': return 'Dashboard';
       case '/learners': return 'Learner Register';
+      case '/graduated-learners': return 'Graduated Learners';
       case '/placements': return 'Workplace Placements';
+      case '/delegated-placements': return 'Delegated Placements';
       case '/attendance-logs': return 'Attendance & Hours';
       case '/support-center': return 'Help & Support';
       case '/activity-log': return 'Activity & Audit Log';
@@ -38,6 +41,8 @@ export function Navbar() {
       case '/system-overview': return 'System Overview';
       case '/academic-calendar': return 'Academic Calendar';
       case '/guardian-dashboard': return 'Guardian Portal';
+      case '/partner-dashboard': return 'Partner Portal';
+      case '/partner-history': return 'Partner History';
       case '/settings': return 'Settings';
       default: return 'Dashboard';
     }
@@ -87,7 +92,7 @@ export function Navbar() {
         </h2>
       </div>
 
-      <div className={`hidden lg:block flex-1 max-w-md mx-8 ${isGuardian ? "invisible pointer-events-none" : ""}`}>
+      <div data-help-id="navbar-search" className={`hidden lg:block flex-1 max-w-md mx-8 ${isGuardian ? "invisible pointer-events-none" : ""}`}>
         <Search />
       </div>
 
@@ -98,9 +103,12 @@ export function Navbar() {
               <Search />
             </div>
           ) : null}
+          <div data-help-id="navbar-help">
+            <HelpWizard />
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="relative h-10 w-10 md:h-12 md:w-12 rounded-2xl bg-gray-50 text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-all cursor-pointer">
+              <Button data-help-id="navbar-notifications" variant="ghost" size="icon" className="relative h-10 w-10 md:h-12 md:w-12 rounded-2xl bg-gray-50 text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-all cursor-pointer">
                 <Bell className="h-5 w-5" />
                 {unreadCount > 0 && (
                   <span className="absolute top-2 right-2 md:top-3 md:right-3 flex h-3 w-3 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white shadow-sm ring-2 ring-white">
@@ -165,7 +173,7 @@ export function Navbar() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="relative h-12 w-12 rounded-2xl p-0 hover:ring-2 hover:ring-[#FFB800] transition-all overflow-hidden bg-gray-100">
+            <Button data-help-id="navbar-profile" variant="ghost" className="relative h-12 w-12 rounded-2xl p-0 hover:ring-2 hover:ring-[#FFB800] transition-all overflow-hidden bg-gray-100">
                 {user?.profilePicture ? (
                   <img src={user.profilePicture} alt={user.name} className="h-12 w-12 object-cover" />
                 ) : (
