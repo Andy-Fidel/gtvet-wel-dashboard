@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import { formatDistanceToNow } from "date-fns"
 import {
   Card,
@@ -9,8 +9,10 @@ import {
 } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/context/AuthContext"
-import { Shield, Users, Building2, Download, Briefcase, FileText, AlertTriangle, CheckCircle2, LifeBuoy, ShieldCheck, ArrowRight, TrendingUp, TrendingDown, Minus } from "lucide-react"
+import { Shield, Users, Building2, Download, Briefcase, FileText, AlertTriangle, CheckCircle2, LifeBuoy, ShieldCheck, ArrowRight, TrendingUp, TrendingDown, Minus, RefreshCw, Bell, Upload } from "lucide-react"
 import { Line, LineChart, ResponsiveContainer, Tooltip } from "recharts"
 import { InstitutionForm } from "./InstitutionForm"
 import { GeolocatedMonitoringMap } from "@/components/dashboard/GeolocatedMonitoringMap"
@@ -169,33 +171,126 @@ interface OverviewData {
   };
 }
 
+const formatSemesterPeriod = (period = '') => {
+  const match = period.match(/^S([12])\s+(\d{4})$/);
+  if (!match) return period;
+  return `Semester ${match[1]}, ${match[2]}`;
+};
+
 export default function SuperAdminDashboard() {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [instOpen, setInstOpen] = useState(false);
   const [editingInstitution, setEditingInstitution] = useState<any | null>(null);
   const [instSearch, setInstSearch] = useState('');
+  const [partnerSearch, setPartnerSearch] = useState('');
+  const [institutionBreakdownLimit, setInstitutionBreakdownLimit] = useState(12);
+  const [csvImporting, setCsvImporting] = useState(false);
+  const [notifyingDeadlineKeys, setNotifyingDeadlineKeys] = useState<string[]>([]);
   const [expandedRegions, setExpandedRegions] = useState<string[]>([]);
   const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "semesterOverSemesterPercent">("placementRate");
   const { authFetch } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    authFetch('/api/admin/overview')
-      .then(res => {
-        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    setLoading(true);
+    setLoadError('');
+    authFetch(`/api/admin/overview${refreshKey > 0 ? '?refresh=true' : ''}`)
+      .then(async res => {
+        if (!res.ok) {
+          const errorBody = await res.json().catch(() => ({}));
+          throw new Error(errorBody.message || `Server returned ${res.status}`);
+        }
         return res.json();
       })
       .then(d => {
         setData(d);
+        setLastRefreshedAt(new Date());
         setLoading(false);
       })
       .catch(err => {
         console.error("Error fetching overview:", err);
+        const message = err instanceof Error ? err.message : "Failed to load overview data";
+        setLoadError(message);
+        setData(null);
         setLoading(false);
+        toast.error(message);
       });
   }, [authFetch, refreshKey]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setRefreshKey((prev) => prev + 1);
+    }, 5 * 60 * 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const handleInstitutionCsvImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setCsvImporting(true);
+    try {
+      const csv = await file.text();
+      const response = await authFetch('/api/institutions/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || 'Failed to import institutions');
+
+      toast.success(`Imported ${result.createdCount || 0} institutions${result.skippedCount ? `, skipped ${result.skippedCount}` : ''}`);
+      setRefreshKey((prev) => prev + 1);
+    } catch (error) {
+      console.error('Error importing institutions CSV:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to import institutions');
+    } finally {
+      setCsvImporting(false);
+    }
+  };
+
+  const notifyDeadlineInstitution = async (
+    item: { _id: string; institution: string },
+    riskType: 'overdue' | 'at-risk'
+  ) => {
+    const notifyKey = `${riskType}:${item._id}`;
+    setNotifyingDeadlineKeys((current) => [...current, notifyKey]);
+    try {
+      const response = await authFetch('/api/admin/deadline-risk/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          institution: item.institution,
+          riskType,
+          semester: data?.deadlineRisk?.currentCycle?.semester || '',
+          academicYear: data?.deadlineRisk?.currentCycle?.academicYear || '',
+          deadlineTitle: data?.deadlineRisk?.currentCycle?.title || '',
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || 'Failed to notify institution admins');
+      toast.success(`Notified ${result.notifiedCount || 0} institution admin${result.notifiedCount === 1 ? '' : 's'}`);
+    } catch (error) {
+      console.error('Error notifying institution admins:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to notify institution admins');
+    } finally {
+      setNotifyingDeadlineKeys((current) => current.filter((key) => key !== notifyKey));
+    }
+  };
+
+  const institutionRegionCount = useMemo(() => {
+    return new Set((data?.institutionDetails || []).map((institution: any) => institution.region).filter(Boolean)).size;
+  }, [data?.institutionDetails]);
+
+  const uniqueProgramCount = useMemo(() => {
+    return new Set((data?.institutionDetails || []).flatMap((institution: any) => institution.programs || [])).size;
+  }, [data?.institutionDetails]);
 
   const downloadCSV = (dataset: any[], filename: string) => {
     if (!dataset.length) return;
@@ -263,11 +358,40 @@ export default function SuperAdminDashboard() {
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-gray-500">Loading system overview...</div>;
+    return (
+      <div className="flex-1 space-y-6 p-8 pt-6">
+        <div className="flex items-center gap-4">
+          <Skeleton className="h-14 w-14 rounded-2xl" />
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-64" />
+            <Skeleton className="h-4 w-80" />
+          </div>
+        </div>
+        <div className="grid gap-6 md:grid-cols-3">
+          {[...Array(3)].map((_, index) => (
+            <Skeleton key={index} className="h-40 rounded-[2rem]" />
+          ))}
+        </div>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Skeleton className="h-[520px] rounded-[2rem]" />
+          <Skeleton className="h-[520px] rounded-[2rem]" />
+        </div>
+      </div>
+    );
   }
 
   if (!data) {
-    return <div className="p-8 text-center text-red-500">Failed to load overview data.</div>;
+    return (
+      <div className="p-8 text-center space-y-4">
+        <div>
+          <p className="text-red-600 font-bold">Failed to load overview data.</p>
+          {loadError && <p className="text-sm text-gray-500 mt-1">{loadError}</p>}
+        </div>
+        <Button className="rounded-xl" onClick={() => setRefreshKey((prev) => prev + 1)}>
+          Retry
+        </Button>
+      </div>
+    );
   }
 
   const qualityAlertItems = [
@@ -296,6 +420,40 @@ export default function SuperAdminDashboard() {
       target: "/monitoring-visits",
     },
   ];
+  const dataQualityAlertTotal = qualityAlertItems.reduce((sum, alert) => sum + alert.count, 0);
+  const orphanedInstitutionCount = data.userGovernance?.institutionsWithoutActiveAdmins?.length || 0;
+  const overdueReportCount = data.approvalInbox?.overdueCount || 0;
+  const urgentSupportCount = data.supportSummary?.urgentOpen || 0;
+  const overdueDeadlineCount = (data.deadlineRisk?.overdueInstitutionSubmissions?.length || 0) + (data.deadlineRisk?.currentCycle?.isOverdue ? 1 : 0);
+  const pendingApprovalCount = data.approvalInbox?.pendingCount || 0;
+  const notificationCount = pendingApprovalCount + urgentSupportCount + overdueDeadlineCount;
+  const healthScore = Math.max(0, 100
+    - Math.min(40, urgentSupportCount * 25)
+    - Math.min(25, overdueReportCount * 15)
+    - Math.min(25, Math.ceil(dataQualityAlertTotal / 5))
+    - Math.min(20, orphanedInstitutionCount * 3));
+  const healthState = healthScore >= 85 ? "green" : healthScore >= 60 ? "amber" : "red";
+  const healthLabel = healthState === "green" ? "Healthy" : healthState === "amber" ? "Needs Attention" : "Critical";
+  const healthTone = healthState === "green"
+    ? {
+        icon: "bg-emerald-100 text-emerald-700",
+        badge: "bg-emerald-100 text-emerald-700 border-emerald-200",
+        score: "text-emerald-700",
+        bar: "bg-emerald-500",
+      }
+    : healthState === "amber"
+      ? {
+          icon: "bg-amber-100 text-amber-700",
+          badge: "bg-amber-100 text-amber-700 border-amber-200",
+          score: "text-amber-700",
+          bar: "bg-amber-500",
+        }
+      : {
+          icon: "bg-red-100 text-red-700",
+          badge: "bg-red-100 text-red-700 border-red-200",
+          score: "text-red-700",
+          bar: "bg-red-500",
+        };
 
   const sortedRegionalStats = [...(data.regionalStats || [])].sort((a, b) => {
     if (regionalSortBy === "completionRate") {
@@ -311,39 +469,95 @@ export default function SuperAdminDashboard() {
     if (b.placementRate !== a.placementRate) return b.placementRate - a.placementRate;
     return b.completionRate - a.completionRate;
   });
+  const filteredPartners = (data.partnersDetails || []).filter((partner: any) => {
+    if (!partnerSearch.trim()) return true;
+    const q = partnerSearch.trim().toLowerCase();
+    return (
+      partner.name?.toLowerCase().includes(q) ||
+      partner.sector?.toLowerCase().includes(q) ||
+      partner.region?.toLowerCase().includes(q) ||
+      partner.contactPerson?.toLowerCase().includes(q)
+    );
+  });
+  const visibleInstitutionStats = (data.institutionStats || []).slice(0, institutionBreakdownLimit);
+  const hasHiddenInstitutionStats = (data.institutionStats?.length || 0) > institutionBreakdownLimit;
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex items-center gap-4">
-        <div className="p-3 bg-purple-500/10 rounded-2xl">
-          <Shield className="h-8 w-8 text-purple-500" />
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-purple-500/10 rounded-2xl">
+            <Shield className="h-8 w-8 text-purple-500" />
+          </div>
+          <div>
+            <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">System Overview</h2>
+            <p className="text-muted-foreground">System health and institution governance</p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">System Overview</h2>
-          <p className="text-muted-foreground">System health and institution governance</p>
+        <div className="flex flex-wrap items-center gap-3">
+          {lastRefreshedAt && (
+            <span className="text-xs font-bold text-gray-500">
+              Last refreshed: {formatDistanceToNow(lastRefreshedAt, { addSuffix: true })}
+            </span>
+          )}
+          <div className="flex items-center gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+            <div className="relative">
+              <Bell className="h-5 w-5 text-gray-700" />
+              {notificationCount > 0 && (
+                <span className="absolute -right-2 -top-2 min-w-5 rounded-full bg-red-600 px-1.5 text-center text-[10px] font-black leading-5 text-white">
+                  {notificationCount}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-gray-500">
+              <span>{pendingApprovalCount} approvals</span>
+              <span className="text-gray-300">|</span>
+              <span>{urgentSupportCount} urgent</span>
+              <span className="text-gray-300">|</span>
+              <span>{overdueDeadlineCount} overdue</span>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            className="rounded-xl border-gray-200 font-bold"
+            onClick={() => setRefreshKey((prev) => prev + 1)}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
         </div>
       </div>
 
       {/* System Health Summary */}
       <div className="grid gap-6 md:grid-cols-3">
-        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-green-50 rounded-full translate-x-8 -translate-y-8 group-hover:scale-110 transition-transform duration-500 ease-out"></div>
-          <CardContent className="p-4 md:p-6 relative z-10">
+        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300">
+          <CardContent className="p-4 md:p-6">
             <div className="flex justify-between items-start mb-4">
-              <div className="p-3 bg-green-100/50 backdrop-blur-sm rounded-2xl inline-block">
-                <Shield className="h-6 w-6 text-green-600" />
+              <div className={`p-3 rounded-2xl inline-block ${healthTone.icon}`}>
+                <Shield className="h-6 w-6" />
               </div>
+              <Badge className={`${healthTone.badge} font-black`}>{healthLabel}</Badge>
             </div>
-            <div className="space-y-1">
-              <h3 className="text-2xl md:text-3xl font-black text-gray-900">Healthy</h3>
-              <p className="text-sm font-bold text-gray-400">All services operational</p>
+            <div className="space-y-3">
+              <div>
+                <h3 className={`text-2xl md:text-3xl font-black ${healthTone.score}`}>{healthScore}%</h3>
+                <p className="text-sm font-bold text-gray-400">Composite system health</p>
+              </div>
+              <div className="h-2 w-full rounded-full bg-gray-100">
+                <div className={`h-2 rounded-full ${healthTone.bar}`} style={{ width: `${healthScore}%` }} />
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px] font-bold text-gray-500">
+                <span>{urgentSupportCount} urgent tickets</span>
+                <span>{overdueReportCount} overdue reports</span>
+                <span>{dataQualityAlertTotal} quality alerts</span>
+                <span>{orphanedInstitutionCount} orphaned schools</span>
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-purple-50 rounded-full translate-x-8 -translate-y-8 group-hover:scale-110 transition-transform duration-500 ease-out"></div>
-          <CardContent className="p-4 md:p-6 relative z-10">
+        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300">
+          <CardContent className="p-4 md:p-6">
             <div className="flex justify-between items-start mb-4">
               <div className="p-3 bg-purple-100/50 backdrop-blur-sm rounded-2xl inline-block">
                 <Building2 className="h-6 w-6 text-purple-600" />
@@ -356,9 +570,8 @@ export default function SuperAdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-full translate-x-8 -translate-y-8 group-hover:scale-110 transition-transform duration-500 ease-out"></div>
-          <CardContent className="p-4 md:p-6 relative z-10">
+        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300">
+          <CardContent className="p-4 md:p-6">
             <div className="flex justify-between items-start mb-4">
               <div className="p-3 bg-blue-100/50 backdrop-blur-sm rounded-2xl inline-block">
                 <Users className="h-6 w-6 text-blue-600" />
@@ -653,6 +866,7 @@ export default function SuperAdminDashboard() {
                           <LineChart data={region.sparkline}>
                             <Tooltip
                               cursor={false}
+                              labelFormatter={(label) => formatSemesterPeriod(String(label))}
                               contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)' }}
                               labelStyle={{ color: '#6b7280', fontWeight: 700 }}
                             />
@@ -780,10 +994,9 @@ export default function SuperAdminDashboard() {
               <p className="text-sm font-black text-gray-900 mb-4">Overdue Institution Submissions</p>
               <div className="space-y-3">
                 {data.deadlineRisk?.overdueInstitutionSubmissions?.length ? data.deadlineRisk.overdueInstitutionSubmissions.map((item) => (
-                  <button
+                  <div
                     key={item._id}
-                    onClick={() => navigate(`/semester-reports?deadlineView=overdue&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(data.deadlineRisk.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(data.deadlineRisk.currentCycle?.academicYear || '')}`)}
-                    className="w-full text-left rounded-xl bg-white border border-gray-100 p-3 hover:bg-gray-50 transition-colors"
+                    className="rounded-xl bg-white border border-gray-100 p-3"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -792,7 +1005,25 @@ export default function SuperAdminDashboard() {
                       </div>
                       <Badge className="bg-red-100 text-red-700 border-0">{item.status}</Badge>
                     </div>
-                  </button>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 rounded-lg border-gray-200 text-xs font-bold"
+                        onClick={() => navigate(`/semester-reports?deadlineView=overdue&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(data.deadlineRisk.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(data.deadlineRisk.currentCycle?.academicYear || '')}`)}
+                      >
+                        Open
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-8 rounded-lg bg-red-600 text-xs font-bold text-white hover:bg-red-700"
+                        disabled={notifyingDeadlineKeys.includes(`overdue:${item._id}`)}
+                        onClick={() => notifyDeadlineInstitution(item, 'overdue')}
+                      >
+                        {notifyingDeadlineKeys.includes(`overdue:${item._id}`) ? 'Notifying...' : 'Notify'}
+                      </Button>
+                    </div>
+                  </div>
                 )) : <p className="text-sm text-gray-500">No overdue institution submissions.</p>}
               </div>
             </div>
@@ -801,10 +1032,9 @@ export default function SuperAdminDashboard() {
               <p className="text-sm font-black text-gray-900 mb-4">At Risk of Missing Current Cycle</p>
               <div className="space-y-3">
                 {data.deadlineRisk?.atRiskInstitutions?.length ? data.deadlineRisk.atRiskInstitutions.map((item) => (
-                  <button
+                  <div
                     key={item._id}
-                    onClick={() => navigate(`/semester-reports?deadlineView=at-risk&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(data.deadlineRisk.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(data.deadlineRisk.currentCycle?.academicYear || '')}`)}
-                    className="w-full text-left rounded-xl bg-white border border-gray-100 p-3 hover:bg-gray-50 transition-colors"
+                    className="rounded-xl bg-white border border-gray-100 p-3"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -814,7 +1044,25 @@ export default function SuperAdminDashboard() {
                       <Badge className="bg-amber-100 text-amber-700 border-0">{item.daysRemaining}d left</Badge>
                     </div>
                     <p className="text-xs font-medium text-gray-500 mt-2">Current report state: {item.status}</p>
-                  </button>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 rounded-lg border-gray-200 text-xs font-bold"
+                        onClick={() => navigate(`/semester-reports?deadlineView=at-risk&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(data.deadlineRisk.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(data.deadlineRisk.currentCycle?.academicYear || '')}`)}
+                      >
+                        Open
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-8 rounded-lg bg-amber-600 text-xs font-bold text-white hover:bg-amber-700"
+                        disabled={notifyingDeadlineKeys.includes(`at-risk:${item._id}`)}
+                        onClick={() => notifyDeadlineInstitution(item, 'at-risk')}
+                      >
+                        {notifyingDeadlineKeys.includes(`at-risk:${item._id}`) ? 'Notifying...' : 'Notify'}
+                      </Button>
+                    </div>
+                  </div>
                 )) : <p className="text-sm text-gray-500">No institutions currently flagged as at risk.</p>}
               </div>
             </div>
@@ -1031,12 +1279,30 @@ export default function SuperAdminDashboard() {
                   Add and manage registered TVET institutions
                 </CardDescription>
               </div>
-              <Button 
-                onClick={() => { setEditingInstitution(null); setInstOpen(true); }}
-                className="bg-purple-600 hover:bg-purple-700 text-white font-black rounded-xl"
-              >
-                Register School
-              </Button>
+              <div className="flex items-center gap-2">
+                <input
+                  id="institution-csv-import"
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={handleInstitutionCsvImport}
+                />
+                <Button
+                  variant="outline"
+                  className="rounded-xl border-gray-200 font-bold"
+                  disabled={csvImporting}
+                  onClick={() => document.getElementById('institution-csv-import')?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  {csvImporting ? 'Importing...' : 'Import CSV'}
+                </Button>
+                <Button
+                  onClick={() => { setEditingInstitution(null); setInstOpen(true); }}
+                  className="bg-purple-600 hover:bg-purple-700 text-white font-black rounded-xl"
+                >
+                  Register School
+                </Button>
+              </div>
             </div>
 
             {/* Summary Stats */}
@@ -1046,33 +1312,23 @@ export default function SuperAdminDashboard() {
                 <div className="text-xs font-bold text-purple-400 mt-1">Total Institutions</div>
               </div>
               <div className="bg-blue-50 rounded-2xl p-4 text-center">
-                <div className="text-2xl font-black text-blue-700">
-                  {(() => {
-                    const regions = new Set(data.institutionDetails?.map((i: any) => i.region));
-                    return regions.size;
-                  })()}
-                </div>
+                <div className="text-2xl font-black text-blue-700">{institutionRegionCount}</div>
                 <div className="text-xs font-bold text-blue-400 mt-1">Regions Covered</div>
               </div>
               <div className="bg-amber-50 rounded-2xl p-4 text-center">
-                <div className="text-2xl font-black text-amber-700">
-                  {(() => {
-                    const allProgs = new Set(data.institutionDetails?.flatMap((i: any) => i.programs || []));
-                    return allProgs.size;
-                  })()}
-                </div>
+                <div className="text-2xl font-black text-amber-700">{uniqueProgramCount}</div>
                 <div className="text-xs font-bold text-amber-400 mt-1">Unique Programs</div>
               </div>
             </div>
 
             {/* Search Bar */}
             <div className="relative mt-4">
-              <input
+              <Input
                 type="text"
                 placeholder="Search by institution name, code, or region..."
                 value={instSearch}
                 onChange={(e) => setInstSearch(e.target.value)}
-                className="w-full px-5 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-purple-300 focus:border-transparent transition-all"
+                className="w-full bg-gray-50 border-gray-200 rounded-2xl pr-16 text-sm font-medium focus:ring-purple-300"
               />
               {instSearch && (
                 <button onClick={() => setInstSearch('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs font-bold">
@@ -1109,6 +1365,7 @@ export default function SuperAdminDashboard() {
                     const institutions = byRegion[region];
                     const isExpanded = expandedRegions.includes(region);
                     const displayInst = isExpanded ? institutions : institutions.slice(0, 6);
+                    const regionPanelId = `institution-region-${region.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'unknown'}`;
 
                     return (
                       <div key={region} className="border border-gray-100 rounded-2xl overflow-hidden">
@@ -1116,6 +1373,8 @@ export default function SuperAdminDashboard() {
                           onClick={() => setExpandedRegions(prev => 
                             prev.includes(region) ? prev.filter(r => r !== region) : [...prev, region]
                           )}
+                          aria-expanded={isExpanded}
+                          aria-controls={regionPanelId}
                           className="w-full flex items-center justify-between px-5 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
                         >
                           <div className="flex items-center gap-3">
@@ -1129,7 +1388,7 @@ export default function SuperAdminDashboard() {
                           </div>
                           <span className="text-gray-400 text-xs font-bold">{isExpanded ? '▲' : '▼'}</span>
                         </button>
-                        <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        <div id={regionPanelId} className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                           {displayInst.map((inst: any) => (
                             <div
                               key={inst._id}
@@ -1225,13 +1484,30 @@ export default function SuperAdminDashboard() {
                 <div className="text-xs font-bold text-emerald-400 mt-1">Total Capacity Slots</div>
               </div>
             </div>
+
+            <div className="relative mt-4">
+              <Input
+                type="text"
+                placeholder="Search by company, sector, region, or contact..."
+                value={partnerSearch}
+                onChange={(e) => setPartnerSearch(e.target.value)}
+                className="w-full bg-gray-50 border-gray-200 rounded-2xl pr-16 text-sm font-medium focus:ring-amber-300"
+              />
+              {partnerSearch && (
+                <button onClick={() => setPartnerSearch('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs font-bold">
+                  Clear
+                </button>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="p-8 pt-4 flex-1 overflow-hidden flex flex-col">
             {(!data.partnersDetails || data.partnersDetails.length === 0) ? (
               <p className="text-center text-gray-400 py-6">No industry partners found.</p>
+            ) : filteredPartners.length === 0 ? (
+              <p className="text-center text-gray-400 py-6">No industry partners match your search.</p>
             ) : (
               <div className="space-y-4 overflow-y-auto pr-2 flex-1">
-                {data.partnersDetails.map((partner: any) => (
+                {filteredPartners.map((partner: any) => (
                   <div key={partner._id} className="flex items-start gap-3 p-4 bg-white border border-gray-100 rounded-xl hover:border-amber-200 hover:shadow-md transition-all">
                     <div className="p-2 bg-amber-50 rounded-xl shrink-0">
                       <Briefcase className="h-4 w-4 text-amber-500" />
@@ -1301,7 +1577,7 @@ export default function SuperAdminDashboard() {
             <p className="text-center text-gray-400 py-8">No institution data yet. Users must register and create learners.</p>
           ) : (
             <div className="space-y-4">
-              {data.institutionStats?.map((inst) => {
+              {visibleInstitutionStats.map((inst) => {
                 const placementRate = inst.totalLearners > 0 
                   ? Math.round((inst.placed / inst.totalLearners) * 100) 
                   : 0;
@@ -1351,6 +1627,20 @@ export default function SuperAdminDashboard() {
                   </div>
                 );
               })}
+              <div className="flex items-center justify-between border-t border-gray-100 pt-4">
+                <p className="text-sm font-bold text-gray-400">
+                  Showing {visibleInstitutionStats.length} of {data.institutionStats.length} institutions
+                </p>
+                {(data.institutionStats.length > 12) && (
+                  <Button
+                    variant="outline"
+                    className="rounded-xl border-gray-200 font-bold"
+                    onClick={() => setInstitutionBreakdownLimit(hasHiddenInstitutionStats ? data.institutionStats.length : 12)}
+                  >
+                    {hasHiddenInstitutionStats ? `Show all ${data.institutionStats.length}` : "Show fewer"}
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </CardContent>

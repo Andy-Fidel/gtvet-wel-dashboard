@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { AttendanceLogForm } from "./AttendanceLogForm"
@@ -17,6 +19,7 @@ import { clearOfflineConflictBridge, getOfflineConflictBridge } from "@/lib/offl
 
 type AttendanceStatus = "Pending" | "SignedOff" | "Rejected"
 type AttendanceEntryType = "Daily" | "Weekly"
+type AttendanceSupervisorAction = "sign-off" | "reject"
 
 interface AttendanceLog {
   _id: string
@@ -78,6 +81,15 @@ export default function AttendanceLogs() {
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("")
   const [typeFilter, setTypeFilter] = useState("")
+  const [selectedLogIds, setSelectedLogIds] = useState<string[]>([])
+  const [attendanceAction, setAttendanceAction] = useState<{
+    action: AttendanceSupervisorAction
+    log?: AttendanceLog
+    bulk?: boolean
+  } | null>(null)
+  const [actionComment, setActionComment] = useState("")
+  const [actionSignatureName, setActionSignatureName] = useState("")
+  const [actionSubmitting, setActionSubmitting] = useState(false)
 
   const learnerId = useMemo(() => new URLSearchParams(location.search).get("learnerId") || "", [location.search])
   const isIndustryPartner = user?.role === "IndustryPartner"
@@ -140,6 +152,18 @@ export default function AttendanceLogs() {
   }, [filteredLogs])
 
   const activeLearnerName = filteredLogs[0]?.learner.name
+  const selectableLogs = useMemo(
+    () => filteredLogs.filter((log) => isIndustryPartner && log.status === "Pending" && log.submittedSource !== "Partner"),
+    [filteredLogs, isIndustryPartner]
+  )
+  const selectedLogIdSet = useMemo(() => new Set(selectedLogIds), [selectedLogIds])
+  const selectedActionLogs = useMemo(
+    () => selectableLogs.filter((log) => selectedLogIdSet.has(log._id)),
+    [selectableLogs, selectedLogIdSet]
+  )
+  const selectedCount = selectedActionLogs.length
+  const allSelectableSelected = selectableLogs.length > 0 && selectableLogs.every((log) => selectedLogIdSet.has(log._id))
+  const someSelectableSelected = selectedCount > 0 && !allSelectableSelected
 
   const handleSuccess = (result?: { offlineQueued?: boolean }) => {
     const wasEditing = Boolean(editingLog)
@@ -178,34 +202,101 @@ export default function AttendanceLogs() {
     }
   }
 
-  const handlePartnerAction = async (log: AttendanceLog, action: "sign-off" | "reject") => {
-    const promptLabel = action === "sign-off"
-      ? "Optional supervisor comment before sign-off:"
-      : "Reason for returning this hours entry:"
-    const supervisorComment = window.prompt(promptLabel) ?? ""
-    const supervisorSignatureName = window.prompt("Type supervisor full name as signature:", user?.name || "") ?? ""
-    if (action === "reject" && !supervisorComment.trim()) {
+  useEffect(() => {
+    const availableIds = new Set(selectableLogs.map((log) => log._id))
+    setSelectedLogIds((current) => current.filter((id) => availableIds.has(id)))
+  }, [selectableLogs])
+
+  const openAttendanceActionDialog = (action: AttendanceSupervisorAction, log?: AttendanceLog) => {
+    setAttendanceAction({ action, log, bulk: !log })
+    setActionComment(log?.supervisorComment || "")
+    setActionSignatureName(user?.name || "")
+  }
+
+  const closeAttendanceActionDialog = () => {
+    if (actionSubmitting) return
+    setAttendanceAction(null)
+    setActionComment("")
+    setActionSignatureName("")
+  }
+
+  const handleToggleSelection = (logId: string, checked: boolean | "indeterminate") => {
+    setSelectedLogIds((current) => {
+      if (checked === true) return current.includes(logId) ? current : [...current, logId]
+      return current.filter((id) => id !== logId)
+    })
+  }
+
+  const handleToggleAllSelectable = (checked: boolean | "indeterminate") => {
+    setSelectedLogIds((current) => {
+      const selectableIds = selectableLogs.map((log) => log._id)
+      if (checked === true) return Array.from(new Set([...current, ...selectableIds]))
+      const selectableIdSet = new Set(selectableIds)
+      return current.filter((id) => !selectableIdSet.has(id))
+    })
+  }
+
+  const submitAttendanceAction = async () => {
+    if (!attendanceAction) return
+
+    const supervisorComment = actionComment.trim()
+    const supervisorSignatureName = actionSignatureName.trim()
+    const targetLogs = attendanceAction.bulk ? selectedActionLogs : attendanceAction.log ? [attendanceAction.log] : []
+
+    if (targetLogs.length === 0) {
+      toast.error("Select at least one pending attendance entry")
+      return
+    }
+    if (attendanceAction.action === "reject" && !supervisorComment) {
       toast.error("A reason is required when rejecting an attendance entry")
       return
     }
-    if (!supervisorSignatureName.trim()) {
+    if (!supervisorSignatureName) {
       toast.error("Supervisor signature name is required")
       return
     }
 
+    setActionSubmitting(true)
     try {
-      const res = await authFetch(`/api/attendance-logs/${log._id}/${action}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ supervisorComment, supervisorSignatureName }),
-      })
+      const res = await authFetch(
+        attendanceAction.bulk
+          ? "/api/attendance-logs/bulk-action"
+          : `/api/attendance-logs/${targetLogs[0]._id}/${attendanceAction.action}`,
+        {
+          method: attendanceAction.bulk ? "POST" : "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(attendanceAction.bulk
+            ? {
+                logIds: targetLogs.map((log) => log._id),
+                action: attendanceAction.action,
+                supervisorComment,
+                supervisorSignatureName,
+              }
+            : { supervisorComment, supervisorSignatureName }),
+        }
+      )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to update attendance log")
+
       setRefreshKey((prev) => prev + 1)
-      toast.success(action === "sign-off" ? "Hours signed off" : "Hours returned for review")
+      setAttendanceAction(null)
+      setActionComment("")
+      setActionSignatureName("")
+      if (attendanceAction.bulk) {
+        const targetIds = new Set(targetLogs.map((log) => log._id))
+        setSelectedLogIds((current) => current.filter((id) => !targetIds.has(id)))
+        const updatedCount = data.updatedCount ?? targetLogs.length
+        toast.success(attendanceAction.action === "sign-off"
+          ? `${updatedCount} attendance entries signed off`
+          : `${updatedCount} attendance entries returned for review`)
+      } else {
+        toast.success(attendanceAction.action === "sign-off" ? "Hours signed off" : "Hours returned for review")
+      }
     } catch (error) {
       console.error("Error updating attendance log:", error)
       toast.error(error instanceof Error ? error.message : "Failed to update attendance log")
+    } finally {
+      setActionSubmitting(false)
     }
   }
 
@@ -214,6 +305,14 @@ export default function AttendanceLogs() {
     if (status === "Rejected") return <Badge className="bg-red-100 text-red-700 border-red-200">Rejected</Badge>
     return <Badge className="bg-amber-100 text-amber-700 border-amber-200">Pending</Badge>
   }
+
+  const actionTitle = attendanceAction?.action === "sign-off" ? "Sign Off Attendance" : "Return Attendance for Review"
+  const actionButtonLabel = attendanceAction?.action === "sign-off" ? "Sign Off" : "Return for Review"
+  const actionDescription = attendanceAction?.bulk
+    ? `${selectedCount} pending ${selectedCount === 1 ? "entry" : "entries"} selected.`
+    : attendanceAction?.log
+      ? `${attendanceAction.log.learner.name} • ${format(new Date(attendanceAction.log.periodStart), "MMM d, yyyy")}`
+      : ""
 
   return (
     <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
@@ -243,6 +342,59 @@ export default function AttendanceLogs() {
               initialData={editingLog}
               presetLearnerId={learnerId || undefined}
             />
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(attendanceAction)} onOpenChange={(next) => {
+        if (!next) closeAttendanceActionDialog()
+      }}>
+        <DialogContent className="sm:max-w-[520px] bg-white rounded-[2rem] border-none shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">{actionTitle}</DialogTitle>
+            <DialogDescription className="text-gray-500">{actionDescription}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700" htmlFor="attendance-action-comment">
+                {attendanceAction?.action === "sign-off" ? "Supervisor comment" : "Reason for return"}
+              </label>
+              <Textarea
+                id="attendance-action-comment"
+                value={actionComment}
+                onChange={(event) => setActionComment(event.target.value)}
+                disabled={actionSubmitting}
+                placeholder={attendanceAction?.action === "sign-off" ? "Add an optional sign-off note..." : "Explain what needs to be corrected..."}
+                className="min-h-[120px] bg-gray-50 border-gray-200 rounded-xl"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700" htmlFor="attendance-action-signature">
+                Signature name
+              </label>
+              <Input
+                id="attendance-action-signature"
+                value={actionSignatureName}
+                onChange={(event) => setActionSignatureName(event.target.value)}
+                disabled={actionSubmitting}
+                placeholder="Supervisor full name"
+                className="bg-gray-50 border-gray-200 rounded-xl"
+              />
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="outline" className="rounded-xl" onClick={closeAttendanceActionDialog} disabled={actionSubmitting}>
+                Cancel
+              </Button>
+              <Button
+                className={attendanceAction?.action === "sign-off"
+                  ? "rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white"
+                  : "rounded-xl bg-red-600 hover:bg-red-700 text-white"}
+                onClick={submitAttendanceAction}
+                disabled={actionSubmitting}
+              >
+                {actionSubmitting ? "Saving..." : actionButtonLabel}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -359,8 +511,40 @@ export default function AttendanceLogs() {
       </Card>
 
       <Card data-help-id="attendance-logs-table" className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
-        <CardHeader>
-          <CardTitle className="text-lg font-black text-gray-900">Hours Register</CardTitle>
+        <CardHeader className="gap-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <CardTitle className="text-lg font-black text-gray-900">Hours Register</CardTitle>
+            {isIndustryPartner && selectableLogs.length > 0 && (
+              <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-gray-50 px-4 py-3">
+                <label className="flex items-center gap-2 text-sm font-bold text-gray-700">
+                  <Checkbox
+                    checked={allSelectableSelected ? true : someSelectableSelected ? "indeterminate" : false}
+                    onCheckedChange={handleToggleAllSelectable}
+                    aria-label="Select all pending attendance entries"
+                  />
+                  Select all pending
+                </label>
+                <span className="text-sm font-medium text-gray-500">{selectedCount} selected</span>
+                <Button
+                  size="sm"
+                  className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white"
+                  disabled={selectedCount === 0}
+                  onClick={() => openAttendanceActionDialog("sign-off")}
+                >
+                  Bulk Sign Off
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-xl border-red-200 text-red-700 hover:bg-red-50"
+                  disabled={selectedCount === 0}
+                  onClick={() => openAttendanceActionDialog("reject")}
+                >
+                  Bulk Return
+                </Button>
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -378,6 +562,7 @@ export default function AttendanceLogs() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {isIndustryPartner && <TableHead className="w-12">Select</TableHead>}
                   <TableHead>Learner</TableHead>
                   <TableHead>Period</TableHead>
                   <TableHead>Time</TableHead>
@@ -392,10 +577,21 @@ export default function AttendanceLogs() {
               </TableHeader>
               <TableBody>
                 {filteredLogs.map((log) => {
-                  const canEdit = log.status !== "SignedOff" && (!isIndustryPartner || log.submittedBy?._id === user?._id)
-                  const canSignOff = isIndustryPartner && log.status !== "SignedOff" && log.submittedSource !== "Partner"
+                  const canEdit = (!isIndustryPartner && log.submittedSource === "Partner") || (log.status !== "SignedOff" && (!isIndustryPartner || log.submittedBy?._id === user?._id));
+                  const canSignOff = isIndustryPartner && log.status === "Pending" && log.submittedSource !== "Partner"
+                  const isReview = log.status === "SignedOff" && !isIndustryPartner && log.submittedSource === "Partner";
                   return (
                     <TableRow key={log._id}>
+                      {isIndustryPartner && (
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedLogIdSet.has(log._id)}
+                            onCheckedChange={(checked) => handleToggleSelection(log._id, checked)}
+                            disabled={!canSignOff}
+                            aria-label={`Select attendance entry for ${log.learner.name}`}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell>
                         <div>
                           <div className="font-bold text-gray-900">{log.learner.name}</div>
@@ -447,21 +643,23 @@ export default function AttendanceLogs() {
                             <>
                               <Button variant="outline" size="sm" className="rounded-xl" onClick={() => handleEdit(log)}>
                                 <Pencil className="h-3.5 w-3.5 mr-1" />
-                                Edit
+                                {isReview ? "Review" : "Edit"}
                               </Button>
-                              <Button variant="outline" size="sm" className="rounded-xl text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleDelete(log._id)}>
-                                <Trash2 className="h-3.5 w-3.5 mr-1" />
-                                Delete
-                              </Button>
+                              {!isReview && (
+                                <Button variant="outline" size="sm" className="rounded-xl text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleDelete(log._id)}>
+                                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                                  Delete
+                                </Button>
+                              )}
                             </>
                           )}
                           {canSignOff && (
                             <>
-                              <Button size="sm" className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => handlePartnerAction(log, "sign-off")}>
+                              <Button size="sm" className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => openAttendanceActionDialog("sign-off", log)}>
                                 <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
                                 Sign Off
                               </Button>
-                              <Button size="sm" variant="outline" className="rounded-xl border-red-200 text-red-700 hover:bg-red-50" onClick={() => handlePartnerAction(log, "reject")}>
+                              <Button size="sm" variant="outline" className="rounded-xl border-red-200 text-red-700 hover:bg-red-50" onClick={() => openAttendanceActionDialog("reject", log)}>
                                 Return
                               </Button>
                             </>

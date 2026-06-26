@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
-import { AlertTriangle, Building2, Briefcase, CalendarClock, CheckCircle2, ChevronDown, ClipboardCheck, ClipboardList, Clock3, FileClock, FileSignature, LifeBuoy, MessageSquare, NotebookPen, Pencil, Plus, Search, Star, Trash2, UserCircle2, XCircle } from "lucide-react"
+import { AlertTriangle, Building2, Briefcase, CalendarClock, CheckCircle2, ChevronDown, ClipboardCheck, ClipboardList, Clock3, FileClock, FileSignature, LifeBuoy, MessageSquare, NotebookPen, Pencil, Plus, Search, Star, Trash2, UserCircle2, XCircle, Users } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 import { EmployerEvaluationForm } from "./EmployerEvaluationForm"
 import type { EmployerEvaluationDraft } from "./EmployerEvaluationForm"
 import { AttendanceLogForm } from "./AttendanceLogForm"
@@ -313,6 +314,14 @@ export default function PartnerDashboard() {
   const [attendanceStatusFilter, setAttendanceStatusFilter] = useState("")
   const [attendanceTypeFilter, setAttendanceTypeFilter] = useState("")
   const [expandedPlacementId, setExpandedPlacementId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [attendanceActionTarget, setAttendanceActionTarget] = useState<{ log: PartnerAttendanceLog; action: "sign-off" | "reject" } | null>(null)
+  const [attendanceActionComment, setAttendanceActionComment] = useState("")
+  const [attendanceActionSignature, setAttendanceActionSignature] = useState("")
+  const [attendanceActionSubmitting, setAttendanceActionSubmitting] = useState(false)
+  const [agreementSubmitting, setAgreementSubmitting] = useState(false)
+  const [supportSubmitting, setSupportSubmitting] = useState(false)
+  const [incidentSubmitting, setIncidentSubmitting] = useState(false)
   const [supportDraft, setSupportDraft] = useState({
     subject: "",
     category: "Workflow" as TicketCategory,
@@ -466,9 +475,13 @@ export default function PartnerDashboard() {
   }
 
   const handleDeleteAttendance = async (id: string) => {
-    if (!window.confirm("Delete this attendance log?")) return
+    setDeleteTarget(id)
+  }
+
+  const executeDeleteAttendance = async () => {
+    if (!deleteTarget) return
     try {
-      const res = await authFetch(`/api/attendance-logs/${id}`, { method: "DELETE" })
+      const res = await authFetch(`/api/attendance-logs/${deleteTarget}`, { method: "DELETE" })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to delete attendance log")
       setRefreshKey((prev) => prev + 1)
@@ -476,37 +489,45 @@ export default function PartnerDashboard() {
     } catch (error) {
       console.error("Error deleting attendance log:", error)
       toast.error(error instanceof Error ? error.message : "Failed to delete attendance log")
+    } finally {
+      setDeleteTarget(null)
     }
   }
 
-  const handleAttendancePartnerAction = async (log: PartnerAttendanceLog, action: "sign-off" | "reject") => {
-    const promptLabel = action === "sign-off"
-      ? "Optional supervisor comment before sign-off:"
-      : "Reason for returning this hours entry:"
-    const supervisorComment = window.prompt(promptLabel) ?? ""
-    const supervisorSignatureName = window.prompt("Type supervisor full name as signature:", user?.name || "") ?? ""
-    if (action === "reject" && !supervisorComment.trim()) {
+  const handleAttendancePartnerAction = (log: PartnerAttendanceLog, action: "sign-off" | "reject") => {
+    setAttendanceActionTarget({ log, action })
+    setAttendanceActionComment("")
+    setAttendanceActionSignature(user?.name || "")
+  }
+
+  const executeAttendanceAction = async () => {
+    if (!attendanceActionTarget) return
+    const { log, action } = attendanceActionTarget
+    if (action === "reject" && !attendanceActionComment.trim()) {
       toast.error("A reason is required when rejecting an attendance entry")
       return
     }
-    if (!supervisorSignatureName.trim()) {
+    if (!attendanceActionSignature.trim()) {
       toast.error("Supervisor signature name is required")
       return
     }
-
+    setAttendanceActionSubmitting(true)
     try {
       const res = await authFetch(`/api/attendance-logs/${log._id}/${action}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ supervisorComment, supervisorSignatureName }),
+        body: JSON.stringify({ supervisorComment: attendanceActionComment, supervisorSignatureName: attendanceActionSignature }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to update attendance log")
       setRefreshKey((prev) => prev + 1)
       toast.success(action === "sign-off" ? "Hours signed off" : "Hours returned for review")
+      setAttendanceActionTarget(null)
     } catch (error) {
       console.error("Error updating attendance log:", error)
       toast.error(error instanceof Error ? error.message : "Failed to update attendance log")
+    } finally {
+      setAttendanceActionSubmitting(false)
     }
   }
 
@@ -619,6 +640,7 @@ export default function PartnerDashboard() {
 
   const handleSignEmployerAgreement = async () => {
     if (!selectedPlacement) return
+    setAgreementSubmitting(true)
     try {
       const res = await authFetch(`/api/partner-portal/placements/${selectedPlacement._id}/employer-agreement-sign`, {
         method: "POST",
@@ -632,6 +654,8 @@ export default function PartnerDashboard() {
     } catch (error) {
       console.error("Error signing employer agreement:", error)
       toast.error(error instanceof Error ? error.message : "Failed to sign employer agreement")
+    } finally {
+      setAgreementSubmitting(false)
     }
   }
 
@@ -784,6 +808,7 @@ export default function PartnerDashboard() {
 
   const handleCreateSupport = async () => {
     if (!selectedPlacement?.learner) return
+    setSupportSubmitting(true)
     try {
       const res = await authFetch("/api/support-tickets", {
         method: "POST",
@@ -801,11 +826,14 @@ export default function PartnerDashboard() {
     } catch (error) {
       console.error("Error creating support ticket:", error)
       toast.error(error instanceof Error ? error.message : "Failed to create support ticket")
+    } finally {
+      setSupportSubmitting(false)
     }
   }
 
   const handleCreateIncident = async () => {
     if (!selectedPlacement?.learner) return
+    setIncidentSubmitting(true)
     try {
       const res = await authFetch("/api/support-tickets", {
         method: "POST",
@@ -829,6 +857,8 @@ export default function PartnerDashboard() {
     } catch (error) {
       console.error("Error reporting incident:", error)
       toast.error(error instanceof Error ? error.message : "Failed to report incident")
+    } finally {
+      setIncidentSubmitting(false)
     }
   }
 
@@ -851,7 +881,7 @@ export default function PartnerDashboard() {
   return (
     <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
       <Dialog open={evaluateOpen} onOpenChange={setEvaluateOpen}>
-        <DialogContent className="sm:max-w-[700px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+        <DialogContent className="sm:max-w-[700px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="p-6 pb-0">
             <DialogTitle className="text-2xl font-black flex items-center gap-2">
               <Star className="h-6 w-6 text-[#FFB800]" />
@@ -932,7 +962,7 @@ export default function PartnerDashboard() {
         setAttendanceOpen(open)
         if (!open) setEditingAttendanceLog(null)
       }}>
-        <DialogContent className="sm:max-w-[760px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+        <DialogContent className="sm:max-w-[760px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="pt-6 px-6 pb-0">
             <DialogTitle className="text-gray-900">
               {editingAttendanceLog ? "Edit Attendance Log" : "New Attendance Log"}
@@ -952,7 +982,7 @@ export default function PartnerDashboard() {
       </Dialog>
 
       <Dialog open={supportOpen} onOpenChange={setSupportOpen}>
-        <DialogContent className="sm:max-w-[760px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+        <DialogContent className="sm:max-w-[760px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="pt-6 px-6 pb-0">
             <DialogTitle>Raise Placement Support Issue</DialogTitle>
             <DialogDescription className="text-gray-500">
@@ -996,16 +1026,16 @@ export default function PartnerDashboard() {
               value={supportDraft.description}
               onChange={(e) => setSupportDraft((current) => ({ ...current, description: e.target.value }))}
             />
-            <Button className="w-full rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={handleCreateSupport}>
+            <Button className="w-full rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={handleCreateSupport} disabled={supportSubmitting}>
               <LifeBuoy className="mr-2 h-4 w-4" />
-              Submit Ticket
+              {supportSubmitting ? "Submitting..." : "Submit Ticket"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={incidentOpen} onOpenChange={setIncidentOpen}>
-        <DialogContent className="sm:max-w-[760px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+        <DialogContent className="sm:max-w-[760px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="pt-6 px-6 pb-0">
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-red-500" />
@@ -1058,16 +1088,16 @@ export default function PartnerDashboard() {
               value={incidentDraft.description}
               onChange={(e) => setIncidentDraft((current) => ({ ...current, description: e.target.value }))}
             />
-            <Button className="w-full rounded-xl bg-red-500 hover:bg-red-600 text-white" onClick={handleCreateIncident}>
+            <Button className="w-full rounded-xl bg-red-500 hover:bg-red-600 text-white" onClick={handleCreateIncident} disabled={incidentSubmitting}>
               <AlertTriangle className="mr-2 h-4 w-4" />
-              Submit Incident Report
+              {incidentSubmitting ? "Submitting..." : "Submit Incident Report"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
-        <DialogContent className="sm:max-w-[760px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+        <DialogContent className="sm:max-w-[760px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="p-6 pb-0">
             <DialogTitle className="text-2xl font-black flex items-center gap-2">
               <Star className="h-6 w-6 text-[#FFB800]" />
@@ -1191,7 +1221,7 @@ export default function PartnerDashboard() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-[1080px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh] [&>button]:text-gray-500 [&>button]:bg-gray-100 hover:[&>button]:bg-gray-200 hover:[&>button]:text-gray-900">
+        <DialogContent className="sm:max-w-[1080px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh] [&>button]:text-gray-500 [&>button]:bg-gray-100 hover:[&>button]:bg-gray-200 hover:[&>button]:text-gray-900">
           <DialogHeader className="p-6 pb-0">
             <DialogTitle className="text-2xl font-black flex items-center gap-2">
               <NotebookPen className="h-6 w-6 text-[#FFB800]" />
@@ -1264,7 +1294,7 @@ export default function PartnerDashboard() {
               </div>
             </div>
 
-            <div className="rounded-[2rem] border border-gray-100 overflow-hidden">
+            <div className="rounded-2xl border border-gray-100 overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
                 <p className="text-sm font-black text-gray-900">Learners' Weekly Training Logsheet</p>
                 <p className="text-sm text-gray-600 mt-1">Each row below is mapped from the attendance register and supervisor review data already in the dashboard.</p>
@@ -1323,7 +1353,7 @@ export default function PartnerDashboard() {
               )}
             </div>
 
-            <div className="rounded-[2rem] border border-gray-100 bg-gray-50/60 p-5 space-y-4">
+            <div className="rounded-2xl border border-gray-100 bg-gray-50/60 p-5 space-y-4">
               <div>
                 <p className="text-sm font-black text-gray-900">Post-WEL Assessment Companion</p>
                 <p className="text-sm text-gray-600 mt-1">
@@ -1392,7 +1422,7 @@ export default function PartnerDashboard() {
               ) : null}
             </div>
 
-            <div className="rounded-[2rem] border border-gray-100 bg-white p-5 space-y-4">
+            <div className="rounded-2xl border border-gray-100 bg-white p-5 space-y-4">
               <div>
                 <p className="text-sm font-black text-gray-900">Signature Blocks</p>
                 <p className="text-sm text-gray-600 mt-1">These values come directly from the attendance log capture flow and complete the formal logbook sections.</p>
@@ -1433,7 +1463,7 @@ export default function PartnerDashboard() {
       </Dialog>
 
       <Dialog open={employerAgreementOpen} onOpenChange={setEmployerAgreementOpen}>
-        <DialogContent className="sm:max-w-[780px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+        <DialogContent className="sm:max-w-[780px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="p-6 pb-0">
             <DialogTitle className="text-2xl font-black flex items-center gap-2">
               <FileSignature className="h-6 w-6 text-[#FFB800]" />
@@ -1454,9 +1484,9 @@ export default function PartnerDashboard() {
               <Input placeholder="Business / industry name" value={employerAgreementDraft.businessRepresentativeName} onChange={(e) => setEmployerAgreementDraft((current) => ({ ...current, businessRepresentativeName: e.target.value }))} />
               <Input placeholder="Type full name as signature" value={employerAgreementDraft.signatureName} onChange={(e) => setEmployerAgreementDraft((current) => ({ ...current, signatureName: e.target.value }))} />
             </div>
-            <Button className="w-full rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold" onClick={handleSignEmployerAgreement}>
+            <Button className="w-full rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold" onClick={handleSignEmployerAgreement} disabled={agreementSubmitting}>
               <FileSignature className="mr-2 h-4 w-4" />
-              Sign Employer Acknowledgement
+              {agreementSubmitting ? "Signing..." : "Sign Employer Acknowledgement"}
             </Button>
           </div>
         </DialogContent>
@@ -1511,12 +1541,11 @@ export default function PartnerDashboard() {
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              type="text"
+            <Input
               placeholder="Search learners, company, or institution..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4 py-2 h-11 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#FFB800]/20 focus:border-[#FFB800] w-full lg:w-80"
+              className="pl-10 pr-4 h-11 bg-white border-gray-200 rounded-xl w-full lg:w-80"
             />
           </div>
         </div>
@@ -1524,20 +1553,20 @@ export default function PartnerDashboard() {
 
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-          {[...Array(5)].map((_, index) => <Card key={index} className="h-28 rounded-[2rem] animate-pulse bg-white border-none shadow-xl" />)}
+          {[...Array(5)].map((_, index) => <Card key={index} className="h-28 rounded-2xl animate-pulse bg-white border-none shadow-xl" />)}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Active Placements</p><p className="text-3xl font-black text-gray-900">{stats.activePlacements}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Assigned to Me</p><p className="text-3xl font-black text-sky-600">{stats.assignedToMe}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Unassigned</p><p className="text-3xl font-black text-red-600">{stats.unassignedPlacements}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Unread Messages</p><p className="text-3xl font-black text-indigo-600">{stats.unreadMessages}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Pending Evaluations</p><p className="text-3xl font-black text-amber-600">{stats.pendingEvaluations}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center mb-3"><Briefcase className="h-5 w-5 text-emerald-600" /></div><p className="text-sm text-gray-500">Active Placements</p><p className="text-3xl font-black text-gray-900">{stats.activePlacements}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center mb-3"><UserCircle2 className="h-5 w-5 text-sky-600" /></div><p className="text-sm text-gray-500">Assigned to Me</p><p className="text-3xl font-black text-sky-600">{stats.assignedToMe}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center mb-3"><Users className="h-5 w-5 text-red-600" /></div><p className="text-sm text-gray-500">Unassigned</p><p className="text-3xl font-black text-red-600">{stats.unassignedPlacements}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center mb-3"><MessageSquare className="h-5 w-5 text-indigo-600" /></div><p className="text-sm text-gray-500">Unread Messages</p><p className="text-3xl font-black text-indigo-600">{stats.unreadMessages}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center mb-3"><Star className="h-5 w-5 text-amber-600" /></div><p className="text-sm text-gray-500">Pending Evaluations</p><p className="text-3xl font-black text-amber-600">{stats.pendingEvaluations}</p></CardContent></Card>
         </div>
       )}
 
       {!loading && historicalPlacements.length > 0 ? (
-        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+        <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
           <CardContent className="p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
               <p className="text-sm font-black uppercase tracking-wider text-gray-400">Archived & Completed Records</p>
@@ -1551,13 +1580,17 @@ export default function PartnerDashboard() {
         </Card>
       ) : null}
 
-      <Card data-help-id="partner-dashboard-action-queue" className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+      <Card data-help-id="partner-dashboard-action-queue" className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
         <CardHeader>
           <CardTitle className="text-xl font-black">Partner Action Queue</CardTitle>
         </CardHeader>
         <CardContent className="p-6 pt-0">
           {loading ? (
-            <div className="text-gray-400 font-medium py-8">Loading action queue...</div>
+            <div className="text-gray-400 font-medium py-8">
+            <div className="space-y-3">
+              {[...Array(3)].map((_, index) => <Skeleton key={index} className="h-20 rounded-2xl" />)}
+            </div>
+          </div>
           ) : actionQueue.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center text-gray-500 font-medium">
               No partner actions are currently due.
@@ -1596,13 +1629,17 @@ export default function PartnerDashboard() {
         </CardContent>
       </Card>
 
-      <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+      <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
         <CardHeader>
           <CardTitle className="text-xl font-black">Supervisor Performance</CardTitle>
         </CardHeader>
         <CardContent className="p-6 pt-0 space-y-4">
           {loading ? (
-            <div className="text-gray-400 font-medium py-8">Loading supervisor performance...</div>
+          <div className="py-8">
+            <div className="space-y-3">
+              {[...Array(3)].map((_, index) => <Skeleton key={index} className="h-28 rounded-2xl" />)}
+            </div>
+          </div>
           ) : (
             <>
               {unassignedPerformance && unassignedPerformance.placementsOwned > 0 ? (
@@ -1703,13 +1740,13 @@ export default function PartnerDashboard() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4"><FileClock className="h-6 w-6 text-indigo-600" /></div><p className="text-sm font-medium text-gray-500">Entries</p><p className="text-3xl font-black text-gray-900">{attendanceStats.totalEntries}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-4"><Clock3 className="h-6 w-6 text-blue-600" /></div><p className="text-sm font-medium text-gray-500">Logged Hours</p><p className="text-3xl font-black text-gray-900">{attendanceStats.totalHours}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4"><CheckCircle2 className="h-6 w-6 text-emerald-600" /></div><p className="text-sm font-medium text-gray-500">Signed-Off Hours</p><p className="text-3xl font-black text-gray-900">{attendanceStats.signedOffHours}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center mb-4"><AlertTriangle className="h-6 w-6 text-amber-600" /></div><p className="text-sm font-medium text-gray-500">Pending Sign-Off</p><p className="text-3xl font-black text-gray-900">{attendanceStats.pendingCount}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4"><FileClock className="h-6 w-6 text-indigo-600" /></div><p className="text-sm font-medium text-gray-500">Entries</p><p className="text-3xl font-black text-gray-900">{attendanceStats.totalEntries}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-4"><Clock3 className="h-6 w-6 text-blue-600" /></div><p className="text-sm font-medium text-gray-500">Logged Hours</p><p className="text-3xl font-black text-gray-900">{attendanceStats.totalHours}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4"><CheckCircle2 className="h-6 w-6 text-emerald-600" /></div><p className="text-sm font-medium text-gray-500">Signed-Off Hours</p><p className="text-3xl font-black text-gray-900">{attendanceStats.signedOffHours}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center mb-4"><AlertTriangle className="h-6 w-6 text-amber-600" /></div><p className="text-sm font-medium text-gray-500">Pending Sign-Off</p><p className="text-3xl font-black text-gray-900">{attendanceStats.pendingCount}</p></CardContent></Card>
         </div>
 
-        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+        <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
           <CardContent className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Input
@@ -1743,7 +1780,7 @@ export default function PartnerDashboard() {
           </CardContent>
         </Card>
 
-        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+        <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
           <CardHeader>
             <CardTitle className="text-lg font-black text-gray-900">Hours Register</CardTitle>
           </CardHeader>
@@ -1760,6 +1797,7 @@ export default function PartnerDashboard() {
                 <p className="text-gray-500 font-medium">No attendance logs found</p>
               </div>
             ) : (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1822,6 +1860,7 @@ export default function PartnerDashboard() {
                   })}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -1835,9 +1874,11 @@ export default function PartnerDashboard() {
         </div>
 
         {loading ? (
-          <div className="text-gray-400 font-medium py-8">Loading placements...</div>
+          <div className="space-y-4">
+            {[...Array(3)].map((_, index) => <Skeleton key={index} className="h-32 rounded-2xl" />)}
+          </div>
         ) : filteredPlacements.length === 0 ? (
-          <div className="w-full text-center p-16 bg-white border border-dashed border-gray-300 rounded-[2.5rem]">
+          <div className="w-full text-center p-16 bg-white border border-dashed border-gray-300 rounded-2xl">
             <Briefcase className="h-16 w-16 text-gray-300 mx-auto mb-4" />
             <h3 className="text-xl font-black text-gray-500 tracking-tight">No matching placements</h3>
             <p className="text-gray-400 mt-2 font-medium">Try a different search or wait for new learner assignments.</p>
@@ -1845,9 +1886,11 @@ export default function PartnerDashboard() {
         ) : (
           <div className="space-y-4">
             {filteredPlacements.map((placement) => (
-              <Card key={placement._id} className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
+              <Card key={placement._id} className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
                 <button
                   type="button"
+                  aria-expanded={expandedPlacementId === placement._id}
+                  aria-controls={`placement-workspace-${placement._id}`}
                   className="w-full border-b border-gray-100 px-6 py-5 text-left transition hover:bg-gray-50/70"
                   onClick={() => setExpandedPlacementId((current) => current === placement._id ? null : placement._id)}
                 >
@@ -1884,7 +1927,7 @@ export default function PartnerDashboard() {
                   </div>
                 </button>
                 {expandedPlacementId === placement._id ? (
-                <CardContent className="p-6 space-y-5">
+                <CardContent id={`placement-workspace-${placement._id}`} className="p-6 space-y-5">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
                       <p className="text-xs font-black uppercase tracking-wider text-gray-400">Placement Site</p>
@@ -2065,6 +2108,81 @@ export default function PartnerDashboard() {
           </div>
         )}
       </div>
+
+      {/* Attendance Delete Confirmation */}
+      <ConfirmationDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
+        title="Delete Attendance Log"
+        description="This attendance log entry will be permanently removed. This action cannot be undone."
+        confirmLabel="Delete Log"
+        variant="danger"
+        onConfirm={executeDeleteAttendance}
+      />
+
+      {/* Attendance Sign-Off / Reject Dialog */}
+      <Dialog open={Boolean(attendanceActionTarget)} onOpenChange={(open) => { if (!open) setAttendanceActionTarget(null) }}>
+        <DialogContent className="sm:max-w-[520px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
+          <DialogHeader className="p-6 pb-0">
+            <DialogTitle className="text-xl font-black flex items-center gap-2">
+              {attendanceActionTarget?.action === "sign-off" ? (
+                <><CheckCircle2 className="h-5 w-5 text-emerald-600" /> Sign Off Hours</>
+              ) : (
+                <><XCircle className="h-5 w-5 text-red-500" /> Return Hours for Review</>
+              )}
+            </DialogTitle>
+            <DialogDescription className="text-gray-500">
+              {attendanceActionTarget?.action === "sign-off"
+                ? "Confirm these hours are accurate. Add an optional comment."
+                : "Provide a reason for returning this entry. The institution will be notified."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="px-6 pb-6 space-y-4">
+            {attendanceActionTarget?.log ? (
+              <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
+                <p className="font-bold text-gray-900">{attendanceActionTarget.log.learner.name}</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {attendanceActionTarget.log.learner.trackingId} · {attendanceActionTarget.log.hoursWorked} hours · {attendanceActionTarget.log.entryType}
+                </p>
+              </div>
+            ) : null}
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700">
+                {attendanceActionTarget?.action === "reject" ? "Reason (required)" : "Comment (optional)"}
+              </label>
+              <Textarea
+                placeholder={attendanceActionTarget?.action === "reject" ? "Explain why this entry is being returned..." : "Add any notes for the institution..."}
+                value={attendanceActionComment}
+                onChange={(e) => setAttendanceActionComment(e.target.value)}
+                className="min-h-[100px]"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700">Supervisor Signature</label>
+              <Input
+                placeholder="Type your full name as signature"
+                value={attendanceActionSignature}
+                onChange={(e) => setAttendanceActionSignature(e.target.value)}
+              />
+            </div>
+            <Button
+              className={`w-full rounded-xl font-bold ${
+                attendanceActionTarget?.action === "sign-off"
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  : "bg-red-500 hover:bg-red-600 text-white"
+              }`}
+              onClick={executeAttendanceAction}
+              disabled={attendanceActionSubmitting}
+            >
+              {attendanceActionSubmitting
+                ? "Processing..."
+                : attendanceActionTarget?.action === "sign-off"
+                  ? "Confirm Sign-Off"
+                  : "Return for Review"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

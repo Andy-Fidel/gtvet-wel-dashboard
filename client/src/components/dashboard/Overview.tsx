@@ -1,26 +1,11 @@
 
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Cell } from "recharts"
 
-const data = [
-  {
-    name: "2024 S1",
-    total: 180,
-  },
-  {
-    name: "2024 S2",
-    total: 235,
-  },
-  {
-    name: "2025 S1",
-    total: 260,
-  },
-  {
-    name: "2025 S2",
-    total: 320,
-  },
-]
+interface OverviewProps {
+  data: { name: string; total: number }[]
+}
 
-export function Overview() {
+export function Overview({ data }: OverviewProps) {
   return (
     <ResponsiveContainer width="100%" height={350}>
       <BarChart data={data}>

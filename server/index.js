@@ -87,7 +87,7 @@ const createApp = () => {
   }));
 
   // Payload size limit to prevent memory exhaustion
-  app.use(express.json({ limit: '10kb' }));
+  app.use(express.json({ limit: '1mb' }));
 
   // Sanitize user input to prevent NoSQL injection
   app.use(mongoSanitizeMiddleware);

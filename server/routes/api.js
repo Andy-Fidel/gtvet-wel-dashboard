@@ -62,7 +62,7 @@ const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g,
 
 // Helper: get institution filter (SuperAdmin sees all, RegionalAdmin sees their region)
 const getFilter = async (user) => {
-  if (user.role === 'SuperAdmin') return { ...archiveFilter };
+  if (user.role === 'SuperAdmin') return {};
   if (user.role === 'RegionalAdmin') {
      const insts = await Institution.find({ region: user.region }).select('name');
      const instNames = insts.map(i => i.name);
@@ -121,6 +121,7 @@ const validateAttendancePayload = ({
   facilitatorName,
   facilitatorSignatureName,
   facilitatorSignedAt,
+  userRole,
 }) => {
   const start = new Date(periodStart);
   const end = new Date(periodEnd);
@@ -172,16 +173,18 @@ const validateAttendancePayload = ({
     return 'Learner signature name is required';
   }
 
-  if (!facilitatorName || String(facilitatorName).trim().length < 2) {
-    return 'Facilitator name is required';
-  }
+  if (userRole !== 'IndustryPartner') {
+    if (!facilitatorName || String(facilitatorName).trim().length < 2) {
+      return 'Facilitator name is required';
+    }
 
-  if (!facilitatorSignatureName || String(facilitatorSignatureName).trim().length < 2) {
-    return 'Facilitator signature name is required';
-  }
+    if (!facilitatorSignatureName || String(facilitatorSignatureName).trim().length < 2) {
+      return 'Facilitator signature name is required';
+    }
 
-  if (!facilitatorSignedAt || Number.isNaN(new Date(facilitatorSignedAt).getTime())) {
-    return 'Facilitator signed date is required';
+    if (!facilitatorSignedAt || Number.isNaN(new Date(facilitatorSignedAt).getTime())) {
+      return 'Facilitator signed date is required';
+    }
   }
 
   return null;
@@ -4450,6 +4453,12 @@ router.get('/dashboard/stats', async (req, res) => {
       Learner.countDocuments({ ...filter, academicStatus: 'Dropped' }),
     ]);
     const totalVisits = await MonitoringVisit.countDocuments(filter);
+    const genderDistributionRaw = await Learner.aggregate([
+      { $match: filter },
+      { $group: { _id: { $ifNull: ['$gender', 'Unspecified'] }, count: { $sum: 1 } } },
+      { $project: { _id: 0, gender: '$_id', count: 1 } },
+      { $sort: { count: -1, gender: 1 } },
+    ]);
     const intakeCohorts = await Learner.aggregate([
       { $match: filter },
       {
@@ -4620,6 +4629,7 @@ router.get('/dashboard/stats', async (req, res) => {
       monthlyStats,
       totalVisits,
       institutionPerformance,
+      genderDistribution: genderDistributionRaw,
     };
 
     writeScopedCache(cacheKey, response);
@@ -6112,7 +6122,76 @@ router.put('/semester-reports/:id/reject', async (req, res) => {
 router.get('/assessments', async (req, res) => {
     try {
         const filter = await getFilter(req.user);
-        const assessments = await CompetencyAssessment.find(filter).populate('learner');
+        const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
+        const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
+        const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
+        const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+        const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
+            ? Math.min(parsedPageSize, 100)
+            : 25;
+
+        // Search by learner name/trackingId
+        const search = (req.query.search || '').toString().trim();
+        let learnerIds = null;
+        if (search) {
+            const regex = new RegExp(search, 'i');
+            const matchingLearners = await Learner.find({
+                ...filter.institution ? { institution: filter.institution } : {},
+                $or: [{ name: regex }, { trackingId: regex }, { firstName: regex }, { lastName: regex }],
+            }).select('_id').lean();
+            learnerIds = matchingLearners.map(l => l._id);
+        }
+
+        const assessmentFilter = { ...filter };
+        if (learnerIds) assessmentFilter.learner = { $in: learnerIds };
+        if (req.query.assessmentType) assessmentFilter.assessmentType = req.query.assessmentType;
+
+        const query = CompetencyAssessment.find(assessmentFilter)
+            .populate('learner', 'name trackingId')
+            .sort({ assessmentDate: -1, createdAt: -1 });
+
+        if (usePagination) {
+            query.skip((page - 1) * pageSize).limit(pageSize);
+        }
+
+        const [assessments, total, stats] = await Promise.all([
+            query.lean(),
+            usePagination ? CompetencyAssessment.countDocuments(assessmentFilter) : Promise.resolve(null),
+            usePagination ? CompetencyAssessment.aggregate([
+                { $match: assessmentFilter },
+                { $group: {
+                    _id: null,
+                    avgScore: { $avg: '$overallScore' },
+                    totalPractical: { $sum: { $cond: [{ $eq: ['$assessmentType', 'Practical'] }, 1, 0] } },
+                    totalTheoretical: { $sum: { $cond: [{ $eq: ['$assessmentType', 'Theoretical'] }, 1, 0] } },
+                    totalCombined: { $sum: { $cond: [{ $eq: ['$assessmentType', 'Combined'] }, 1, 0] } },
+                    totalOnTheJob: { $sum: { $cond: [{ $eq: ['$assessmentType', 'On-the-job'] }, 1, 0] } },
+                    scoreHigh: { $sum: { $cond: [{ $gte: ['$overallScore', 70] }, 1, 0] } },
+                    scoreMid: { $sum: { $cond: [{ $and: [{ $gte: ['$overallScore', 40] }, { $lt: ['$overallScore', 70] }] }, 1, 0] } },
+                    scoreLow: { $sum: { $cond: [{ $lt: ['$overallScore', 40] }, 1, 0] } },
+                }}
+            ]) : Promise.resolve(null),
+        ]);
+
+        if (usePagination) {
+            const safeTotal = total || 0;
+            const s = stats?.[0] || {};
+            return res.json({
+                items: assessments,
+                total: safeTotal,
+                page,
+                pageSize,
+                totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
+                stats: {
+                    avgScore: s.avgScore ? Number(s.avgScore.toFixed(1)) : 0,
+                    byType: { Practical: s.totalPractical || 0, Theoretical: s.totalTheoretical || 0, Combined: s.totalCombined || 0, 'On-the-job': s.totalOnTheJob || 0 },
+                    scoreHigh: s.scoreHigh || 0,
+                    scoreMid: s.scoreMid || 0,
+                    scoreLow: s.scoreLow || 0,
+                },
+            });
+        }
+
         res.json(assessments);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
@@ -9052,6 +9131,7 @@ router.post('/attendance-logs', async (req, res) => {
             facilitatorName,
             facilitatorSignatureName,
             facilitatorSignedAt,
+            userRole: req.user.role,
         });
         if (validationError) {
             return res.status(400).json({ message: validationError });
@@ -9113,9 +9193,9 @@ router.post('/attendance-logs', async (req, res) => {
             notes: notes || '',
             learnerSignatureName: learnerSignatureName || learner.name,
             facilitatorComment: facilitatorComment || '',
-            facilitatorName: facilitatorName || req.user.name,
-            facilitatorSignatureName: facilitatorSignatureName || req.user.name,
-            facilitatorSignedAt: facilitatorSignedAt || new Date(),
+            facilitatorName: req.user.role === 'IndustryPartner' ? '' : (facilitatorName || req.user.name),
+            facilitatorSignatureName: req.user.role === 'IndustryPartner' ? '' : (facilitatorSignatureName || req.user.name),
+            facilitatorSignedAt: req.user.role === 'IndustryPartner' ? undefined : (facilitatorSignedAt || new Date()),
             submittedBy: req.user._id,
             submittedSource: req.user.role === 'IndustryPartner' ? 'Partner' : 'Institution',
             status: req.user.role === 'IndustryPartner' ? 'SignedOff' : 'Pending',
@@ -9183,7 +9263,83 @@ router.put('/attendance-logs/:id', async (req, res) => {
         }
 
         if (attendanceLog.status === 'SignedOff') {
-            return res.status(400).json({ message: 'Signed-off entries cannot be edited' });
+            if (req.user.role === 'IndustryPartner') {
+                return res.status(400).json({ message: 'Signed-off entries cannot be edited' });
+            }
+
+            const coreFields = [
+                'entryType', 'periodStart', 'periodEnd', 'startTime', 'endTime',
+                'hoursWorked', 'tasksCompleted', 'skillsDemonstrated', 'notes',
+                'learnerSignatureName'
+            ];
+
+            const hasCoreChanges = coreFields.some(field => {
+                if (requestBody[field] === undefined) return false;
+                if (field === 'periodStart' || field === 'periodEnd') {
+                    return new Date(requestBody[field]).getTime() !== new Date(attendanceLog[field]).getTime();
+                }
+                const valA = String(requestBody[field]);
+                const valB = attendanceLog[field] === undefined ? '' : String(attendanceLog[field]);
+                return valA !== valB;
+            });
+
+            if (hasCoreChanges) {
+                return res.status(400).json({ message: 'Core attendance fields cannot be modified on a signed-off entry' });
+            }
+
+            const {
+                facilitatorComment,
+                facilitatorName,
+                facilitatorSignatureName,
+                facilitatorSignedAt,
+            } = requestBody;
+
+            const validationError = validateAttendancePayload({
+                entryType: attendanceLog.entryType,
+                periodStart: attendanceLog.periodStart,
+                periodEnd: attendanceLog.periodEnd,
+                startTime: attendanceLog.startTime,
+                endTime: attendanceLog.endTime,
+                hoursWorked: attendanceLog.hoursWorked,
+                tasksCompleted: attendanceLog.tasksCompleted,
+                skillsDemonstrated: attendanceLog.skillsDemonstrated,
+                learnerSignatureName: attendanceLog.learnerSignatureName,
+                facilitatorComment,
+                facilitatorName: facilitatorName || req.user.name,
+                facilitatorSignatureName: facilitatorSignatureName || req.user.name,
+                facilitatorSignedAt: facilitatorSignedAt || new Date(),
+                userRole: req.user.role,
+            });
+
+            if (validationError) {
+                return res.status(400).json({ message: validationError });
+            }
+
+            const before = attendanceLog.toObject();
+            attendanceLog.facilitatorComment = facilitatorComment || '';
+            attendanceLog.facilitatorName = facilitatorName || req.user.name || '';
+            attendanceLog.facilitatorSignatureName = facilitatorSignatureName || req.user.name || '';
+            attendanceLog.facilitatorSignedAt = facilitatorSignedAt || new Date();
+
+            await attendanceLog.save();
+
+            await logAuditEvent({
+                req,
+                action: 'UPDATE',
+                entityType: 'AttendanceLog',
+                entityId: attendanceLog._id,
+                summary: `Reviewed and signed-off attendance log ${attendanceLog._id}`,
+                before,
+                after: attendanceLog,
+            });
+
+            const populated = await AttendanceLog.findById(attendanceLog._id)
+                .populate('learner', 'name trackingId program')
+                .populate('placement', 'companyName supervisorName supervisorEmail startDate endDate status')
+                .populate('submittedBy', 'name role')
+                .populate('signedOffBy', 'name role');
+
+            return res.json(populated);
         }
 
         if (clientUpdatedAt && attendanceLog.updatedAt && new Date(attendanceLog.updatedAt) > new Date(clientUpdatedAt)) {
@@ -9225,6 +9381,7 @@ router.put('/attendance-logs/:id', async (req, res) => {
             facilitatorName,
             facilitatorSignatureName,
             facilitatorSignedAt,
+            userRole: req.user.role,
         });
         if (validationError) {
             return res.status(400).json({ message: validationError });
@@ -9242,9 +9399,9 @@ router.put('/attendance-logs/:id', async (req, res) => {
         attendanceLog.notes = notes || '';
         attendanceLog.learnerSignatureName = learnerSignatureName || attendanceLog.learnerSignatureName || '';
         attendanceLog.facilitatorComment = facilitatorComment || '';
-        attendanceLog.facilitatorName = facilitatorName || attendanceLog.facilitatorName || req.user.name || '';
-        attendanceLog.facilitatorSignatureName = facilitatorSignatureName || attendanceLog.facilitatorSignatureName || req.user.name || '';
-        attendanceLog.facilitatorSignedAt = facilitatorSignedAt || attendanceLog.facilitatorSignedAt || new Date();
+        attendanceLog.facilitatorName = req.user.role === 'IndustryPartner' ? '' : (facilitatorName || attendanceLog.facilitatorName || req.user.name || '');
+        attendanceLog.facilitatorSignatureName = req.user.role === 'IndustryPartner' ? '' : (facilitatorSignatureName || attendanceLog.facilitatorSignatureName || req.user.name || '');
+        attendanceLog.facilitatorSignedAt = req.user.role === 'IndustryPartner' ? undefined : (facilitatorSignedAt || attendanceLog.facilitatorSignedAt || new Date());
         attendanceLog.status = 'Pending';
         attendanceLog.supervisorComment = '';
         attendanceLog.supervisorSignatureName = '';
@@ -9310,6 +9467,95 @@ router.delete('/attendance-logs/:id', async (req, res) => {
     }
 });
 
+router.post('/attendance-logs/bulk-action', requireRole('IndustryPartner'), async (req, res) => {
+    try {
+        const { logIds, action } = req.body;
+        const supervisorComment = (req.body.supervisorComment || '').trim();
+        const supervisorSignatureName = (req.body.supervisorSignatureName || req.user.name || '').trim();
+
+        if (!Array.isArray(logIds) || logIds.length === 0) {
+            return res.status(400).json({ message: 'Select at least one attendance entry' });
+        }
+        if (!['sign-off', 'reject'].includes(action)) {
+            return res.status(400).json({ message: 'Invalid attendance action' });
+        }
+        if (action === 'reject' && !supervisorComment) {
+            return res.status(400).json({ message: 'A reason is required when returning an attendance entry' });
+        }
+        if (!supervisorSignatureName) {
+            return res.status(400).json({ message: 'Supervisor signature name is required' });
+        }
+
+        const validLogIds = [...new Set(logIds.map(id => id?.toString()).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+        if (validLogIds.length === 0) {
+            return res.status(400).json({ message: 'No valid attendance entries selected' });
+        }
+
+        const logs = await AttendanceLog.find({
+            _id: { $in: validLogIds },
+            partner: getPartnerId(req.user),
+        })
+            .populate('learner', 'name')
+            .populate('placement', 'partner partnerSupervisor');
+
+        const foundIds = new Set(logs.map(log => log._id.toString()));
+        const skipped = validLogIds
+            .filter(id => !foundIds.has(id))
+            .map(id => ({ id, reason: 'not_found' }));
+        const updatedIds = [];
+
+        for (const attendanceLog of logs) {
+            if (!canActOnPartnerPlacement(req.user, attendanceLog.placement)) {
+                skipped.push({ id: attendanceLog._id.toString(), reason: 'unauthorized_supervisor' });
+                continue;
+            }
+            if (attendanceLog.status !== 'Pending' || attendanceLog.submittedSource === 'Partner') {
+                skipped.push({ id: attendanceLog._id.toString(), reason: 'not_pending_partner_review' });
+                continue;
+            }
+
+            const before = attendanceLog.toObject();
+            attendanceLog.status = action === 'sign-off' ? 'SignedOff' : 'Rejected';
+            attendanceLog.supervisorComment = supervisorComment;
+            attendanceLog.supervisorSignatureName = supervisorSignatureName;
+            attendanceLog.signedOffAt = new Date();
+            attendanceLog.signedOffBy = req.user._id;
+            await attendanceLog.save();
+            updatedIds.push(attendanceLog._id.toString());
+
+            await logAuditEvent({
+                req,
+                action: 'STATUS_CHANGE',
+                entityType: 'AttendanceLog',
+                entityId: attendanceLog._id,
+                summary: `${action === 'sign-off' ? 'Signed off' : 'Rejected'} attendance log ${attendanceLog._id}`,
+                before,
+                after: attendanceLog,
+            });
+
+            await notifyUsers({
+                institution: attendanceLog.institution,
+                sender: req.user._id,
+                type: 'report',
+                title: action === 'sign-off' ? 'Hours signed off' : 'Hours returned for review',
+                message: action === 'sign-off'
+                    ? `${attendanceLog.learner?.name || 'A learner'}'s attendance hours were signed off by the supervisor.`
+                    : `${attendanceLog.learner?.name || 'A learner'}'s attendance entry was returned by the supervisor.`,
+                link: '/attendance-logs',
+            });
+        }
+
+        res.json({
+            updatedCount: updatedIds.length,
+            updatedIds,
+            skipped,
+        });
+    } catch (error) {
+        console.error('Error applying bulk attendance action:', error);
+        res.status(500).json({ message: 'Error applying bulk attendance action' });
+    }
+});
+
 router.put('/attendance-logs/:id/sign-off', requireRole('IndustryPartner'), async (req, res) => {
     try {
         const attendanceLog = await AttendanceLog.findOne({
@@ -9317,7 +9563,7 @@ router.put('/attendance-logs/:id/sign-off', requireRole('IndustryPartner'), asyn
             partner: getPartnerId(req.user),
         })
             .populate('learner', 'name')
-            .populate('placement', 'partnerSupervisor');
+            .populate('placement', 'partner partnerSupervisor');
 
         if (!attendanceLog) {
             return res.status(404).json({ message: 'Attendance log not found' });
@@ -9326,11 +9572,19 @@ router.put('/attendance-logs/:id/sign-off', requireRole('IndustryPartner'), asyn
         if (!canActOnPartnerPlacement(req.user, attendanceLog.placement)) {
             return res.status(403).json({ message: 'This placement is assigned to another supervisor' });
         }
+        if (attendanceLog.status !== 'Pending' || attendanceLog.submittedSource === 'Partner') {
+            return res.status(400).json({ message: 'Only pending institution-submitted entries can be signed off' });
+        }
+
+        const supervisorSignatureName = (req.body.supervisorSignatureName || req.user.name || '').trim();
+        if (!supervisorSignatureName) {
+            return res.status(400).json({ message: 'Supervisor signature name is required' });
+        }
 
         const before = attendanceLog.toObject();
         attendanceLog.status = 'SignedOff';
         attendanceLog.supervisorComment = req.body.supervisorComment || '';
-        attendanceLog.supervisorSignatureName = req.body.supervisorSignatureName || req.user.name || '';
+        attendanceLog.supervisorSignatureName = supervisorSignatureName;
         attendanceLog.signedOffAt = new Date();
         attendanceLog.signedOffBy = req.user._id;
         await attendanceLog.save();
@@ -9374,7 +9628,7 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
             partner: getPartnerId(req.user),
         })
             .populate('learner', 'name')
-            .populate('placement', 'partnerSupervisor');
+            .populate('placement', 'partner partnerSupervisor');
 
         if (!attendanceLog) {
             return res.status(404).json({ message: 'Attendance log not found' });
@@ -9383,11 +9637,23 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
         if (!canActOnPartnerPlacement(req.user, attendanceLog.placement)) {
             return res.status(403).json({ message: 'This placement is assigned to another supervisor' });
         }
+        if (attendanceLog.status !== 'Pending' || attendanceLog.submittedSource === 'Partner') {
+            return res.status(400).json({ message: 'Only pending institution-submitted entries can be returned for review' });
+        }
+
+        const supervisorComment = (req.body.supervisorComment || '').trim();
+        const supervisorSignatureName = (req.body.supervisorSignatureName || req.user.name || '').trim();
+        if (!supervisorComment) {
+            return res.status(400).json({ message: 'A reason is required when returning an attendance entry' });
+        }
+        if (!supervisorSignatureName) {
+            return res.status(400).json({ message: 'Supervisor signature name is required' });
+        }
 
         const before = attendanceLog.toObject();
         attendanceLog.status = 'Rejected';
-        attendanceLog.supervisorComment = req.body.supervisorComment || '';
-        attendanceLog.supervisorSignatureName = req.body.supervisorSignatureName || req.user.name || '';
+        attendanceLog.supervisorComment = supervisorComment;
+        attendanceLog.supervisorSignatureName = supervisorSignatureName;
         attendanceLog.signedOffAt = new Date();
         attendanceLog.signedOffBy = req.user._id;
         await attendanceLog.save();
@@ -10024,6 +10290,117 @@ router.post('/institutions', requireRole('SuperAdmin'), async (req, res) => {
             return res.status(400).json({ message: 'Institution or Code already exists' });
         }
         res.status(500).json({ message: 'Error creating institution' });
+    }
+});
+
+const parseInstitutionCsv = (csvText = '') => {
+    const rows = [];
+    let current = '';
+    let row = [];
+    let inQuotes = false;
+
+    for (let i = 0; i < csvText.length; i += 1) {
+        const char = csvText[i];
+        const nextChar = csvText[i + 1];
+
+        if (char === '"' && inQuotes && nextChar === '"') {
+            current += '"';
+            i += 1;
+        } else if (char === '"') {
+            inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+            row.push(current.trim());
+            current = '';
+        } else if ((char === '\n' || char === '\r') && !inQuotes) {
+            if (char === '\r' && nextChar === '\n') i += 1;
+            row.push(current.trim());
+            if (row.some((value) => value)) rows.push(row);
+            row = [];
+            current = '';
+        } else {
+            current += char;
+        }
+    }
+
+    row.push(current.trim());
+    if (row.some((value) => value)) rows.push(row);
+    if (rows.length < 2) return [];
+
+    const headers = rows[0].map((header) => header.trim().toLowerCase());
+    return rows.slice(1).map((values) => {
+        const record = {};
+        headers.forEach((header, index) => {
+            record[header] = values[index] || '';
+        });
+        return record;
+    });
+};
+
+router.post('/institutions/import-csv', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const csvText = String(req.body.csv || '');
+        if (!csvText.trim()) {
+            return res.status(400).json({ message: 'CSV content is required' });
+        }
+
+        const records = parseInstitutionCsv(csvText);
+        if (records.length === 0) {
+            return res.status(400).json({ message: 'CSV must include a header row and at least one institution row' });
+        }
+
+        const created = [];
+        const skipped = [];
+        const requiredFields = ['name', 'code', 'region', 'district', 'location'];
+
+        for (const [index, record] of records.entries()) {
+            const missingFields = requiredFields.filter((field) => !record[field]);
+            if (missingFields.length > 0) {
+                skipped.push({ row: index + 2, reason: `Missing ${missingFields.join(', ')}` });
+                continue;
+            }
+
+            const existing = await Institution.findOne({
+                $or: [{ name: record.name }, { code: record.code }],
+            }).select('_id name code');
+            if (existing) {
+                skipped.push({ row: index + 2, reason: 'Institution name or code already exists' });
+                continue;
+            }
+
+            const institution = await Institution.create({
+                name: record.name,
+                code: record.code,
+                region: record.region,
+                district: record.district,
+                location: record.location,
+                category: ['A', 'B', 'C'].includes(record.category) ? record.category : 'B',
+                status: record.status || 'Day',
+                gender: ['Boys', 'Girls', 'Mixed'].includes(record.gender) ? record.gender : 'Mixed',
+                calendarType: ['Single Track', 'Transitional'].includes(record.calendartype || record.calendar_type)
+                    ? (record.calendartype || record.calendar_type)
+                    : 'Single Track',
+                programs: (record.programs || '').split(/[|;]/).map((program) => program.trim()).filter(Boolean),
+            });
+            created.push(institution);
+
+            await logAuditEvent({
+                req,
+                action: 'CREATE',
+                entityType: 'Institution',
+                entityId: institution._id,
+                summary: `Imported institution ${institution.name} from CSV`,
+                after: institution,
+            });
+        }
+
+        res.status(201).json({
+            createdCount: created.length,
+            skippedCount: skipped.length,
+            skipped,
+        });
+    } catch (error) {
+        console.error('Error importing institutions CSV:', error);
+        res.status(500).json({ message: 'Error importing institutions CSV' });
     }
 });
 
@@ -11153,6 +11530,63 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
     } catch (error) {
         console.error('Error fetching admin overview:', error);
         res.status(500).json({ message: 'Server Error', error });
+    }
+});
+
+router.post('/admin/deadline-risk/notify', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+    try {
+        const { institution, riskType, semester, academicYear, deadlineTitle } = req.body;
+        if (!institution || !['overdue', 'at-risk'].includes(riskType)) {
+            return res.status(400).json({ message: 'Institution and valid risk type are required' });
+        }
+
+        if (req.user.role === 'RegionalAdmin') {
+            const institutionRecord = await Institution.findOne({ name: institution, region: req.user.region }).select('_id');
+            if (!institutionRecord) {
+                return res.status(403).json({ message: 'Institution is outside your region' });
+            }
+        }
+
+        const admins = await User.find({
+            institution,
+            role: 'Admin',
+            status: 'Active',
+        }).select('_id');
+
+        if (admins.length === 0) {
+            return res.status(404).json({ message: 'No active institution admin found to notify' });
+        }
+
+        const title = riskType === 'overdue'
+            ? 'Semester report submission overdue'
+            : 'Semester report deadline approaching';
+        const message = riskType === 'overdue'
+            ? `${institution} has an overdue ${semester || ''} ${academicYear || ''} semester report${deadlineTitle ? ` for ${deadlineTitle}` : ''}. Please submit or update the report.`
+            : `${institution} is at risk of missing the ${semester || ''} ${academicYear || ''} semester report deadline${deadlineTitle ? ` for ${deadlineTitle}` : ''}. Please review the current report status.`;
+
+        await notifyUsers({
+            recipientIds: admins.map((admin) => admin._id),
+            sender: req.user._id,
+            type: 'report',
+            title,
+            message,
+            link: `/semester-reports?institution=${encodeURIComponent(institution)}&semester=${encodeURIComponent(semester || '')}&academicYear=${encodeURIComponent(academicYear || '')}`,
+            dedupeKey: `deadline-risk:${riskType}:${institution}:${semester || ''}:${academicYear || ''}`,
+        });
+
+        await logAuditEvent({
+            req,
+            action: 'NOTIFY',
+            entityType: 'Institution',
+            entityId: institution,
+            summary: `Notified ${admins.length} admin(s) for ${riskType} deadline risk at ${institution}`,
+            metadata: { institution, riskType, semester, academicYear },
+        });
+
+        res.json({ notifiedCount: admins.length });
+    } catch (error) {
+        console.error('Error notifying institution admins about deadline risk:', error);
+        res.status(500).json({ message: 'Error notifying institution admins' });
     }
 });
 

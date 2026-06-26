@@ -204,7 +204,20 @@ export const downloadWELLogbookPdf = async (data: WELLogbookPdfData) => {
   const signedOffCount = data.entries.filter((entry) => entry.status === "SignedOff").length
   const pendingCount = data.entries.filter((entry) => entry.status === "Pending").length
   const rejectedCount = data.entries.filter((entry) => entry.status === "Rejected").length
-  const latestSignatureEntry = [...data.entries].sort((a, b) => new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime())[0]
+  const latestLearnerEntry = [...data.entries]
+    .filter((e) => e.learnerSignatureName && e.learnerSignatureName.trim())
+    .sort((a, b) => new Date(a.periodEnd).getTime() - new Date(b.periodEnd).getTime())
+    .pop()
+
+  const latestFacilitatorEntry = [...data.entries]
+    .filter((e) => e.facilitatorSignatureName && e.facilitatorSignatureName.trim())
+    .sort((a, b) => new Date(a.periodEnd).getTime() - new Date(b.periodEnd).getTime())
+    .pop()
+
+  const latestSupervisorEntry = [...data.entries]
+    .filter((e) => e.supervisorSignatureName && e.supervisorSignatureName.trim())
+    .sort((a, b) => new Date(a.periodEnd).getTime() - new Date(b.periodEnd).getTime())
+    .pop()
 
   doc.setFillColor(248, 250, 252)
   doc.setDrawColor(203, 213, 225)
@@ -308,24 +321,24 @@ export const downloadWELLogbookPdf = async (data: WELLogbookPdfData) => {
     12,
     "Learner",
     data.learnerName,
-    latestSignatureEntry?.learnerSignatureName || data.learnerName,
-    formatDate(latestSignatureEntry?.periodEnd || data.endDate),
+    latestLearnerEntry?.learnerSignatureName || data.learnerName,
+    formatDate(latestLearnerEntry?.periodEnd || data.endDate),
   )
   drawSignatureBlock(
     104,
     "WEL Facilitator",
-    latestSignatureEntry?.facilitatorName || "",
-    latestSignatureEntry?.facilitatorSignatureName || "",
-    formatDate(latestSignatureEntry?.facilitatorSignedAt),
-    latestSignatureEntry?.facilitatorComment,
+    latestFacilitatorEntry?.facilitatorName || "",
+    latestFacilitatorEntry?.facilitatorSignatureName || "",
+    formatDate(latestFacilitatorEntry?.facilitatorSignedAt),
+    latestFacilitatorEntry?.facilitatorComment,
   )
   drawSignatureBlock(
     196,
     "WEL Supervisor",
-    latestSignatureEntry?.signedOffBy?.name || "",
-    latestSignatureEntry?.supervisorSignatureName || "",
-    formatDate(latestSignatureEntry?.signedOffAt),
-    latestSignatureEntry?.supervisorComment,
+    latestSupervisorEntry?.signedOffBy?.name || latestSupervisorEntry?.supervisorSignatureName || "",
+    latestSupervisorEntry?.supervisorSignatureName || "",
+    formatDate(latestSupervisorEntry?.signedOffAt),
+    latestSupervisorEntry?.supervisorComment,
   )
 
   const learnerToken = sanitizeFilenamePart(data.learnerName || "learner")
