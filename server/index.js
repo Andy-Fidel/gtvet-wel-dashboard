@@ -42,6 +42,17 @@ const configuredOrigins = [
   .filter(Boolean);
 const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...configuredOrigins])];
 
+const normalizeOrigin = (origin) => origin?.trim().replace(/\/$/, '');
+
+const getRequestOrigin = (req) => {
+  const host = req.get('host');
+  if (!host) return null;
+
+  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const proto = forwardedProto || req.protocol || 'http';
+  return `${proto}://${host}`;
+};
+
 const sanitizeMongoInput = (value) => {
   if (Array.isArray(value)) {
     value.forEach((entry) => sanitizeMongoInput(entry));
@@ -82,18 +93,27 @@ const createApp = () => {
 
   app.set('trust proxy', TRUST_PROXY);
 
-  app.use(cors({
-    origin: (origin, callback) => {
-      if (!origin || ALLOWED_ORIGINS.includes(origin.replace(/\/$/, ''))) {
-        callback(null, true);
+  app.use(cors((req, callback) => {
+    callback(null, {
+      origin: (origin, originCallback) => {
+      const normalizedOrigin = normalizeOrigin(origin);
+      const requestOrigin = getRequestOrigin(req);
+
+      if (
+        !normalizedOrigin
+        || ALLOWED_ORIGINS.includes(normalizedOrigin)
+        || normalizedOrigin === requestOrigin
+      ) {
+        originCallback(null, true);
         return;
       }
-      callback(new Error('Not allowed by CORS'));
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
-    credentials: true,
-    optionsSuccessStatus: 200
+      originCallback(new Error('Not allowed by CORS'));
+      },
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+      credentials: true,
+      optionsSuccessStatus: 200
+    });
   }));
 
   // Drop requests extending past 30 seconds to prevent event-loop and resource exhaustion
