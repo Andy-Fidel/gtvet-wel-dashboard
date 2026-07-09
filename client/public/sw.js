@@ -1,5 +1,5 @@
-const APP_SHELL_CACHE = 'gtvets-app-shell-v1'
-const RUNTIME_CACHE = 'gtvets-runtime-v1'
+const APP_SHELL_CACHE = 'gtvets-app-shell-v2'
+const RUNTIME_CACHE = 'gtvets-runtime-v2'
 
 const APP_SHELL_URLS = [
   '/',
@@ -111,6 +111,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (shouldHandleApiRequest(url)) {
+    event.respondWith(networkOnly(request))
+    return
+  }
+
+  if (url.pathname.startsWith('/assets/')) {
     event.respondWith(networkOnly(request))
     return
   }
