@@ -30,33 +30,47 @@ Notes
 - See `client/README.md` for client-specific details.
 - Add a `.env` file at the repository root or in `server/` for any secrets; `.env` is ignored by Git.
 
-Heroku deployment
+Render deployment
 
-The repository is configured for a single Heroku Node.js app. Heroku installs from the root, builds the Vite client into `client/dist`, and starts the Express server, which serves both `/api/*` routes and the production SPA.
+The repository is configured for a single Render Node.js web service. Render builds the Vite client into `client/dist` and starts the Express server, which serves both `/api/*` routes and the production SPA.
 
-Required Heroku config vars:
+The included `render.yaml` Blueprint can create the web service with these commands:
+
+- Build command: `npm run render-build`
+- Start command: `npm start`
+- Health check path: `/health`
+
+Required Render environment variables:
 
 ```bash
-heroku config:set NODE_ENV=production
-heroku config:set MONGODB_URI="mongodb+srv://..."
-heroku config:set JWT_SECRET="a-long-random-secret"
-heroku config:set FRONTEND_URL="https://your-app-name.herokuapp.com"
-heroku config:set WEB_CONCURRENCY=1
+NODE_ENV=production
+MONGODB_URI=mongodb+srv://...
+JWT_SECRET=a-long-random-secret
+FRONTEND_URL=https://your-service-name.onrender.com
+WEB_CONCURRENCY=1
 ```
 
 Optional config vars are listed in `.env.example` for SMTP, Cloudinary, Twilio WhatsApp, CORS, and rate-limit tuning.
 
-Deploy from the repository root:
+Deploy with the Blueprint:
 
-```bash
-git push heroku main
-```
+1. Push this repository to GitHub or GitLab.
+2. In Render, choose **New +** > **Blueprint**.
+3. Connect the repository and select the branch to deploy.
+4. Fill in the secret values requested from `render.yaml`, especially `MONGODB_URI` and `FRONTEND_URL`.
+5. Apply the Blueprint.
+
+Alternatively, create a Render web service manually:
+
+- Runtime: Node
+- Build command: `npm run render-build`
+- Start command: `npm start`
+- Health check path: `/health`
 
 After deployment, verify:
 
 ```bash
-heroku open
-heroku logs --tail
+curl https://your-service-name.onrender.com/health
 ```
 
 Contributing

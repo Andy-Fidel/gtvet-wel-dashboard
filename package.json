@@ -8,8 +8,7 @@
   },
   "scripts": {
     "build": "npm run build --prefix client",
-    "heroku-postbuild": "npm ci --omit=dev --prefix server && npm ci --include=dev --prefix client && npm run build --prefix client",
-    "heroku-cleanup": "npm prune --omit=dev --prefix server && rm -rf client/node_modules",
+    "render-build": "npm ci --omit=dev --prefix server && npm ci --include=dev --prefix client && npm run build --prefix client",
     "start": "npm start --prefix server"
   }
 }
