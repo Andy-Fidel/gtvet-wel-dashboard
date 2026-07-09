@@ -7,10 +7,15 @@ import timeout from 'connect-timeout';
 import rateLimit from 'express-rate-limit';
 import cluster from 'node:cluster';
 import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { csrfProtection } from './middleware/auth.js';
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const clientDistPath = path.resolve(__dirname, '../client/dist');
 const PORT = process.env.PORT || 5001;
 const GLOBAL_RATE_LIMIT_WINDOW_MS = Number(process.env.GLOBAL_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
 const GLOBAL_RATE_LIMIT_MAX = Number(process.env.GLOBAL_RATE_LIMIT_MAX || 1200);
@@ -24,6 +29,18 @@ const WORKER_COUNT = Math.max(
   Number.parseInt(process.env.WEB_CONCURRENCY || '', 10) || os.availableParallelism?.() || os.cpus().length || 1
 );
 const TRUST_PROXY = process.env.TRUST_PROXY || 'loopback';
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+const configuredOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.CLIENT_URL,
+  ...(process.env.CORS_ORIGINS || '').split(','),
+]
+  .map((origin) => origin?.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...configuredOrigins])];
 
 const sanitizeMongoInput = (value) => {
   if (Array.isArray(value)) {
@@ -66,11 +83,13 @@ const createApp = () => {
   app.set('trust proxy', TRUST_PROXY);
 
   app.use(cors({
-    origin: [
-      'http://localhost:5173',
-      'http://127.0.0.1:5173',
-      'https://busked-matilde-shamefully.ngrok-free.dev'
-    ],
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin.replace(/\/$/, ''))) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error('Not allowed by CORS'));
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
     credentials: true,
@@ -118,9 +137,26 @@ const createApp = () => {
   app.use('/api', apiRoutes);
   app.use('/api/documents', uploadRoutes);
 
-  // Basic route
-  app.get('/', (req, res) => {
-    res.send('API is running');
+  app.get('/health', (_req, res) => {
+    res.json({ status: 'ok' });
+  });
+
+  if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(clientDistPath));
+    app.get(/^(?!\/api).*/, (_req, res) => {
+      res.sendFile(path.join(clientDistPath, 'index.html'));
+    });
+  } else {
+    app.get('/', (_req, res) => {
+      res.send('API is running');
+    });
+  }
+
+  app.use((err, _req, res, next) => {
+    if (err?.message === 'Not allowed by CORS') {
+      return res.status(403).json({ message: 'Not allowed by CORS' });
+    }
+    next(err);
   });
 
   return app;
