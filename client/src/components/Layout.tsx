@@ -52,6 +52,8 @@ export default function Layout() {
       <button 
         className="md:hidden fixed top-4 right-4 z-50 p-2 bg-white rounded-lg shadow-sm border border-gray-200"
         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        aria-label={isMobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        aria-expanded={isMobileMenuOpen}
       >
         {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
       </button>

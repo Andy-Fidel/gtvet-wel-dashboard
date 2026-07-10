@@ -67,8 +67,8 @@ export function Navbar() {
   }
 
   return (
-    <div className="flex items-center justify-between pl-4 pr-16 md:px-8 py-4 glass-panel rounded-[2rem] sticky top-0 z-30">
-      <div className="flex items-center gap-2 md:gap-6">
+    <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-8 glass-panel rounded-[2rem] sticky top-0 z-30">
+      <div className="flex min-w-0 items-center gap-2 pr-12 md:gap-6 lg:pr-0">
         <div className="hidden sm:flex items-center gap-2 bg-[#4ADE80] px-3 py-2 rounded-xl text-white text-[10px] md:text-xs font-black uppercase tracking-wider shadow-sm animate-pulse">
           <div className="w-2 h-2 bg-white rounded-full" />
           <span className="hidden md:inline">Live</span>
@@ -87,7 +87,7 @@ export function Navbar() {
             <span>{isSyncingOfflineQueue ? `Syncing ${offlineQueueCount}` : `${offlineQueueCount} Offline`}</span>
           </button>
         )}
-        <h2 className="text-lg md:text-xl font-black text-gray-900 tracking-tight truncate max-w-[150px] md:max-w-none">
+        <h2 className="min-w-0 truncate text-lg font-black tracking-tight text-gray-900 md:text-xl">
           {getPageTitle(location.pathname)}
         </h2>
       </div>
@@ -96,10 +96,10 @@ export function Navbar() {
         <Search />
       </div>
 
-      <div className="flex items-center gap-2 md:gap-8">
-        <div className="flex items-center gap-1 sm:gap-2 md:gap-4 flex-1 justify-end">
+      <div className="flex min-w-0 w-full items-center lg:w-auto lg:gap-8">
+        <div className="flex min-w-0 w-full flex-1 items-center justify-end gap-1.5 sm:gap-2 md:gap-4 lg:w-auto">
           {!isGuardian ? (
-            <div className="lg:hidden w-[150px] sm:w-auto">
+            <div className="min-w-0 flex-1 lg:hidden">
               <Search />
             </div>
           ) : null}
@@ -117,7 +117,7 @@ export function Navbar() {
                 )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-80 md:w-96 rounded-3xl mt-2 p-0 bg-white border-gray-100 shadow-2xl" align="end" forceMount>
+            <DropdownMenuContent className="w-[min(20rem,calc(100vw-2rem))] md:w-96 rounded-3xl mt-2 p-0 bg-white border-gray-100 shadow-2xl" align="end" forceMount>
               <div className="flex items-center justify-between p-4 border-b border-gray-100">
                 <div className="flex items-center gap-2">
                   <span className="font-black text-gray-900">Notifications</span>
@@ -173,11 +173,11 @@ export function Navbar() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-            <Button data-help-id="navbar-profile" variant="ghost" className="relative h-12 w-12 rounded-2xl p-0 hover:ring-2 hover:ring-[#FFB800] transition-all overflow-hidden bg-gray-100">
+            <Button data-help-id="navbar-profile" variant="ghost" className="relative h-10 w-10 shrink-0 rounded-2xl p-0 hover:ring-2 hover:ring-[#FFB800] transition-all overflow-hidden bg-gray-100 md:h-12 md:w-12">
                 {user?.profilePicture ? (
-                  <img src={user.profilePicture} alt={user.name} className="h-12 w-12 object-cover" />
+                  <img src={user.profilePicture} alt={user.name} className="h-full w-full object-cover" />
                 ) : (
-                  <Avatar className="h-12 w-12 rounded-none">
+                  <Avatar className="h-full w-full rounded-none">
                     <AvatarFallback className="rounded-none bg-[#FFB800]/10 text-[#FFB800] font-black">
                       {user ? getInitials(user.name) : 'U'}
                     </AvatarFallback>
