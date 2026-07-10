@@ -154,6 +154,7 @@ const createApp = () => {
   app.use('/api', globalLimiter);
 
   app.use('/api/auth', authLimiter, authRoutes);
+  app.use('/api/idms', idmsRoutes);
   app.use('/api', apiRoutes);
   app.use('/api/documents', uploadRoutes);
 
@@ -185,6 +186,7 @@ const createApp = () => {
 import authRoutes from './routes/authRoutes.js';
 import apiRoutes from './routes/api.js';
 import uploadRoutes from './routes/uploads.js';
+import idmsRoutes from './routes/idmsRoutes.js';
 
 const startWorker = async () => {
   const app = createApp();

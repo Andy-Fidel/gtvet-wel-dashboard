@@ -52,6 +52,17 @@ WEB_CONCURRENCY=1
 
 Optional config vars are listed in `.env.example` for SMTP, Cloudinary, Twilio WhatsApp, CORS, and rate-limit tuning.
 
+Optional GTVET-IDMS integration vars:
+
+```bash
+IDMS_API_BASE=https://gtvet-idms-api-8466d2bbdaf1.herokuapp.com
+IDMS_API_TOKEN=
+IDMS_ALLOWED_PATH_PREFIXES=/
+IDMS_REQUEST_TIMEOUT_MS=15000
+```
+
+Authenticated Admin, RegionalAdmin, and SuperAdmin users can check the IDMS connection through `GET /api/idms/status`. A controlled proxy is mounted under `/api/idms/*`; restrict `IDMS_ALLOWED_PATH_PREFIXES` if you only want to expose selected IDMS modules.
+
 Deploy with the Blueprint:
 
 1. Push this repository to GitHub or GitLab.
