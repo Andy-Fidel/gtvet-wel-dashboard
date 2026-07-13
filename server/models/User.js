@@ -40,6 +40,7 @@ const userSchema = new mongoose.Schema({
     inApp: { type: Boolean, default: true },
     email: { type: Boolean, default: false },
     whatsApp: { type: Boolean, default: false },
+    push: { type: Boolean, default: true },
     systemUpdates: { type: Boolean, default: true },
     placementUpdates: { type: Boolean, default: true },
     supportUpdates: { type: Boolean, default: true },

@@ -203,6 +203,7 @@ const isQueueableMutation = (url: string, options: RequestInit = {}) => {
   if (!['POST', 'PUT', 'PATCH'].includes(method)) return false;
   if (!url.startsWith('/api/')) return false;
   if (url.startsWith('/api/auth/')) return false;
+  if (url.startsWith('/api/push/')) return false;
   if (options.body instanceof FormData) return false;
   return typeof options.body === 'string';
 };
@@ -437,6 +438,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     const csrfToken = await ensureCsrfToken();
+
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      const registration = await navigator.serviceWorker.getRegistration('/').catch(() => undefined);
+      const subscription = await registration?.pushManager.getSubscription().catch(() => null);
+      if (subscription) {
+        await fetch(`${API_BASE}/push/subscribe`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+          },
+          body: JSON.stringify({ endpoint: subscription.endpoint }),
+        }).catch(() => undefined);
+        await subscription.unsubscribe().catch(() => false);
+      }
+    }
+
     await fetch(`${API_BASE}/auth/logout`, {
       method: 'POST',
       credentials: 'include',

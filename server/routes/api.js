@@ -28,7 +28,9 @@ import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartne
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { Notification } from '../models/Notification.js';
+import { PushSubscription } from '../models/PushSubscription.js';
 import { notifyUsers } from '../utils/notifications.js';
+import { getVapidPublicKey, isWebPushConfigured } from '../utils/webPush.js';
 import { logAuditEvent } from '../utils/audit.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
@@ -1942,6 +1944,106 @@ const assertLearnersReadyForPlacement = async (learnerIds, institution) => {
 
 // ==================== NOTIFICATIONS ====================
 
+router.get('/push/status', async (req, res) => {
+    try {
+        const subscriptionCount = await PushSubscription.countDocuments({ user: req.user._id });
+        res.json({
+            supported: isWebPushConfigured(),
+            subscriptionCount,
+        });
+    } catch (error) {
+        console.error('Error fetching push status:', error);
+        res.status(500).json({ message: 'Error fetching push notification status' });
+    }
+});
+
+router.get('/push/vapid-public-key', (_req, res) => {
+    const vapidPublicKey = getVapidPublicKey();
+    if (!vapidPublicKey) {
+        return res.status(503).json({ message: 'Push notifications are not configured' });
+    }
+    res.json({ publicKey: vapidPublicKey });
+});
+
+router.post('/push/subscribe', async (req, res) => {
+    try {
+        const { endpoint, expirationTime = null, keys } = req.body || {};
+        if (
+            typeof endpoint !== 'string'
+            || endpoint.length > 2048
+            || !endpoint.startsWith('https://')
+            || typeof keys?.p256dh !== 'string'
+            || typeof keys?.auth !== 'string'
+            || keys.p256dh.length > 512
+            || keys.auth.length > 512
+        ) {
+            return res.status(400).json({ message: 'Invalid push subscription' });
+        }
+
+        await PushSubscription.findOneAndUpdate(
+            { endpoint },
+            {
+                $set: {
+                    user: req.user._id,
+                    expirationTime: typeof expirationTime === 'number' ? expirationTime : null,
+                    keys: { p256dh: keys.p256dh, auth: keys.auth },
+                    userAgent: String(req.get('user-agent') || '').slice(0, 500),
+                    lastUsedAt: new Date(),
+                },
+            },
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+        );
+
+        await User.updateOne(
+            { _id: req.user._id },
+            { $set: { 'notificationPreferences.push': true } }
+        );
+
+        res.status(201).json({ message: 'Push notifications enabled on this device' });
+    } catch (error) {
+        console.error('Error saving push subscription:', error);
+        res.status(500).json({ message: 'Error enabling push notifications' });
+    }
+});
+
+router.delete('/push/subscribe', async (req, res) => {
+    try {
+        const endpoint = req.body?.endpoint;
+        if (typeof endpoint !== 'string' || endpoint.length > 2048) {
+            return res.status(400).json({ message: 'A valid subscription endpoint is required' });
+        }
+        await PushSubscription.deleteOne({ endpoint, user: req.user._id });
+        res.json({ message: 'Push notifications disabled on this device' });
+    } catch (error) {
+        console.error('Error removing push subscription:', error);
+        res.status(500).json({ message: 'Error disabling push notifications' });
+    }
+});
+
+router.post('/push/test', async (req, res) => {
+    try {
+        if (!isWebPushConfigured()) {
+            return res.status(503).json({ message: 'Push notifications are not configured' });
+        }
+        const hasSubscription = await PushSubscription.exists({ user: req.user._id });
+        if (!hasSubscription) {
+            return res.status(400).json({ message: 'Enable push notifications on this device first' });
+        }
+
+        await notifyUsers({
+            recipientIds: [req.user._id],
+            type: 'system',
+            title: 'Push notifications are working',
+            message: 'You will now receive important GTVETS WEL updates on this device.',
+            link: '/notifications',
+        });
+        res.json({ message: 'Test notification sent' });
+    } catch (error) {
+        console.error('Error sending test push notification:', error);
+        res.status(500).json({ message: 'Error sending test push notification' });
+    }
+});
+
 router.get('/notifications', async (req, res) => {
     try {
         await ensureInstitutionExceptionNotifications(req.user);
@@ -2034,6 +2136,7 @@ router.put('/settings/notifications', async (req, res) => {
             'inApp',
             'email',
             'whatsApp',
+            'push',
             'systemUpdates',
             'placementUpdates',
             'supportUpdates',

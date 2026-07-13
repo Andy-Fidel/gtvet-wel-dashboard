@@ -11,7 +11,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { BellRing, Settings2, CalendarRange, Save, Plus, Trash2, Loader2, School, ShieldCheck } from "lucide-react"
+import { BellRing, Settings2, CalendarRange, Save, Plus, Trash2, Loader2, School, ShieldCheck, Send, Smartphone } from "lucide-react"
+import { usePushNotifications } from "@/hooks/usePushNotifications"
 
 type SystemSettings = {
   organizationName: string
@@ -34,6 +35,7 @@ type NotificationPreferences = {
   inApp: boolean
   email: boolean
   whatsApp: boolean
+  push: boolean
   systemUpdates: boolean
   placementUpdates: boolean
   supportUpdates: boolean
@@ -108,6 +110,7 @@ const defaultNotificationPreferences: NotificationPreferences = {
   inApp: true,
   email: false,
   whatsApp: false,
+  push: true,
   systemUpdates: true,
   placementUpdates: true,
   supportUpdates: true,
@@ -143,10 +146,12 @@ const preferenceLabels: Array<{ key: keyof NotificationPreferences; title: strin
 
 export default function SettingsPage() {
   const { authFetch, user } = useAuth()
+  const pushNotifications = usePushNotifications()
   const [loading, setLoading] = useState(true)
   const [savingSystem, setSavingSystem] = useState(false)
   const [savingPrefs, setSavingPrefs] = useState(false)
   const [sendingWhatsAppTest, setSendingWhatsAppTest] = useState(false)
+  const [pushAction, setPushAction] = useState<"enable" | "disable" | "test" | null>(null)
   const [savingTerm, setSavingTerm] = useState(false)
   const [runningSemesterRollover, setRunningSemesterRollover] = useState(false)
   const [runningAcademicYearRollover, setRunningAcademicYearRollover] = useState(false)
@@ -258,6 +263,24 @@ export default function SettingsPage() {
       toast.error(error instanceof Error ? error.message : "Failed to send WhatsApp test")
     } finally {
       setSendingWhatsAppTest(false)
+    }
+  }
+
+  const runPushAction = async (action: "enable" | "disable" | "test") => {
+    setPushAction(action)
+    try {
+      if (action === "enable") await pushNotifications.enable()
+      if (action === "disable") await pushNotifications.disable()
+      if (action === "test") await pushNotifications.sendTest()
+      toast.success(action === "enable"
+        ? "Push notifications enabled on this device"
+        : action === "disable"
+          ? "Push notifications disabled on this device"
+          : "Test notification sent")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Push notification action failed")
+    } finally {
+      setPushAction(null)
     }
   }
 
@@ -491,6 +514,70 @@ export default function SettingsPage() {
                   />
                 </div>
               ))}
+
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 space-y-3">
+                <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                  <div>
+                    <p className="flex items-center gap-2 font-bold text-slate-900">
+                      <Smartphone className="h-4 w-4 text-indigo-600" />
+                      PWA Push Notifications
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Receive workflow alerts when the dashboard is in the background or closed. Permission applies to this browser and device.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge className={pushNotifications.supported ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-700 border-slate-200"}>
+                      {pushNotifications.supported ? "Browser supported" : "Not supported"}
+                    </Badge>
+                    <Badge className={pushNotifications.configured ? "bg-sky-100 text-sky-700 border-sky-200" : "bg-amber-100 text-amber-700 border-amber-200"}>
+                      {pushNotifications.configured ? "Service ready" : "Service not configured"}
+                    </Badge>
+                    <Badge className={pushNotifications.subscribed ? "bg-indigo-100 text-indigo-700 border-indigo-200" : "bg-white text-slate-700 border-slate-200"}>
+                      {pushNotifications.subscribed ? "Enabled here" : pushNotifications.permission === "denied" ? "Blocked by browser" : "Disabled here"}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {pushNotifications.subscribed ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-xl"
+                      disabled={pushAction !== null}
+                      onClick={() => void runPushAction("disable")}
+                    >
+                      {pushAction === "disable" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Disable on this device
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      className="rounded-xl bg-indigo-600 hover:bg-indigo-700"
+                      disabled={!pushNotifications.supported || !pushNotifications.configured || pushNotifications.permission === "denied" || pushAction !== null || pushNotifications.loading}
+                      onClick={() => void runPushAction("enable")}
+                    >
+                      {pushAction === "enable" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BellRing className="mr-2 h-4 w-4" />}
+                      Enable push notifications
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl"
+                    disabled={!pushNotifications.subscribed || pushAction !== null}
+                    onClick={() => void runPushAction("test")}
+                  >
+                    {pushAction === "test" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                    Send test push
+                  </Button>
+                </div>
+
+                {pushNotifications.permission === "denied" ? (
+                  <p className="text-xs font-medium text-rose-700">Notifications are blocked. Allow them in this site's browser settings, then reload the page.</p>
+                ) : null}
+              </div>
 
               <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 space-y-3">
                 <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">

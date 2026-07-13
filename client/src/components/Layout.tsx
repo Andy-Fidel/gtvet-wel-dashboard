@@ -10,8 +10,10 @@ import { Badge } from '@/components/ui/badge';
 
 import { Toaster } from 'sonner';
 import { PlacementProgressWidget } from './PlacementProgressWidget';
+import { usePushNotificationEvents } from '@/hooks/usePushNotifications';
 
 export default function Layout() {
+  usePushNotificationEvents();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarTooltip, setSidebarTooltip] = useState<{ label: string; top: number } | null>(null);

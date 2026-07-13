@@ -9,7 +9,8 @@
     "start": "node index.js",
     "start:cluster": "CLUSTER_ENABLED=true node index.js",
     "bootstrap:superadmin": "node bootstrap_superadmin.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "generate:vapid": "web-push generate-vapid-keys"
   },
   "keywords": [],
   "author": "",
@@ -29,7 +30,8 @@
     "lru-cache": "^11.3.5",
     "mongoose": "^9.2.1",
     "multer": "^2.1.1",
-    "nodemailer": "^9.0.3"
+    "nodemailer": "^9.0.3",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"

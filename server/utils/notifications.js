@@ -1,6 +1,7 @@
 import { User } from '../models/User.js';
 import { Notification } from '../models/Notification.js';
 import { sendWhatsAppMessage } from './whatsapp.js';
+import { isWebPushConfigured, sendWebPushToUser } from './webPush.js';
 
 const notificationPreferenceKeyByType = {
   system: 'systemUpdates',
@@ -69,6 +70,7 @@ export async function notifyUsers({
       const channels = [];
       if (user.notificationPreferences?.inApp !== false) channels.push('inApp');
       if (user.notificationPreferences?.whatsApp === true && user.phone?.trim()) channels.push('whatsApp');
+      if (user.notificationPreferences?.push !== false && isWebPushConfigured()) channels.push('push');
       if (channels.length > 0) {
         recipientChannelMap.set(user._id.toString(), {
           user,
@@ -107,12 +109,33 @@ export async function notifyUsers({
         visibleInApp: channels.includes('inApp'),
         deliveryChannels: channels,
         whatsAppStatus: channels.includes('whatsApp') ? 'pending' : undefined,
+        pushStatus: channels.includes('push') ? 'pending' : undefined,
       };
     });
 
     const insertedNotifications = await Notification.insertMany(notifications);
 
     await Promise.all(insertedNotifications.map(async (notification) => {
+      if (notification.deliveryChannels?.includes('push')) {
+        const delivery = await sendWebPushToUser(notification.recipient, notification).catch((error) => ({
+          sent: 0,
+          failed: 1,
+          skipped: false,
+          error: error instanceof Error ? error.message : 'Push delivery failed',
+        }));
+
+        const pushUpdate = {
+          pushStatus: delivery.skipped ? 'skipped' : delivery.sent > 0 ? 'sent' : 'failed',
+          pushError: delivery.error || '',
+        };
+        if (delivery.sent > 0) pushUpdate.pushSentAt = new Date();
+
+        await Notification.updateOne(
+          { _id: notification._id },
+          { $set: pushUpdate }
+        );
+      }
+
       if (!notification.deliveryChannels?.includes('whatsApp')) return;
 
       const channelInfo = recipientChannelMap.get(notification.recipient.toString());

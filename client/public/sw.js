@@ -1,5 +1,5 @@
-const APP_SHELL_CACHE = 'gtvets-app-shell-v2'
-const RUNTIME_CACHE = 'gtvets-runtime-v2'
+const APP_SHELL_CACHE = 'gtvets-app-shell-v3'
+const RUNTIME_CACHE = 'gtvets-runtime-v3'
 
 const APP_SHELL_URLS = [
   '/',
@@ -121,4 +121,58 @@ self.addEventListener('fetch', (event) => {
   }
 
   event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE, event))
+})
+
+self.addEventListener('push', (event) => {
+  let notification = {
+    title: 'GTVETS WEL',
+    body: 'You have a new notification.',
+    url: '/notifications',
+  }
+
+  try {
+    if (event.data) notification = { ...notification, ...event.data.json() }
+  } catch {
+    if (event.data) notification.body = event.data.text()
+  }
+
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    const visibleWindow = windows.find((client) => client.visibilityState === 'visible')
+
+    if (visibleWindow) {
+      visibleWindow.postMessage({ type: 'PUSH_NOTIFICATION_RECEIVED', notification })
+      return
+    }
+
+    await self.registration.showNotification(notification.title, {
+      body: notification.body,
+      icon: '/gtvets-logo-300.png',
+      badge: '/gtvets-logo-300.png',
+      tag: notification.id || undefined,
+      renotify: Boolean(notification.id),
+      data: notification,
+    })
+  })())
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const notification = event.notification.data || {}
+  const targetUrl = new URL(notification.url || '/notifications', self.location.origin)
+  const safeUrl = targetUrl.origin === self.location.origin ? targetUrl.href : `${self.location.origin}/notifications`
+
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    const client = windows[0]
+    if (client) {
+      await client.navigate(safeUrl)
+      await client.focus()
+      client.postMessage({ type: 'PUSH_NOTIFICATION_CLICKED', notification })
+      return
+    }
+    const newWindowUrl = new URL(safeUrl)
+    if (notification.id) newWindowUrl.searchParams.set('pushNotification', notification.id)
+    await self.clients.openWindow(newWindowUrl.href)
+  })())
 })

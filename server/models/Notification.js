@@ -14,8 +14,14 @@ const NotificationSchema = new mongoose.Schema({
   visibleInApp: { type: Boolean, default: true },
   deliveryChannels: [{
     type: String,
-    enum: ['inApp', 'whatsApp'],
+    enum: ['inApp', 'whatsApp', 'push'],
   }],
+  pushSentAt: { type: Date },
+  pushStatus: {
+    type: String,
+    enum: ['pending', 'sent', 'failed', 'skipped'],
+  },
+  pushError: { type: String },
   whatsAppSentAt: { type: Date },
   whatsAppStatus: {
     type: String,

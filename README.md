@@ -50,7 +50,21 @@ FRONTEND_URL=https://your-service-name.onrender.com
 WEB_CONCURRENCY=1
 ```
 
-Optional config vars are listed in `.env.example` for SMTP, Cloudinary, Twilio WhatsApp, CORS, and rate-limit tuning.
+Optional config vars are listed in `.env.example` for SMTP, Cloudinary, Twilio WhatsApp, Web Push, CORS, and rate-limit tuning.
+
+PWA push notifications
+
+Web Push is available once a VAPID key pair is configured. Generate a pair once (keep the private key secret):
+
+```bash
+cd server
+npm run generate:vapid
+```
+
+Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a contact value such as
+`VAPID_SUBJECT=mailto:admin@example.com` in the server environment. After deployment,
+users can enable push for each device from **Settings → Notifications**. Push requires
+HTTPS in production (localhost is allowed during development).
 
 Optional GTVET-IDMS integration vars:
 
