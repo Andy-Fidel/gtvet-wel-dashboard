@@ -155,7 +155,8 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
           const res = await authFetch("/api/partner-portal/placements?status=Active")
           const data = await res.json()
           const partnerLearners = (data || [])
-            .filter((placement: { assignedToCurrentSupervisor?: boolean; partnerSupervisor?: { _id: string } | null }) => {
+            .filter((placement: { assignedToCurrentSupervisor?: boolean; partnerSupervisor?: { _id: string } | null; capabilities?: { canAct?: boolean } }) => {
+              if (typeof placement.capabilities?.canAct === "boolean") return placement.capabilities.canAct
               if (!placement.partnerSupervisor?._id) return true
               return placement.assignedToCurrentSupervisor
             })

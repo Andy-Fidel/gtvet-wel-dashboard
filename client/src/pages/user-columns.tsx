@@ -28,6 +28,7 @@ export type User = {
     region?: string
     effectiveRegion?: string
     partnerId?: { _id: string, name: string }
+    partnerPortalRole?: 'Coordinator' | 'Supervisor'
     linkedLearners?: Array<{ _id: string; name: string; trackingId?: string; institution?: string }>
     invitationSentAt?: string
     inviteAcceptedAt?: string
@@ -109,7 +110,14 @@ export const columns: ColumnDef<User>[] = [
         if (role === 'IndustryPartner') color = "bg-orange-500 hover:bg-orange-600"
         if (role === 'Guardian') color = "bg-teal-500 hover:bg-teal-600"
         
-        return <Badge className={`${color} text-white border-0`}>{role}</Badge>
+        return (
+          <div className="flex flex-col items-start gap-1">
+            <Badge className={`${color} text-white border-0`}>{role}</Badge>
+            {role === 'IndustryPartner' ? (
+              <span className="text-xs font-semibold text-gray-500">{row.original.partnerPortalRole || 'Coordinator'}</span>
+            ) : null}
+          </div>
+        )
     }
   },
   {

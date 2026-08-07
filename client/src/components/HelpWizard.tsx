@@ -570,11 +570,11 @@ const guideDefinitions: GuideDefinition[] = [
       {
         title: "Partner Workflow",
         description: "Use the dashboard to keep company-side responsibilities current.",
-        targetId: "partner-dashboard-placements",
+        targetId: "partner-dashboard-sections",
         bullets: [
-          "Assign supervisors where missing and keep placement supervision clear.",
-          "Submit attendance and employer evaluations on time.",
-          "Respond to support items and placement messages without opening duplicate threads.",
+          "Overview is your daily action list; start there before browsing records.",
+          "Use Placements for agreements, messages, evaluations, and supervisor ownership.",
+          "Use Hours for attendance and Team for workload and coordination.",
         ],
       },
     ],

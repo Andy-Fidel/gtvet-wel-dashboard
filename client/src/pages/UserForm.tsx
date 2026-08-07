@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useState, useEffect } from "react"
+import { useCallback, useState, useEffect } from "react"
 import { Loader2 } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -30,6 +30,7 @@ const baseFormSchema = z.object({
   institution: z.string().optional(),
   region: z.string().optional(),
   partnerId: z.string().optional(),
+  partnerPortalRole: z.enum(["Coordinator", "Supervisor"]).optional(),
   linkedLearners: z.array(z.string()).optional(),
 });
 
@@ -66,6 +67,7 @@ interface UserFormProps {
     initialData?: UserFormValues & { 
         _id?: string; 
         partnerId?: string | { _id: string; name: string };
+        partnerPortalRole?: "Coordinator" | "Supervisor";
         linkedLearners?: Array<string | { _id: string; name: string; trackingId?: string; institution?: string }>;
     };
 }
@@ -129,18 +131,18 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
   const [confirmationState, setConfirmationState] = useState<PrivilegedConfirmationState | null>(null)
   const { authFetch, user: currentUser } = useAuth()
 
-  const getPartnerId = () => {
+  const getPartnerId = useCallback(() => {
     const pId = initialData?.partnerId;
     if (pId && typeof pId === 'object' && '_id' in pId) {
         return (pId as { _id: string })._id;
     }
     return (pId as string) || "";
-  };
+  }, [initialData?.partnerId]);
   const defaultPartnerId = getPartnerId();
-  const getLinkedLearners = (): string[] =>
+  const getLinkedLearners = useCallback((): string[] =>
     ((initialData?.linkedLearners || []) as Array<string | { _id: string }>).map((learner) =>
       typeof learner === "string" ? learner : learner._id
-    );
+    ), [initialData?.linkedLearners]);
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(formSchema),
@@ -148,6 +150,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       ...initialData,
       password: "",
       partnerId: defaultPartnerId,
+      partnerPortalRole: initialData.role === "IndustryPartner" ? (initialData.partnerPortalRole || "Coordinator") : undefined,
     } : {
       name: "",
       email: "",
@@ -158,6 +161,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       institution: currentUser?.role === 'Admin' ? (currentUser?.institution || "") : "",
       region: currentUser?.region || "",
       partnerId: "",
+      partnerPortalRole: "Supervisor",
       linkedLearners: [],
     },
   })
@@ -167,6 +171,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       ...initialData,
       password: "",
       partnerId: getPartnerId(),
+      partnerPortalRole: initialData.role === "IndustryPartner" ? (initialData.partnerPortalRole || "Coordinator") : undefined,
     } : {
       name: "",
       email: "",
@@ -177,13 +182,14 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       institution: currentUser?.role === 'Admin' ? (currentUser?.institution || "") : "",
       region: currentUser?.region || "",
       partnerId: "",
+      partnerPortalRole: "Supervisor",
       linkedLearners: [],
     }
 
     nextValues.linkedLearners = initialData ? getLinkedLearners() : []
 
     form.reset(nextValues)
-  }, [currentUser?.institution, currentUser?.region, currentUser?.role, form, initialData])
+  }, [currentUser?.institution, currentUser?.region, currentUser?.role, form, getLinkedLearners, getPartnerId, initialData])
 
   const selectedRole = form.watch("role");
   const selectedInstitution = form.watch("institution")
@@ -271,6 +277,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
     } else if (selectedRole === "IndustryPartner") {
       form.setValue("institution", "")
       form.setValue("linkedLearners", [])
+      if (!form.getValues("partnerPortalRole")) form.setValue("partnerPortalRole", "Supervisor")
     } else if (selectedRole === "Guardian") {
       form.setValue("partnerId", "")
     } else if (selectedRole === "SuperAdmin") {
@@ -523,6 +530,22 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
                     </FormItem>
                 )} />
             )}
+            {currentUser?.role === 'SuperAdmin' && selectedRole === 'IndustryPartner' ? (
+                <FormField control={form.control} name="partnerPortalRole" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-semibold text-gray-900">Partner Portal Responsibility</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value || "Supervisor"}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select responsibility" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          <SelectItem value="Coordinator">Coordinator — manages assignments and all partner work</SelectItem>
+                          <SelectItem value="Supervisor">Supervisor — acts only on assigned placements</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-gray-500">Use Coordinator sparingly; supervisors cannot reassign placements.</p>
+                      <FormMessage />
+                    </FormItem>
+                )} />
+            ) : null}
         </div>
 
         {selectedRole === "Guardian" ? (

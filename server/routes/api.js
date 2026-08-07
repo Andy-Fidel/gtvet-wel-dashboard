@@ -90,7 +90,15 @@ const getPartnerId = (user) => user?.partnerId?._id || user?.partnerId || null;
 
 const buildAttendanceScope = async (user) => {
   if (user.role === 'IndustryPartner') {
-    return { partner: getPartnerId(user) };
+    const partner = getPartnerId(user);
+    if (getPartnerPortalRole(user) === 'Supervisor') {
+      const assignedPlacementIds = await Placement.find({
+        partner,
+        partnerSupervisor: user._id,
+      }).distinct('_id');
+      return { partner, placement: { $in: assignedPlacementIds } };
+    }
+    return { partner };
   }
   if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') {
     return getFilter(user);
@@ -749,12 +757,23 @@ const canManageSupportTicketStatus = (user, ticket) => {
 const canManageSupportAssignments = (user) => ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(user.role);
 const canManageOperationalOwnership = (user) => ['Admin', 'Manager', 'SuperAdmin', 'RegionalAdmin'].includes(user.role);
 
+const getPartnerPortalRole = (user) => {
+  if (user?.role !== 'IndustryPartner') return null;
+  // Partner accounts created before scoped partner roles were introduced were
+  // effectively coordinators. Preserve that access until they are explicitly updated.
+  return user.partnerPortalRole || 'Coordinator';
+};
+
+const canManagePartnerAssignments = (user) => (
+  user?.role === 'IndustryPartner' && getPartnerPortalRole(user) === 'Coordinator'
+);
+
 const canActOnPartnerPlacement = (user, placement) => {
   if (user.role !== 'IndustryPartner') return true;
   const userPartnerId = getPartnerId(user)?.toString();
   const placementPartnerId = placement?.partner?._id?.toString?.() || placement?.partner?.toString?.();
   if (!userPartnerId || !placementPartnerId || placementPartnerId !== userPartnerId) return false;
-  if (!placement.partnerSupervisor) return true;
+  if (!placement.partnerSupervisor) return canManagePartnerAssignments(user);
   const assignedSupervisorId = placement.partnerSupervisor?._id?.toString?.() || placement.partnerSupervisor?.toString?.();
   return assignedSupervisorId === user._id.toString();
 };
@@ -1276,6 +1295,8 @@ const normalizeUserPayloadForRole = async (actor, payload, existingUser = null) 
     return { status: 400, message: 'Role is required' };
   }
 
+  if (targetRole !== 'IndustryPartner') normalized.partnerPortalRole = undefined;
+
   const manageableRoles = getManageableUserRoles(actor.role);
   if (!manageableRoles.includes(targetRole)) {
     return { status: 403, message: `Forbidden: You cannot assign the ${targetRole} role` };
@@ -1317,6 +1338,7 @@ const normalizeUserPayloadForRole = async (actor, payload, existingUser = null) 
     normalized.institution = 'N/A';
     normalized.region = partner.region || '';
     normalized.linkedLearners = [];
+    normalized.partnerPortalRole = normalized.partnerPortalRole || (existingUser ? (existingUser.partnerPortalRole || 'Coordinator') : 'Supervisor');
     return { normalized };
   }
 
@@ -12054,7 +12076,8 @@ router.post('/industry-partners/:id/create-account', requireRole('SuperAdmin', '
             role: 'IndustryPartner',
             phone: partner.contactPhone,
             institution: 'N/A',
-            partnerId: partner._id
+            partnerId: partner._id,
+            partnerPortalRole: 'Coordinator'
         });
 
         await newUser.save();
@@ -12099,13 +12122,13 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
 
         const [messages, attendanceLogs, evaluations, supportTickets, agreements] = await Promise.all([
             PlacementMessage.find({ placement: { $in: placementIds } }).select('placement createdAt senderUser readBy').lean(),
-            AttendanceLog.find({ placement: { $in: placementIds } }).select('placement periodEnd status submittedSource').sort({ periodEnd: -1 }).lean(),
+            AttendanceLog.find({ placement: { $in: placementIds } }).select('placement periodEnd status submittedSource signedOffAt createdAt updatedAt').sort({ periodEnd: -1 }).lean(),
             EmployerEvaluation.find({ partner: partnerId, learner: { $in: learnerIds } })
                 .select('learner evaluatorName evaluatorPosition evaluationDate overallScore strengths areasForImprovement wouldHire additionalComments metrics version isCurrent supersedes')
                 .sort({ version: -1, evaluationDate: -1 })
                 .lean(),
             SupportTicket.find({ partnerId, status: { $in: ['Open', 'InProgress'] } })
-                .select('learner placement subject requesterRole awaitingParty updatedAt')
+                .select('learner placement subject ticketType priority status requesterRole awaitingParty lastActivityAt resolutionDueAt createdAt updatedAt')
                 .lean(),
             PlacementAgreement.find({ placement: { $in: placementIds } }).lean(),
         ]);
@@ -12168,6 +12191,90 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
                 : placement.startDate
                     ? new Date(new Date(placement.startDate).getTime() + settings.attendanceCadenceDays * 24 * 60 * 60 * 1000)
                     : null;
+            const placementTickets = supportByPlacement.get(placement._id.toString()) || [];
+            const ownerName = placement.partnerSupervisor?.name || 'Partner coordinator';
+            const now = Date.now();
+            const buildTicketHandoff = (ticketType) => {
+                const tickets = placementTickets.filter((ticket) => (ticket.ticketType || 'Support') === ticketType);
+                if (tickets.length === 0) {
+                    return {
+                        state: 'Current',
+                        ownerName,
+                        awaitingParty: 'None',
+                        dueAt: null,
+                        lastActivityAt: null,
+                        nextAction: ticketType === 'Incident' ? 'Report an incident if one occurs.' : 'Raise a support issue if assistance is needed.',
+                    };
+                }
+                const latestTicket = [...tickets].sort((a, b) => new Date(b.lastActivityAt || b.updatedAt || b.createdAt).getTime() - new Date(a.lastActivityAt || a.updatedAt || a.createdAt).getTime())[0];
+                const overdue = latestTicket.resolutionDueAt && new Date(latestTicket.resolutionDueAt).getTime() < now;
+                return {
+                    state: overdue ? 'Overdue' : latestTicket.status === 'InProgress' ? 'In Progress' : `Awaiting ${latestTicket.awaitingParty}`,
+                    ownerName: latestTicket.awaitingParty === 'Partner' ? ownerName : latestTicket.awaitingParty || 'Support',
+                    awaitingParty: latestTicket.awaitingParty || 'Support',
+                    dueAt: latestTicket.resolutionDueAt || null,
+                    lastActivityAt: latestTicket.lastActivityAt || latestTicket.updatedAt || latestTicket.createdAt || null,
+                    nextAction: latestTicket.awaitingParty === 'Partner'
+                        ? `Respond to “${latestTicket.subject}”.`
+                        : `${latestTicket.awaitingParty || 'Support'} is handling “${latestTicket.subject}”.`,
+                };
+            };
+            const agreement = agreementsByPlacement.get(placement._id.toString()) || null;
+            const agreementSummary = buildPlacementAgreementSummary({
+                placement,
+                learner: placement.learner,
+                agreement,
+            });
+            const attendanceOverdue = attendanceDueAt && attendanceDueAt.getTime() < now;
+            const agreementOverdue = !agreementSummary.fullySigned && placement.startDate && new Date(placement.startDate).getTime() < now;
+            const workflowHandoffs = {
+                attendance: {
+                    state: latestAttendance?.status === 'Rejected'
+                        ? 'Returned'
+                        : attendanceOverdue
+                            ? 'Overdue'
+                            : latestAttendance?.status === 'Pending'
+                                ? 'Awaiting Partner'
+                                : latestAttendance?.status === 'SignedOff' ? 'Completed' : 'Pending',
+                    ownerName: latestAttendance?.status === 'Rejected' ? placement.institution : ownerName,
+                    awaitingParty: latestAttendance?.status === 'Rejected' ? 'Institution' : latestAttendance?.status === 'Pending' || !latestAttendance ? 'Partner' : 'None',
+                    dueAt: attendanceDueAt,
+                    lastActivityAt: latestAttendance?.updatedAt || latestAttendance?.signedOffAt || latestAttendance?.periodEnd || null,
+                    nextAction: latestAttendance?.status === 'Rejected'
+                        ? 'Wait for the institution to correct and resubmit the returned entry.'
+                        : latestAttendance?.status === 'Pending'
+                            ? 'Review and sign off the submitted hours.'
+                            : attendanceOverdue ? 'Record the overdue attendance hours.' : 'Record the next attendance entry when due.',
+                },
+                agreement: {
+                    state: agreementSummary.fullySigned ? 'Completed' : agreementOverdue ? 'Overdue' : agreementSummary.employerSigned ? 'Awaiting Learner' : 'Awaiting Partner',
+                    ownerName: agreementSummary.employerSigned ? placement.institution : ownerName,
+                    awaitingParty: agreementSummary.fullySigned ? 'None' : agreementSummary.employerSigned ? 'Learner' : 'Partner',
+                    dueAt: placement.startDate || null,
+                    lastActivityAt: agreement?.updatedAt || agreementSummary.employerSignedAt || agreementSummary.learnerSignedAt || null,
+                    nextAction: agreementSummary.fullySigned
+                        ? 'No action required; both signatures are complete.'
+                        : agreementSummary.employerSigned ? 'Learner signature is still required.' : 'Sign the employer acknowledgement.',
+                },
+                evaluation: {
+                    state: evaluation ? 'Completed' : daysUntilEvaluationDue !== null && daysUntilEvaluationDue < 0 ? 'Overdue' : 'Pending',
+                    ownerName,
+                    awaitingParty: evaluation ? 'None' : 'Partner',
+                    dueAt: placement.endDate || null,
+                    lastActivityAt: evaluation?.evaluationDate || null,
+                    nextAction: evaluation ? 'Review or revise the submitted evaluation if needed.' : 'Complete the employer evaluation before placement ends.',
+                },
+                support: buildTicketHandoff('Support'),
+                incident: buildTicketHandoff('Incident'),
+                messages: {
+                    state: unread?.unreadCount ? 'Awaiting Partner' : 'Current',
+                    ownerName,
+                    awaitingParty: unread?.unreadCount ? 'Partner' : 'None',
+                    dueAt: null,
+                    lastActivityAt: unread?.lastMessageAt || null,
+                    nextAction: unread?.unreadCount ? `Read and respond to ${unread.unreadCount} unread message(s).` : 'No unread placement messages.',
+                },
+            };
 
             return {
                 ...placement,
@@ -12191,7 +12298,7 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
                 daysUntilEvaluationDue,
                 evaluation,
                 evaluationHistory,
-                openSupportCount: (supportByPlacement.get(placement._id.toString()) || []).length,
+                openSupportCount: placementTickets.filter((ticket) => (ticket.ticketType || 'Support') === 'Support').length,
                 closureMeta: placement.closedAt || placement.closedBy || placement.closureReason || placement.closureNote
                     ? {
                         closedAt: placement.closedAt || null,
@@ -12200,11 +12307,13 @@ router.get('/partner-portal/placements', requireRole('IndustryPartner'), async (
                         closureNote: placement.closureNote || '',
                     }
                     : null,
-                agreementSummary: buildPlacementAgreementSummary({
-                    placement,
-                    learner: placement.learner,
-                    agreement: agreementsByPlacement.get(placement._id.toString()) || null,
-                }),
+                agreementSummary,
+                workflowHandoffs,
+                capabilities: {
+                    canAssignSupervisor: canManagePartnerAssignments(req.user),
+                    canAct: canActOnPartnerPlacement(req.user, placement),
+                    canMessage: true,
+                },
             };
         }));
     } catch (error) {
@@ -12226,11 +12335,11 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
         const learnerIds = placements.map((placement) => placement.learner?._id).filter(Boolean);
 
         const [attendanceLogs, evaluations, messages, supportTickets] = await Promise.all([
-            AttendanceLog.find({ placement: { $in: placementIds } }).select('placement periodEnd status submittedSource').sort({ periodEnd: -1 }).lean(),
+            AttendanceLog.find({ placement: { $in: placementIds } }).select('placement periodEnd status submittedSource createdAt updatedAt').sort({ periodEnd: -1 }).lean(),
             EmployerEvaluation.find({ partner: partnerId, learner: { $in: learnerIds } }).select('learner evaluationDate').lean(),
             PlacementMessage.find({ placement: { $in: placementIds } }).select('placement senderUser readBy createdAt').lean(),
             SupportTicket.find({ partnerId, status: { $in: ['Open', 'InProgress'] } })
-                .select('subject learner placement requesterRole awaitingParty updatedAt')
+                .select('subject learner placement ticketType status requesterRole awaitingParty lastActivityAt resolutionDueAt createdAt updatedAt')
                 .lean(),
         ]);
 
@@ -12244,8 +12353,13 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
         const evaluationsByLearner = new Set(evaluations.map((evaluation) => evaluation.learner.toString()));
 
         const unreadMessageCounts = new Map();
+        const lastMessageByPlacement = new Map();
         messages.forEach((message) => {
             const key = message.placement.toString();
+            const previousLastMessage = lastMessageByPlacement.get(key);
+            if (!previousLastMessage || new Date(message.createdAt) > new Date(previousLastMessage)) {
+                lastMessageByPlacement.set(key, message.createdAt);
+            }
             const hasRead = (message.readBy || []).some((readerId) => readerId.toString() === req.user._id.toString());
             const isOwnMessage = message.senderUser?.toString() === req.user._id.toString();
             if (!isOwnMessage && !hasRead) {
@@ -12270,9 +12384,12 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
             if (!learner) return;
             const partnerSupervisorId = placement.partnerSupervisor?._id?.toString();
 
-            if (!partnerSupervisorId) {
+            if (!partnerSupervisorId && canManagePartnerAssignments(req.user)) {
                 actionItems.push({
                     type: 'Supervisor Assignment',
+                    actionType: 'assignment',
+                    actionLabel: 'Assign supervisor',
+                    section: 'placements',
                     placementId,
                     learnerId: learner._id,
                     learnerName: learner.name,
@@ -12280,6 +12397,12 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
                     message: 'This placement has not been assigned to a company supervisor yet.',
                     actionUrl: '/partner-dashboard',
                     severity: 'medium',
+                    ownerId: null,
+                    ownerName: 'Partner coordinator',
+                    awaitingParty: 'Partner',
+                    state: 'Needs Assignment',
+                    lastActivityAt: placement.updatedAt || placement.createdAt,
+                    nextAction: 'Assign a company supervisor before operational work begins.',
                 });
             }
 
@@ -12298,6 +12421,9 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
             if (attendanceDueAt && attendanceDueAt.getTime() < now) {
                 actionItems.push({
                     type: 'Overdue Hours',
+                    actionType: 'attendance',
+                    actionLabel: 'Record hours',
+                    section: 'hours',
                     placementId,
                     learnerId: learner._id,
                     learnerName: learner.name,
@@ -12305,20 +12431,13 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
                     message: `Hours are overdue. Expected by ${attendanceDueAt.toLocaleDateString()}.`,
                     actionUrl: `/attendance-logs?learnerId=${learner._id}`,
                     severity: 'high',
-                });
-            }
-
-            const returnedLog = logs.find((log) => log.status === 'Rejected');
-            if (returnedLog) {
-                actionItems.push({
-                    type: 'Returned Hours',
-                    placementId,
-                    learnerId: learner._id,
-                    learnerName: learner.name,
-                    trackingId: learner.trackingId,
-                    message: 'A submitted hours entry was returned and needs correction.',
-                    actionUrl: `/attendance-logs?learnerId=${learner._id}`,
-                    severity: 'high',
+                    dueAt: attendanceDueAt,
+                    ownerId: partnerSupervisorId || null,
+                    ownerName: placement.partnerSupervisor?.name || 'Partner coordinator',
+                    awaitingParty: 'Partner',
+                    state: 'Overdue',
+                    lastActivityAt: latestLog?.updatedAt || latestLog?.periodEnd || placement.updatedAt,
+                    nextAction: 'Record the missing attendance hours.',
                 });
             }
 
@@ -12327,6 +12446,9 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
                 if (daysUntilEnd <= 14) {
                     actionItems.push({
                         type: 'Evaluation Due',
+                        actionType: 'evaluation',
+                        actionLabel: 'Complete evaluation',
+                        section: 'placements',
                         placementId,
                         learnerId: learner._id,
                         learnerName: learner.name,
@@ -12334,6 +12456,13 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
                         message: `Employer evaluation is due in ${Math.max(daysUntilEnd, 0)} day(s).`,
                         actionUrl: `/partner-dashboard`,
                         severity: daysUntilEnd <= 3 ? 'high' : 'medium',
+                        dueAt: placement.endDate,
+                        ownerId: partnerSupervisorId || null,
+                        ownerName: placement.partnerSupervisor?.name || 'Partner coordinator',
+                        awaitingParty: 'Partner',
+                        state: daysUntilEnd < 0 ? 'Overdue' : 'Pending',
+                        lastActivityAt: placement.updatedAt || placement.startDate,
+                        nextAction: 'Complete the employer evaluation before the placement closes.',
                     });
                 }
             }
@@ -12341,6 +12470,9 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
             if (unreadMessageCounts.get(placementId)) {
                 actionItems.push({
                     type: 'Unread Messages',
+                    actionType: 'message',
+                    actionLabel: 'Read messages',
+                    section: 'placements',
                     placementId,
                     learnerId: learner._id,
                     learnerName: learner.name,
@@ -12348,6 +12480,12 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
                     message: `${unreadMessageCounts.get(placementId)} unread placement message(s).`,
                     actionUrl: `/partner-dashboard`,
                     severity: 'medium',
+                    ownerId: partnerSupervisorId || null,
+                    ownerName: placement.partnerSupervisor?.name || 'Partner team',
+                    awaitingParty: 'Partner',
+                    state: 'Awaiting Partner',
+                    lastActivityAt: lastMessageByPlacement.get(placementId) || placement.updatedAt,
+                    nextAction: 'Read the conversation and respond if required.',
                 });
             }
 
@@ -12355,6 +12493,9 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
             if (!readiness.isOperational) {
                 actionItems.push({
                     type: 'Supervisor Setup',
+                    actionType: 'assignment',
+                    actionLabel: 'Complete setup',
+                    section: 'placements',
                     placementId,
                     learnerId: learner._id,
                     learnerName: learner.name,
@@ -12362,6 +12503,12 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
                     message: `Placement is missing ${readiness.missingFields.join(', ')}.`,
                     actionUrl: `/partner-dashboard`,
                     severity: 'medium',
+                    ownerId: partnerSupervisorId || null,
+                    ownerName: placement.partnerSupervisor?.name || 'Partner coordinator',
+                    awaitingParty: 'Partner',
+                    state: 'Setup Required',
+                    lastActivityAt: placement.updatedAt || placement.createdAt,
+                    nextAction: `Add ${readiness.missingFields.join(', ')} to complete placement setup.`,
                 });
             }
 
@@ -12371,6 +12518,9 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
             if (awaitingPartner) {
                 actionItems.push({
                     type: 'Support Follow-up',
+                    actionType: 'support',
+                    actionLabel: 'Open support ticket',
+                    section: 'overview',
                     placementId,
                     learnerId: learner._id,
                     learnerName: learner.name,
@@ -12378,6 +12528,13 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
                     message: `Support ticket "${awaitingPartner.subject}" is awaiting your response.`,
                     actionUrl: `/support-center?ticket=${awaitingPartner._id}`,
                     severity: 'medium',
+                    ownerId: partnerSupervisorId || null,
+                    ownerName: placement.partnerSupervisor?.name || 'Partner team',
+                    awaitingParty: 'Partner',
+                    state: awaitingPartner.resolutionDueAt && new Date(awaitingPartner.resolutionDueAt).getTime() < now ? 'Overdue' : 'Awaiting Partner',
+                    dueAt: awaitingPartner.resolutionDueAt || null,
+                    lastActivityAt: awaitingPartner.lastActivityAt || awaitingPartner.updatedAt || awaitingPartner.createdAt,
+                    nextAction: `Respond to support ticket “${awaitingPartner.subject}”.`,
                 });
             }
         });
@@ -12392,11 +12549,13 @@ router.get('/partner-portal/action-queue', requireRole('IndustryPartner'), async
 router.get('/partner-portal/supervisors', requireRole('IndustryPartner'), async (req, res) => {
     try {
         const partnerId = getPartnerId(req.user);
-        const supervisors = await User.find({
+        const supervisorFilter = {
             role: 'IndustryPartner',
             status: 'Active',
             partnerId,
-        }).select('name email phone');
+        };
+        if (!canManagePartnerAssignments(req.user)) supervisorFilter._id = req.user._id;
+        const supervisors = await User.find(supervisorFilter).select('name email phone partnerPortalRole');
 
         res.json(supervisors);
     } catch (error) {
@@ -12409,13 +12568,17 @@ router.get('/partner-portal/performance', requireRole('IndustryPartner'), async 
     try {
         const partnerId = getPartnerId(req.user);
         const settings = await getOrCreateSystemSettings();
-        const supervisors = await User.find({
+        const supervisorFilter = {
             role: 'IndustryPartner',
             status: 'Active',
             partnerId,
-        }).select('name email phone').lean();
+        };
+        if (!canManagePartnerAssignments(req.user)) supervisorFilter._id = req.user._id;
+        const supervisors = await User.find(supervisorFilter).select('name email phone partnerPortalRole').lean();
 
-        const placements = await Placement.find({ partner: partnerId, status: 'Active' })
+        const placementFilter = { partner: partnerId, status: 'Active' };
+        if (!canManagePartnerAssignments(req.user)) placementFilter.partnerSupervisor = req.user._id;
+        const placements = await Placement.find(placementFilter)
             .populate('learner', 'name trackingId program')
             .populate('partnerSupervisor', 'name email phone')
             .select('learner companyName startDate endDate partnerSupervisor')
@@ -12558,6 +12721,9 @@ router.get('/partner-portal/performance', requireRole('IndustryPartner'), async 
 
 router.put('/partner-portal/placements/:id/supervisor', requireRole('IndustryPartner'), async (req, res) => {
     try {
+        if (!canManagePartnerAssignments(req.user)) {
+            return res.status(403).json({ message: 'Only partner coordinators can assign placement supervisors' });
+        }
         const partnerId = getPartnerId(req.user);
         const { partnerSupervisorId } = req.body;
         const placement = await Placement.findOne({ _id: req.params.id, partner: partnerId })

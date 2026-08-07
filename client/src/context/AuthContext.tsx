@@ -17,6 +17,7 @@ interface User {
     _id: string;
     name: string;
   };
+  partnerPortalRole?: 'Coordinator' | 'Supervisor';
   linkedLearners?: Array<{
     _id: string;
     name: string;

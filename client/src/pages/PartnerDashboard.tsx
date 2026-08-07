@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
@@ -19,6 +19,7 @@ import { AttendanceLogForm } from "./AttendanceLogForm"
 import { PlacementMessagesDialog } from "@/components/PlacementMessagesDialog"
 import { DocumentList } from "@/components/DocumentList"
 import { DocumentUpload } from "@/components/DocumentUpload"
+import { PartnerHandoffStatus, type PartnerHandoff } from "@/components/PartnerHandoffStatus"
 import { downloadPlacementAgreementPdf } from "@/lib/placementAgreementPdf"
 import { downloadWELLogbookPdf } from "@/lib/welLogbookPdf"
 
@@ -31,6 +32,36 @@ interface PartnerActionItem {
   message: string
   actionUrl: string
   severity: "high" | "medium" | "low"
+  actionType?: "evaluation" | "attendance" | "assignment" | "message" | "support"
+  actionLabel?: string
+  section?: DashboardSection
+  dueAt?: string | null
+  ownerId?: string | null
+  ownerName?: string
+  awaitingParty?: "Partner" | "Institution" | "Support"
+  state?: string
+  lastActivityAt?: string | null
+  nextAction?: string
+}
+
+type DashboardSection = "overview" | "placements" | "hours" | "team"
+
+const LEGACY_ACTION_TYPES: Record<string, NonNullable<PartnerActionItem["actionType"]>> = {
+  "Evaluation Due": "evaluation",
+  "Overdue Hours": "attendance",
+  "Returned Hours": "attendance",
+  "Supervisor Assignment": "assignment",
+  "Supervisor Setup": "assignment",
+  "Unread Messages": "message",
+  "Support Follow-up": "support",
+}
+
+const ACTION_LABELS: Record<NonNullable<PartnerActionItem["actionType"]>, string> = {
+  evaluation: "Complete evaluation",
+  attendance: "Review hours",
+  assignment: "Assign supervisor",
+  message: "Read messages",
+  support: "Open support ticket",
 }
 
 interface PartnerPlacement {
@@ -125,6 +156,21 @@ interface PartnerPlacement {
     learnerSignatureName?: string
     fullySigned: boolean
   }
+  capabilities?: {
+    canAssignSupervisor: boolean
+    canAct: boolean
+    canMessage: boolean
+  }
+  workflowHandoffs?: Record<"attendance" | "agreement" | "evaluation" | "support" | "incident" | "messages", PartnerHandoff>
+}
+
+const HANDOFF_LABELS: Record<keyof NonNullable<PartnerPlacement["workflowHandoffs"]>, string> = {
+  attendance: "Attendance",
+  agreement: "Placement Agreement",
+  evaluation: "Employer Evaluation",
+  support: "Support",
+  incident: "Incidents",
+  messages: "Messages",
 }
 
 type TicketCategory = "Technical" | "Access" | "Data" | "Workflow" | "Training" | "Other"
@@ -136,6 +182,7 @@ interface PartnerSupervisor {
   name: string
   email?: string
   phone?: string
+  partnerPortalRole?: "Coordinator" | "Supervisor"
 }
 
 interface AttendanceLogEntry {
@@ -169,6 +216,8 @@ interface AttendanceLogEntry {
     role: string
   } | null
   signedOffAt?: string | null
+  createdAt?: string
+  updatedAt?: string
 }
 
 type AttendanceStatus = "Pending" | "SignedOff" | "Rejected"
@@ -322,6 +371,7 @@ export default function PartnerDashboard() {
   const [agreementSubmitting, setAgreementSubmitting] = useState(false)
   const [supportSubmitting, setSupportSubmitting] = useState(false)
   const [incidentSubmitting, setIncidentSubmitting] = useState(false)
+  const handledDeepLinkRef = useRef("")
   const [supportDraft, setSupportDraft] = useState({
     subject: "",
     category: "Workflow" as TicketCategory,
@@ -341,6 +391,11 @@ export default function PartnerDashboard() {
     signatureName: "",
   })
   const placementView = searchParams.get("view") === "mine" ? "mine" : "all"
+  const sectionParam = searchParams.get("section")
+  const dashboardSection: DashboardSection = sectionParam === "placements" || sectionParam === "hours" || sectionParam === "team"
+    ? sectionParam
+    : "overview"
+  const isPartnerCoordinator = user?.partnerPortalRole !== "Supervisor"
 
   const activePlacements = useMemo(
     () => placements.filter((placement) => placement.status === "Active"),
@@ -416,9 +471,7 @@ export default function PartnerDashboard() {
   const filteredPlacements = useMemo(() => {
     const query = searchQuery.toLowerCase()
     return activePlacements.filter((placement) => {
-      if (placementView === "mine" && placement.partnerSupervisor?._id && !placement.assignedToCurrentSupervisor) {
-        return false
-      }
+      if (placementView === "mine" && !placement.assignedToCurrentSupervisor && !(isPartnerCoordinator && !placement.partnerSupervisor?._id)) return false
       const fields = [
         placement.learner?.name || "",
         placement.learner?.trackingId || "",
@@ -428,7 +481,7 @@ export default function PartnerDashboard() {
       ]
       return fields.some((field) => field.toLowerCase().includes(query))
     })
-  }, [activePlacements, placementView, searchQuery])
+  }, [activePlacements, isPartnerCoordinator, placementView, searchQuery])
 
   useEffect(() => {
     if (filteredPlacements.length === 0) {
@@ -449,6 +502,29 @@ export default function PartnerDashboard() {
     pendingEvaluations: activePlacements.filter((placement) => !placement.evaluationSubmitted).length,
     supportBacklog: activePlacements.reduce((sum, placement) => sum + (placement.openSupportCount || 0), 0),
   }), [activePlacements])
+
+  const recentlyCompleted = useMemo(() => activePlacements.flatMap((placement) => {
+    if (!placement.workflowHandoffs) return []
+    return (Object.keys(HANDOFF_LABELS) as Array<keyof typeof HANDOFF_LABELS>).flatMap((key) => {
+      const handoff = placement.workflowHandoffs?.[key]
+      if (!handoff || handoff.state !== "Completed" || !handoff.lastActivityAt) return []
+      return [{
+        key: `${placement._id}-${key}`,
+        label: HANDOFF_LABELS[key],
+        learnerName: placement.learner?.name || "Placement learner",
+        trackingId: placement.learner?.trackingId || "",
+        completedAt: handoff.lastActivityAt,
+      }]
+    })
+  }).sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()).slice(0, 5), [activePlacements])
+
+  const canActOnPlacement = useCallback((placement: PartnerPlacement) => (
+    placement.capabilities?.canAct ?? (isPartnerCoordinator || Boolean(placement.assignedToCurrentSupervisor))
+  ), [isPartnerCoordinator])
+
+  const canAssignPlacement = (placement: PartnerPlacement) => (
+    placement.capabilities?.canAssignSupervisor ?? isPartnerCoordinator
+  )
 
   const handleOpenEvaluation = (placement: PartnerPlacement) => {
     if (!placement.learner) return
@@ -877,6 +953,74 @@ export default function PartnerDashboard() {
     }
     setSearchParams(next, { replace: true })
   }
+
+  const updateDashboardSection = (section: DashboardSection, extra: Record<string, string | null> = {}) => {
+    const next = new URLSearchParams(searchParams)
+    if (section === "overview") next.delete("section")
+    else next.set("section", section)
+    Object.entries(extra).forEach(([key, value]) => {
+      if (value) next.set(key, value)
+      else next.delete(key)
+    })
+    setSearchParams(next, { replace: false })
+  }
+
+  const focusPlacement = useCallback((placementId: string) => {
+    setExpandedPlacementId(placementId)
+    window.setTimeout(() => {
+      document.getElementById(`placement-workspace-${placementId}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
+    }, 100)
+  }, [])
+
+  const handleActionItem = (item: PartnerActionItem) => {
+    const placement = placements.find((entry) => entry._id === item.placementId)
+    const actionType = item.actionType || LEGACY_ACTION_TYPES[item.type]
+
+    if (actionType === "support") {
+      navigate(item.actionUrl)
+      return
+    }
+    if (actionType === "message" && placement) {
+      updateDashboardSection("placements", { placement: placement._id, action: "message" })
+      focusPlacement(placement._id)
+      handleOpenMessages(placement)
+      return
+    }
+    if (actionType === "evaluation" && placement) {
+      updateDashboardSection("placements", { placement: placement._id, action: "evaluation" })
+      focusPlacement(placement._id)
+      handleOpenEvaluation(placement)
+      return
+    }
+    if (actionType === "attendance") {
+      setAttendanceSearchQuery(item.trackingId)
+      updateDashboardSection("hours", { learner: item.learnerId, action: "attendance" })
+      return
+    }
+    if (actionType === "assignment" && placement) {
+      updateDashboardSection("placements", { placement: placement._id, action: "assignment" })
+      focusPlacement(placement._id)
+      return
+    }
+
+    navigate(item.actionUrl)
+  }
+
+  useEffect(() => {
+    const placementId = searchParams.get("placement")
+    const action = searchParams.get("action")
+    if (!placementId || !action || placements.length === 0) return
+
+    const deepLinkKey = `${placementId}:${action}`
+    if (handledDeepLinkRef.current === deepLinkKey) return
+    const placement = placements.find((entry) => entry._id === placementId)
+    if (!placement) return
+
+    handledDeepLinkRef.current = deepLinkKey
+    focusPlacement(placementId)
+    if (action === "evaluation" && canActOnPlacement(placement)) handleOpenEvaluation(placement)
+    if (action === "message") handleOpenMessages(placement)
+  }, [canActOnPlacement, focusPlacement, placements, searchParams])
 
   return (
     <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
@@ -1521,7 +1665,7 @@ export default function PartnerDashboard() {
           >
             View Placement History
           </Button>
-          <div className="flex items-center gap-2 rounded-2xl bg-white border border-gray-200 p-1">
+          {dashboardSection === "placements" ? <div className="flex items-center gap-2 rounded-2xl bg-white border border-gray-200 p-1">
             <Button
               type="button"
               variant="ghost"
@@ -1538,8 +1682,8 @@ export default function PartnerDashboard() {
             >
               My Placements
             </Button>
-          </div>
-          <div className="relative">
+          </div> : null}
+          {dashboardSection === "placements" ? <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
             <Input
               placeholder="Search learners, company, or institution..."
@@ -1547,25 +1691,48 @@ export default function PartnerDashboard() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10 pr-4 h-11 bg-white border-gray-200 rounded-xl w-full lg:w-80"
             />
-          </div>
+          </div> : null}
         </div>
       </div>
 
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-          {[...Array(5)].map((_, index) => <Card key={index} className="h-28 rounded-2xl animate-pulse bg-white border-none shadow-xl" />)}
+      <nav data-help-id="partner-dashboard-sections" aria-label="Partner dashboard sections" className="grid grid-cols-2 gap-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm md:grid-cols-4">
+        {([
+          { id: "overview", label: "Overview", icon: ClipboardCheck },
+          { id: "placements", label: "Placements", icon: Briefcase },
+          { id: "hours", label: "Hours", icon: Clock3 },
+          { id: "team", label: "Team", icon: Users },
+        ] as const).map(({ id, label, icon: Icon }) => (
+          <Button
+            key={id}
+            type="button"
+            variant="ghost"
+            aria-current={dashboardSection === id ? "page" : undefined}
+            className={`min-h-11 rounded-xl ${dashboardSection === id ? "bg-gray-900 text-white hover:bg-gray-900 hover:text-white" : "text-gray-600"}`}
+            onClick={() => updateDashboardSection(id, { action: null, placement: null, learner: null })}
+          >
+            <Icon className="mr-2 h-4 w-4" />
+            {label}
+            {id === "overview" && actionQueue.length > 0 ? <Badge className="ml-2 bg-amber-400 text-gray-900 border-0">{actionQueue.length}</Badge> : null}
+          </Button>
+        ))}
+      </nav>
+
+      {dashboardSection === "overview" ? (loading ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6 lg:gap-6">
+          {[...Array(6)].map((_, index) => <Card key={index} className="h-28 rounded-2xl animate-pulse bg-white border-none shadow-xl" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center mb-3"><Briefcase className="h-5 w-5 text-emerald-600" /></div><p className="text-sm text-gray-500">Active Placements</p><p className="text-3xl font-black text-gray-900">{stats.activePlacements}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center mb-3"><UserCircle2 className="h-5 w-5 text-sky-600" /></div><p className="text-sm text-gray-500">Assigned to Me</p><p className="text-3xl font-black text-sky-600">{stats.assignedToMe}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center mb-3"><Users className="h-5 w-5 text-red-600" /></div><p className="text-sm text-gray-500">Unassigned</p><p className="text-3xl font-black text-red-600">{stats.unassignedPlacements}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center mb-3"><MessageSquare className="h-5 w-5 text-indigo-600" /></div><p className="text-sm text-gray-500">Unread Messages</p><p className="text-3xl font-black text-indigo-600">{stats.unreadMessages}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-6"><div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center mb-3"><Star className="h-5 w-5 text-amber-600" /></div><p className="text-sm text-gray-500">Pending Evaluations</p><p className="text-3xl font-black text-amber-600">{stats.pendingEvaluations}</p></CardContent></Card>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6 lg:gap-6">
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-4 lg:p-6"><div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center mb-3"><Briefcase className="h-5 w-5 text-emerald-600" /></div><p className="text-sm text-gray-500">Active Placements</p><p className="text-3xl font-black text-gray-900">{stats.activePlacements}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-4 lg:p-6"><div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center mb-3"><UserCircle2 className="h-5 w-5 text-sky-600" /></div><p className="text-sm text-gray-500">Assigned to Me</p><p className="text-3xl font-black text-sky-600">{stats.assignedToMe}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-4 lg:p-6"><div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center mb-3"><Users className="h-5 w-5 text-red-600" /></div><p className="text-sm text-gray-500">Unassigned</p><p className="text-3xl font-black text-red-600">{stats.unassignedPlacements}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-4 lg:p-6"><div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center mb-3"><MessageSquare className="h-5 w-5 text-indigo-600" /></div><p className="text-sm text-gray-500">Unread Messages</p><p className="text-3xl font-black text-indigo-600">{stats.unreadMessages}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-4 lg:p-6"><div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center mb-3"><Star className="h-5 w-5 text-amber-600" /></div><p className="text-sm text-gray-500">Pending Evaluations</p><p className="text-3xl font-black text-amber-600">{stats.pendingEvaluations}</p></CardContent></Card>
+          <Card className="bg-white border-none shadow-xl rounded-2xl"><CardContent className="p-4 lg:p-6"><div className="w-10 h-10 rounded-xl bg-fuchsia-50 flex items-center justify-center mb-3"><LifeBuoy className="h-5 w-5 text-fuchsia-600" /></div><p className="text-sm text-gray-500">Open Support</p><p className="text-3xl font-black text-fuchsia-600">{stats.supportBacklog}</p></CardContent></Card>
         </div>
-      )}
+      )) : null}
 
-      {!loading && historicalPlacements.length > 0 ? (
+      {dashboardSection === "placements" && !loading && historicalPlacements.length > 0 ? (
         <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
           <CardContent className="p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
@@ -1580,7 +1747,7 @@ export default function PartnerDashboard() {
         </Card>
       ) : null}
 
-      <Card data-help-id="partner-dashboard-action-queue" className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
+      {dashboardSection === "overview" ? <Card data-help-id="partner-dashboard-action-queue" className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
         <CardHeader>
           <CardTitle className="text-xl font-black">Partner Action Queue</CardTitle>
         </CardHeader>
@@ -1601,14 +1768,7 @@ export default function PartnerDashboard() {
                 <button
                   key={`${item.placementId}-${item.type}-${index}`}
                   type="button"
-                  onClick={() => {
-                    if (item.type === "Unread Messages") {
-                      const placement = placements.find((entry) => entry._id === item.placementId)
-                      if (placement) handleOpenMessages(placement)
-                      return
-                    }
-                    navigate(item.actionUrl)
-                  }}
+                  onClick={() => handleActionItem(item)}
                   className={`rounded-2xl border p-4 text-left transition-colors hover:shadow-md ${severityStyles[item.severity] || severityStyles.low}`}
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -1622,14 +1782,50 @@ export default function PartnerDashboard() {
                     </Badge>
                   </div>
                   <p className="mt-3 text-sm text-gray-700">{item.message}</p>
+                  <div className="mt-4 space-y-3 border-t border-current/10 pt-3">
+                    <PartnerHandoffStatus
+                      compact
+                      state={item.state || (item.severity === "high" ? "Overdue" : "Pending")}
+                      ownerName={item.ownerName || "Partner team"}
+                      awaitingParty={item.awaitingParty || "Partner"}
+                      dueAt={item.dueAt}
+                      lastActivityAt={item.lastActivityAt}
+                      nextAction={item.nextAction || item.actionLabel || ACTION_LABELS[item.actionType || LEGACY_ACTION_TYPES[item.type]] || "Open this task."}
+                    />
+                    <span className="block text-right text-sm font-black text-gray-900">
+                      {item.actionLabel || ACTION_LABELS[item.actionType || LEGACY_ACTION_TYPES[item.type]] || "Open task"} →
+                    </span>
+                  </div>
                 </button>
               ))}
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card> : null}
 
-      <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
+      {dashboardSection === "overview" && recentlyCompleted.length > 0 ? (
+        <Card className="rounded-2xl border-none bg-white shadow-xl">
+          <CardHeader>
+            <CardTitle className="text-xl font-black">Recently Completed</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-3 pt-0 md:grid-cols-2">
+            {recentlyCompleted.map((item) => (
+              <div key={item.key} className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+                <div>
+                  <p className="text-sm font-black text-gray-900">{item.label}</p>
+                  <p className="mt-1 text-sm text-gray-600">{item.learnerName}{item.trackingId ? ` · ${item.trackingId}` : ""}</p>
+                </div>
+                <div className="text-right">
+                  <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Completed</Badge>
+                  <p className="mt-1 text-xs text-gray-500">{formatDate(item.completedAt)}</p>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {dashboardSection === "team" ? <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
         <CardHeader>
           <CardTitle className="text-xl font-black">Supervisor Performance</CardTitle>
         </CardHeader>
@@ -1720,9 +1916,9 @@ export default function PartnerDashboard() {
             </>
           )}
         </CardContent>
-      </Card>
+      </Card> : null}
 
-      <div className="space-y-6">
+      {dashboardSection === "hours" ? <div className="space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h3 className="text-xl font-black text-gray-900 flex items-center gap-3">
@@ -1809,7 +2005,7 @@ export default function PartnerDashboard() {
                     <TableHead>Type</TableHead>
                     <TableHead>Source</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Supervisor</TableHead>
+                    <TableHead>Handoff</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1827,7 +2023,19 @@ export default function PartnerDashboard() {
                         <TableCell><Badge className="bg-slate-100 text-slate-700 border-slate-200">{log.entryType}</Badge></TableCell>
                         <TableCell><div className="space-y-1"><Badge className={log.submittedSource === "Partner" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-indigo-100 text-indigo-700 border-indigo-200"}>{log.submittedSource}</Badge>{log.submittedBy ? <div className="text-xs text-gray-500">{log.submittedBy.name} ({log.submittedBy.role})</div> : null}</div></TableCell>
                         <TableCell>{getAttendanceStatusBadge(log.status)}</TableCell>
-                        <TableCell><div className="max-w-[220px]"><div className="font-medium text-gray-800">{log.placement.supervisorName || "Not set"}</div>{log.supervisorComment ? <div className="text-xs text-gray-500 mt-1 line-clamp-2">{log.supervisorComment}</div> : null}</div></TableCell>
+                        <TableCell>
+                          <div className="min-w-[230px]">
+                            <PartnerHandoffStatus
+                              compact
+                              state={log.status === "SignedOff" ? "Completed" : log.status === "Rejected" ? "Awaiting Institution" : "Awaiting Partner"}
+                              ownerName={log.status === "Rejected" ? "Institution" : log.placement.supervisorName || "Partner supervisor"}
+                              awaitingParty={log.status === "SignedOff" ? "None" : log.status === "Rejected" ? "Institution" : "Partner"}
+                              lastActivityAt={log.updatedAt || log.signedOffAt || log.createdAt || log.periodEnd}
+                              nextAction={log.status === "SignedOff" ? "No action required." : log.status === "Rejected" ? "Institution must correct and resubmit this entry." : "Review and sign off or return this entry."}
+                            />
+                            {log.supervisorComment ? <p className="mt-2 line-clamp-2 text-xs text-gray-500">{log.supervisorComment}</p> : null}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-2">
                             {canEdit ? (
@@ -1864,9 +2072,9 @@ export default function PartnerDashboard() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </div> : null}
 
-      <div data-help-id="partner-dashboard-placements" className="space-y-6">
+      {dashboardSection === "placements" ? <div data-help-id="partner-dashboard-placements" className="space-y-6">
         <div className="flex items-center gap-3">
           <Briefcase className="h-5 w-5 text-[#FFB800]" />
           <h3 className="text-xl font-black text-gray-900">Active Placement Workspace</h3>
@@ -1964,6 +2172,27 @@ export default function PartnerDashboard() {
                     </div>
                   </div>
 
+                  {placement.workflowHandoffs ? (
+                    <section className="rounded-2xl border border-gray-200 bg-white p-4" aria-labelledby={`handoff-heading-${placement._id}`}>
+                      <div className="mb-4">
+                        <p id={`handoff-heading-${placement._id}`} className="text-xs font-black uppercase tracking-wider text-gray-400">Workflow Handoffs</p>
+                        <p className="mt-1 text-sm text-gray-600">See who owns each step, what it is waiting for, and what happens next.</p>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                        {(Object.keys(HANDOFF_LABELS) as Array<keyof typeof HANDOFF_LABELS>).map((key) => {
+                          const handoff = placement.workflowHandoffs?.[key]
+                          if (!handoff) return null
+                          return (
+                            <div key={key} className="rounded-xl border border-gray-100 bg-gray-50/80 p-4">
+                              <p className="mb-3 text-sm font-black text-gray-900">{HANDOFF_LABELS[key]}</p>
+                              <PartnerHandoffStatus {...handoff} />
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  ) : null}
+
                   <div className="rounded-2xl border border-sky-100 bg-sky-50/70 p-4 space-y-3">
                     {(() => {
                       const draftSupervisorId = supervisorDrafts[placement._id] ?? placement.partnerSupervisor?._id ?? ""
@@ -1996,6 +2225,7 @@ export default function PartnerDashboard() {
                       <Select
                         value={supervisorDrafts[placement._id] ?? placement.partnerSupervisor?._id ?? "__unassigned"}
                         onValueChange={(value) => setSupervisorDrafts((current) => ({ ...current, [placement._id]: value === "__unassigned" ? "" : value }))}
+                        disabled={!canAssignPlacement(placement)}
                       >
                         <SelectTrigger className="rounded-xl bg-white border-sky-200">
                           <SelectValue placeholder="Assign supervisor" />
@@ -2013,9 +2243,9 @@ export default function PartnerDashboard() {
                         variant="outline"
                         className="rounded-xl border-sky-200 text-sky-700 hover:bg-sky-50"
                         onClick={() => handleAssignSupervisor(placement)}
-                        disabled={!assignmentDirty}
+                        disabled={!assignmentDirty || !canAssignPlacement(placement)}
                       >
-                        {assignmentDirty ? "Save Assignment" : "Assignment Saved"}
+                        {!canAssignPlacement(placement) ? "Coordinator Only" : assignmentDirty ? "Save Assignment" : "Assignment Saved"}
                       </Button>
                     </div>
                         </>
@@ -2046,7 +2276,7 @@ export default function PartnerDashboard() {
                           variant="outline"
                           className="rounded-xl border-amber-200 text-amber-700 hover:bg-amber-100 w-full whitespace-normal h-auto py-2 text-left sm:text-center"
                           onClick={() => handleOpenEmployerAgreement(placement)}
-                          disabled={Boolean(placement.partnerSupervisor && !placement.assignedToCurrentSupervisor)}
+                          disabled={!canActOnPlacement(placement)}
                         >
                           <FileSignature className="mr-2 h-4 w-4" />
                           {placement.agreementSummary?.employerSigned ? "Update Employer Signature" : "Sign Employer Acknowledgement"}
@@ -2056,7 +2286,7 @@ export default function PartnerDashboard() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={() => placement.learner && navigate(`/attendance-logs?learnerId=${placement.learner._id}`)} disabled={Boolean(placement.partnerSupervisor && !placement.assignedToCurrentSupervisor)}>
+                    <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={() => { setSelectedPlacement(placement); setEditingAttendanceLog(null); setAttendanceOpen(true) }} disabled={!placement.learner || !canActOnPlacement(placement)}>
                       <ClipboardList className="mr-2 h-4 w-4" />
                       Record Hours
                     </Button>
@@ -2064,19 +2294,19 @@ export default function PartnerDashboard() {
                       <NotebookPen className="mr-2 h-4 w-4" />
                       Open WEL Logbook
                     </Button>
-                    <Button variant="outline" className="rounded-xl" onClick={() => handleOpenMessages(placement)}>
+                    <Button variant="outline" className="rounded-xl" onClick={() => handleOpenMessages(placement)} disabled={placement.capabilities?.canMessage === false}>
                       <MessageSquare className="mr-2 h-4 w-4" />
                       Send Message
                     </Button>
-                    <Button variant="outline" className="rounded-xl" onClick={() => handleOpenEvaluation(placement)} disabled={!placement.learner || Boolean(placement.partnerSupervisor && !placement.assignedToCurrentSupervisor)}>
+                    <Button variant="outline" className="rounded-xl" onClick={() => handleOpenEvaluation(placement)} disabled={!placement.learner || !canActOnPlacement(placement)}>
                       <Star className="mr-2 h-4 w-4" />
                       {placement.evaluationSubmitted ? "Re-submit Evaluation" : "Submit Evaluation"}
                     </Button>
-                    <Button variant="outline" className="rounded-xl" onClick={() => handleOpenSupport(placement)} disabled={!placement.learner || Boolean(placement.partnerSupervisor && !placement.assignedToCurrentSupervisor)}>
+                    <Button variant="outline" className="rounded-xl" onClick={() => handleOpenSupport(placement)} disabled={!placement.learner || !canActOnPlacement(placement)}>
                       <LifeBuoy className="mr-2 h-4 w-4" />
                       Raise Support Issue
                     </Button>
-                    <Button variant="outline" className="rounded-xl border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800" onClick={() => handleOpenIncident(placement)} disabled={!placement.learner || Boolean(placement.partnerSupervisor && !placement.assignedToCurrentSupervisor)}>
+                    <Button variant="outline" className="rounded-xl border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800" onClick={() => handleOpenIncident(placement)} disabled={!placement.learner || !canActOnPlacement(placement)}>
                       <AlertTriangle className="mr-2 h-4 w-4" />
                       Report Incident
                     </Button>
@@ -2107,7 +2337,7 @@ export default function PartnerDashboard() {
             ))}
           </div>
         )}
-      </div>
+      </div> : null}
 
       {/* Attendance Delete Confirmation */}
       <ConfirmationDialog

@@ -31,6 +31,10 @@ const userSchema = new mongoose.Schema({
     ref: 'IndustryPartner',
     required: function() { return this.role === 'IndustryPartner'; }
   },
+  partnerPortalRole: {
+    type: String,
+    enum: ['Coordinator', 'Supervisor'],
+  },
   linkedLearners: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Learner',
