@@ -8,7 +8,7 @@ const documentSchema = new mongoose.Schema({
   fileSize: { type: Number },
   category: {
     type: String,
-    enum: ['Placement Letter', 'ID Copy', 'Certificate', 'Assessment Form', 'Visit Photo', 'Report', 'MoU', 'Support Attachment', 'Incident Evidence', 'Evaluation Evidence', 'Other'],
+    enum: ['Placement Letter', 'ID Copy', 'Certificate', 'Assessment Form', 'Visit Photo', 'Report', 'MoU', 'Guardian Consent Form', 'Support Attachment', 'Incident Evidence', 'Evaluation Evidence', 'Other'],
     default: 'Other'
   },
   uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

@@ -74,6 +74,17 @@ type PlacementsResponse = {
   totalPages: number;
 }
 
+type EvidenceDocument = {
+  _id: string
+  url: string
+  fileName: string
+  fileType: string
+  fileSize: number
+  category: string
+  uploadedBy: { _id: string; name: string }
+  createdAt: string
+}
+
 export default function Placements() {
     const location = useLocation()
     const [searchParams, setSearchParams] = useSearchParams()
@@ -103,12 +114,12 @@ export default function Placements() {
     const [evidenceOpen, setEvidenceOpen] = useState(false)
     const [evidenceLoading, setEvidenceLoading] = useState(false)
     const [evidencePlacement, setEvidencePlacement] = useState<Placement | null>(null)
-    const [evidenceDocuments, setEvidenceDocuments] = useState<any[]>([])
+    const [evidenceDocuments, setEvidenceDocuments] = useState<EvidenceDocument[]>([])
     const { authFetch, user, isLoading: authLoading } = useAuth()
 
     // Search & filter state
-    const [searchQuery, setSearchQuery] = useState('')
-    const [debouncedSearch, setDebouncedSearch] = useState('')
+    const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") || "")
+    const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get("search") || "")
     const [statusFilter, setStatusFilter] = useState<'' | 'Active' | 'Completed' | 'Terminated'>('')
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 

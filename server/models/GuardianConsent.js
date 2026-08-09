@@ -27,6 +27,20 @@ const guardianConsentSchema = new mongoose.Schema({
     relationshipToLearner: { type: String, required: true, trim: true },
     signatureName: { type: String, required: true, trim: true },
   },
+  submissionMethod: {
+    type: String,
+    enum: ['Electronic', 'Uploaded'],
+    default: 'Electronic',
+  },
+  signedDocument: { type: mongoose.Schema.Types.ObjectId, ref: 'Document', default: null },
+  reviewStatus: {
+    type: String,
+    enum: ['NotRequired', 'PendingReview', 'Accepted', 'Rejected'],
+    default: 'NotRequired',
+  },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  reviewedAt: { type: Date, default: null },
+  reviewComment: { type: String, default: '', trim: true },
   signedAt: { type: Date, default: Date.now },
   signedByUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });

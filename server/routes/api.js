@@ -565,11 +565,24 @@ const isLearnerUnder18 = (learner, referenceDate = new Date()) => {
   return typeof age === 'number' ? age < 18 : false;
 };
 
-const buildGuardianConsentSummary = ({ learner, placement, consentRecord }) => ({
+const buildGuardianConsentSummary = ({ learner, placement, consentRecord }) => {
+  const reviewStatus = consentRecord?.submissionMethod === 'Uploaded' && (!consentRecord?.reviewStatus || consentRecord.reviewStatus === 'NotRequired')
+    ? 'PendingReview'
+    : consentRecord?.reviewStatus || (consentRecord ? 'Accepted' : null);
+  const status = !consentRecord
+    ? 'Pending'
+    : reviewStatus === 'Rejected'
+      ? 'Rejected'
+      : reviewStatus === 'PendingReview'
+        ? 'Submitted'
+        : 'Signed';
+
+  return ({
+  consentId: consentRecord?._id?.toString?.() || null,
   requiresConsent: isLearnerUnder18(learner),
   hasDateOfBirth: Boolean(learner?.dateOfBirth),
   age: calculateAgeYears(learner?.dateOfBirth),
-  status: consentRecord ? 'Signed' : 'Pending',
+  status,
   signedAt: consentRecord?.signedAt || null,
   signedByName: consentRecord?.guardianDetails?.fullName || '',
   relationshipToLearner: consentRecord?.guardianDetails?.relationshipToLearner || '',
@@ -578,7 +591,18 @@ const buildGuardianConsentSummary = ({ learner, placement, consentRecord }) => (
   startDate: consentRecord?.placementSnapshot?.startDate || placement?.startDate || null,
   endDate: consentRecord?.placementSnapshot?.endDate || placement?.endDate || null,
   placementId: consentRecord?.placement?.toString?.() || placement?._id?.toString?.() || null,
-});
+  submissionMethod: consentRecord?.submissionMethod || (consentRecord ? 'Electronic' : null),
+  reviewStatus,
+  reviewedAt: consentRecord?.reviewedAt || null,
+  reviewedByName: consentRecord?.reviewedBy?.name || '',
+  reviewComment: consentRecord?.reviewComment || '',
+  signedDocument: consentRecord?.signedDocument ? {
+    id: consentRecord.signedDocument?._id?.toString?.() || consentRecord.signedDocument?.toString?.(),
+    url: consentRecord.signedDocument?.url || '',
+    fileName: consentRecord.signedDocument?.fileName || '',
+  } : null,
+  });
+};
 
 const buildPlacementAgreementSummary = ({ placement, learner, agreement }) => ({
   placementId: placement?._id?.toString?.() || agreement?.placement?.toString?.() || null,
@@ -4769,17 +4793,39 @@ router.get('/dashboard/action-alerts', async (req, res) => {
         const filter = await getFilter(req.user);
         const alerts = [];
         const systemSettings = await getOrCreateSystemSettings();
+        const requestedScope = req.query.scope === 'institution' ? 'institution' : 'my';
+        const currentUserId = req.user._id.toString();
+        const ownerPayload = (owner, fallback = 'Unassigned') => owner ? {
+          id: owner._id?.toString?.() || owner.toString?.(),
+          name: owner.name || fallback,
+          role: owner.role || '',
+        } : { id: null, name: fallback, role: '' };
+        const addAlert = (alert) => {
+          const owner = alert.owner || ownerPayload(null);
+          const isRoleOwned = Array.isArray(alert.eligibleRoles) && alert.eligibleRoles.includes(req.user.role);
+          if (requestedScope === 'my' && owner.id !== currentUserId && !isRoleOwned) return;
+          alerts.push({ ...alert, owner, eligibleRoles: undefined });
+        };
 
         // 1. Pending Learners (Needs Placement)
-        const pendingLearners = await Learner.find({ ...filter, status: 'Pending' }).select('name trackingId owner');
+        const pendingLearners = await Learner.find({ ...filter, status: 'Pending' })
+          .select('name trackingId owner')
+          .populate('owner', 'name role');
         pendingLearners.forEach(l => {
-            alerts.push({
+            addAlert({
+                id: `placement:${l._id}`,
                 type: 'Needs Placement',
                 learnerId: l._id,
                 learnerName: l.name,
                 trackingId: l.trackingId,
                 message: 'Learner is registered but not placed in industry.',
-                actionUrl: `/placements?learnerId=${l._id}`
+                actionUrl: `/learners/${l._id}?action=placement`,
+                actionLabel: 'Open learner',
+                workflowStage: 'Pre-placement',
+                priority: 'Medium',
+                blockedBy: 'Placement not initiated',
+                dueAt: null,
+                owner: ownerPayload(l.owner),
             });
         });
 
@@ -4796,17 +4842,26 @@ router.get('/dashboard/action-alerts', async (req, res) => {
                 ],
               },
             ],
-        }).populate('learner', 'name trackingId');
+        })
+          .populate('learner', 'name trackingId owner')
+          .populate('owner', 'name role');
 
         placementsNeedingSetup.forEach((placement) => {
           if (!placement.learner) return;
-          alerts.push({
+          addAlert({
+            id: `setup:${placement._id}`,
             type: 'Setup Required',
             learnerId: placement.learner._id,
             learnerName: placement.learner.name,
             trackingId: placement.learner.trackingId,
             message: 'Placement is active but supervisor details are incomplete.',
-            actionUrl: `/placements`,
+            actionUrl: `/placements?search=${encodeURIComponent(placement.learner.trackingId || placement.companyName)}`,
+            actionLabel: 'Complete placement setup',
+            workflowStage: 'Placement setup',
+            priority: 'High',
+            blockedBy: 'Supervisor details incomplete',
+            dueAt: placement.startDate || null,
+            owner: ownerPayload(placement.owner, 'Placement owner unassigned'),
           });
         });
 
@@ -4822,21 +4877,30 @@ router.get('/dashboard/action-alerts', async (req, res) => {
             ...filter,
             status: 'Placed',
             _id: { $nin: recentlyVisitedLearnerIds }
-        }).select('name trackingId');
+        }).select('name trackingId owner').populate('owner', 'name role');
 
         needsVisitLearners.forEach(l => {
-             alerts.push({
+             addAlert({
+                id: `visit:${l._id}`,
                 type: 'Needs Visit',
                 learnerId: l._id,
                 learnerName: l.name,
                 trackingId: l.trackingId,
-                message: 'No monitoring visit logged in the last 30 days.',
-                actionUrl: `/monitoring-visits?learnerId=${l._id}`
-            });
+                message: `No monitoring visit logged in the last ${systemSettings.monitoringVisitCadenceDays} days.`,
+                actionUrl: `/monitoring-visits?learnerId=${l._id}`,
+                actionLabel: 'Log monitoring visit',
+                workflowStage: 'Active placement',
+                priority: 'High',
+                blockedBy: 'Monitoring cadence overdue',
+                dueAt: recentVisitCutoff,
+                owner: ownerPayload(l.owner),
+             });
         });
 
         // 4. Attendance overdue by configured cadence
-        const activePlacements = await Placement.find({ ...filter, status: 'Active' }).populate('learner', 'name trackingId');
+        const activePlacements = await Placement.find({ ...filter, status: 'Active' })
+          .populate('learner', 'name trackingId dateOfBirth owner')
+          .populate('owner', 'name role');
         const placementIds = activePlacements.map((placement) => placement._id);
         const attendanceLogs = await AttendanceLog.find({ placement: { $in: placementIds } }).select('placement periodEnd').sort({ periodEnd: -1 });
         const attendanceByPlacement = new Map();
@@ -4853,13 +4917,20 @@ router.get('/dashboard/action-alerts', async (req, res) => {
               ? new Date(new Date(placement.startDate).getTime() + systemSettings.attendanceCadenceDays * 24 * 60 * 60 * 1000)
               : null;
           if (dueAt && dueAt < new Date() && placement.learner) {
-            alerts.push({
+            addAlert({
+              id: `attendance:${placement._id}`,
               type: 'Attendance Overdue',
               learnerId: placement.learner._id,
               learnerName: placement.learner.name,
               trackingId: placement.learner.trackingId,
               message: `Attendance is overdue. Expected by ${dueAt.toLocaleDateString()}.`,
               actionUrl: `/attendance-logs?learnerId=${placement.learner._id}`,
+              actionLabel: 'Review attendance',
+              workflowStage: 'Active placement',
+              priority: 'High',
+              blockedBy: 'Attendance cadence overdue',
+              dueAt,
+              owner: ownerPayload(placement.owner, 'Placement owner unassigned'),
             });
           }
         });
@@ -4888,19 +4959,100 @@ router.get('/dashboard/action-alerts', async (req, res) => {
             const unassessedLearnerIds = endingSoonLearnerIds.filter(id => !assessedLearnerIds.includes(id.toString()));
 
             if (unassessedLearnerIds.length > 0) {
-                 const unassessedLearners = await Learner.find({ ...filter, _id: { $in: unassessedLearnerIds } }).select('name trackingId');
+                 const unassessedLearners = await Learner.find({ ...filter, _id: { $in: unassessedLearnerIds } })
+                   .select('name trackingId owner')
+                   .populate('owner', 'name role');
                  
                  unassessedLearners.forEach(l => {
-                     alerts.push({
+                     addAlert({
+                        id: `assessment:${l._id}`,
                         type: 'Needs Assessment',
                         learnerId: l._id,
                         learnerName: l.name,
                         trackingId: l.trackingId,
                         message: 'Placement ending soon. Final assessment required.',
-                        actionUrl: `/competency-assessments?learnerId=${l._id}`
+                        actionUrl: `/assessments?learnerId=${l._id}`,
+                        actionLabel: 'Complete assessment',
+                        workflowStage: 'Placement closure',
+                        priority: 'High',
+                        blockedBy: 'Final assessment missing',
+                        dueAt: endingSoonPlacements.find((placement) => placement.learner.toString() === l._id.toString())?.endDate || null,
+                        owner: ownerPayload(l.owner),
                     });
                  });
             }
+        }
+
+        // 6. Under-18 consent handoffs and uploaded forms awaiting institution review
+        const under18Placements = activePlacements.filter((placement) => placement.learner && isLearnerUnder18(placement.learner));
+        if (under18Placements.length > 0) {
+          const under18LearnerIds = under18Placements.map((placement) => placement.learner._id);
+          const [consentForms, linkedGuardianUsers] = await Promise.all([
+            GuardianConsent.find({ placement: { $in: under18Placements.map((placement) => placement._id) } })
+              .sort({ signedAt: -1, createdAt: -1 }),
+            User.find({ role: 'Guardian', linkedLearners: { $in: under18LearnerIds }, status: 'Active' }).select('linkedLearners'),
+          ]);
+          const consentByPlacement = new Map();
+          consentForms.forEach((consent) => {
+            const key = consent.placement.toString();
+            if (!consentByPlacement.has(key)) consentByPlacement.set(key, consent);
+          });
+          const learnersWithGuardians = new Set();
+          linkedGuardianUsers.forEach((guardian) => {
+            (guardian.linkedLearners || []).forEach((learnerId) => learnersWithGuardians.add(learnerId.toString()));
+          });
+
+          under18Placements.forEach((placement) => {
+            const learner = placement.learner;
+            const consent = consentByPlacement.get(placement._id.toString());
+            const reviewStatus = consent?.submissionMethod === 'Uploaded' && (!consent?.reviewStatus || consent.reviewStatus === 'NotRequired')
+              ? 'PendingReview'
+              : consent?.reviewStatus || (consent ? 'Accepted' : null);
+            const owner = ownerPayload(placement.owner, 'Placement owner unassigned');
+
+            if (!consent || reviewStatus === 'Rejected') {
+              const hasGuardianAccount = learnersWithGuardians.has(learner._id.toString());
+              addAlert({
+                id: `consent-signature:${placement._id}`,
+                type: 'Guardian Consent',
+                learnerId: learner._id,
+                learnerName: learner.name,
+                trackingId: learner.trackingId,
+                message: reviewStatus === 'Rejected'
+                  ? 'The uploaded guardian consent was rejected and must be resubmitted.'
+                  : hasGuardianAccount
+                    ? 'Guardian signature is required before the under-18 placement can proceed.'
+                    : 'No active guardian portal account is linked to this under-18 learner.',
+                actionUrl: `/learners/${learner._id}?action=guardian-consent`,
+                actionLabel: hasGuardianAccount ? 'Review consent status' : 'Link guardian account',
+                workflowStage: 'Pre-placement compliance',
+                priority: 'Critical',
+                blockedBy: reviewStatus === 'Rejected' ? consent.reviewComment || 'Guardian resubmission required' : hasGuardianAccount ? 'Guardian signature pending' : 'Guardian account missing',
+                dueAt: placement.startDate || null,
+                owner,
+              });
+              return;
+            }
+
+            if (reviewStatus === 'PendingReview') {
+              addAlert({
+                id: `consent-review:${consent._id}`,
+                type: 'Consent Review',
+                learnerId: learner._id,
+                learnerName: learner.name,
+                trackingId: learner.trackingId,
+                message: 'A signed paper consent form is waiting for institution review.',
+                actionUrl: `/learners/${learner._id}?action=review-consent`,
+                actionLabel: 'Review uploaded form',
+                workflowStage: 'Pre-placement compliance',
+                priority: 'Critical',
+                blockedBy: 'Institution acceptance pending',
+                dueAt: placement.startDate || null,
+                owner: ownerPayload(null, 'Institution reviewer'),
+                eligibleRoles: ['Admin', 'Manager'],
+              });
+            }
+          });
         }
 
         const supportScope = await getSupportTicketScope(req.user);
@@ -4913,22 +5065,39 @@ router.get('/dashboard/action-alerts', async (req, res) => {
           ],
         })
           .populate('learner', 'name trackingId')
+          .populate('assignedTo', 'name role')
           .sort({ updatedAt: -1 })
           .limit(10);
 
         blockerTickets.forEach((ticket) => {
           if (!ticket.learner) return;
-          alerts.push({
+          addAlert({
+            id: `support:${ticket._id}`,
             type: 'Support Blocker',
             learnerId: ticket.learner._id,
             learnerName: ticket.learner.name,
             trackingId: ticket.learner.trackingId,
             message: `Support blocker: ${ticket.subject}`,
             actionUrl: `/support-center?ticket=${ticket._id}`,
+            actionLabel: 'Resolve blocker',
+            workflowStage: 'Exception management',
+            priority: ticket.resolutionDueAt && ticket.resolutionDueAt < new Date() ? 'Critical' : 'High',
+            blockedBy: ticket.escalationLevel !== 'None' ? `Escalated: ${ticket.escalationLevel}` : 'Resolution SLA overdue',
+            dueAt: ticket.resolutionDueAt || null,
+            owner: ownerPayload(ticket.assignedTo, 'Support owner unassigned'),
           });
         });
 
-        res.json(alerts);
+        const priorityRank = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+        alerts.sort((a, b) => {
+          const priorityDifference = (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9);
+          if (priorityDifference !== 0) return priorityDifference;
+          if (!a.dueAt) return 1;
+          if (!b.dueAt) return -1;
+          return new Date(a.dueAt) - new Date(b.dueAt);
+        });
+
+        res.json({ scope: requestedScope, alerts, total: alerts.length });
     } catch (error) {
         console.error("Error fetching action alerts:", error);
         res.status(500).json({ message: 'Server Error', error });
@@ -7131,6 +7300,8 @@ router.get('/learners/:id/profile', async (req, res) => {
       .lean();
     const placementAgreements = await PlacementAgreement.find({ learner: learner._id }).lean();
     const consentRecords = await GuardianConsent.find({ learner: learner._id })
+      .populate('signedDocument', 'url fileName fileType')
+      .populate('reviewedBy', 'name')
       .sort({ signedAt: -1, createdAt: -1 })
       .lean();
     const supportScope = await getSupportTicketScope(req.user);
@@ -7156,7 +7327,7 @@ router.get('/learners/:id/profile', async (req, res) => {
       .lean();
     const activePlacement = placements.find((placement) => placement.status === 'Active') || placements[0] || null;
     const activeConsentRecord = activePlacement
-      ? consentRecords.find((record) => record.placement?.toString() === activePlacement._id.toString()) || consentRecords[0] || null
+      ? consentRecords.find((record) => record.placement?.toString() === activePlacement._id.toString()) || null
       : consentRecords[0] || null;
     let activePlacementManagement = null;
 
@@ -7276,9 +7447,12 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
       contactNumber,
       relationshipToLearner,
       signatureName,
+      submissionMethod,
+      signedDocumentId,
     } = req.body;
 
-    if (!learnerId || !guardianFullName || !contactNumber || !relationshipToLearner || !signatureName) {
+    const isUploadedSubmission = submissionMethod === 'Uploaded';
+    if (!learnerId || !guardianFullName || !contactNumber || !relationshipToLearner || (!isUploadedSubmission && !signatureName)) {
       return res.status(400).json({ message: 'Learner, guardian identity, relationship, contact number, and signature are required' });
     }
 
@@ -7311,8 +7485,29 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
       reportProblems: Boolean(learnerDeclaration?.reportProblems),
     };
 
-    if (!Object.values(normalizedDeclaration).every(Boolean)) {
+    if (!isUploadedSubmission && !Object.values(normalizedDeclaration).every(Boolean)) {
       return res.status(400).json({ message: 'All learner declaration acknowledgements must be confirmed before signing' });
+    }
+
+    let signedDocument = null;
+    if (isUploadedSubmission) {
+      if (!signedDocumentId) {
+        return res.status(400).json({ message: 'Upload the signed consent form before submitting it' });
+      }
+      signedDocument = await Document.findOne({
+        _id: signedDocumentId,
+        uploadedBy: req.user._id,
+        learner: learner._id,
+        placement: placement._id,
+        category: 'Guardian Consent Form',
+      });
+      if (!signedDocument) {
+        return res.status(400).json({ message: 'The uploaded consent form could not be verified for this learner and placement' });
+      }
+      const allowedSignedFormTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+      if (!allowedSignedFormTypes.includes(signedDocument.fileType)) {
+        return res.status(400).json({ message: 'Signed consent forms must be PDF, JPG, PNG, or WebP files' });
+      }
     }
 
     const consentPayload = {
@@ -7335,8 +7530,14 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
         fullName: guardianFullName.trim(),
         contactNumber: contactNumber.trim(),
         relationshipToLearner: relationshipToLearner.trim(),
-        signatureName: signatureName.trim(),
+        signatureName: (signatureName || guardianFullName).trim(),
       },
+      submissionMethod: isUploadedSubmission ? 'Uploaded' : 'Electronic',
+      signedDocument: signedDocument?._id || null,
+      reviewStatus: isUploadedSubmission ? 'PendingReview' : 'Accepted',
+      reviewedBy: isUploadedSubmission ? null : req.user._id,
+      reviewedAt: isUploadedSubmission ? null : new Date(),
+      reviewComment: '',
       signedAt: new Date(),
       signedByUser: req.user._id,
     };
@@ -7374,8 +7575,8 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
       roles: ['Admin', 'Manager', 'Staff'],
       sender: req.user._id,
       type: 'report',
-      title: 'Guardian Consent Signed',
-      message: `${req.user.name} signed the under-18 WEL consent form for ${learner.name}.`,
+      title: isUploadedSubmission ? 'Guardian Consent Awaiting Review' : 'Guardian Consent Signed',
+      message: `${req.user.name} ${isUploadedSubmission ? 'uploaded a signed' : 'signed the'} under-18 WEL consent form for ${learner.name}.`,
       link: `/learners/${learner._id}`,
     });
 
@@ -7383,6 +7584,63 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
   } catch (error) {
     console.error('Error signing guardian consent form:', error);
     res.status(500).json({ message: 'Error signing guardian consent form' });
+  }
+});
+
+router.put('/guardian-consents/:id/review', requireRole('Admin', 'Manager'), async (req, res) => {
+  try {
+    const decision = req.body?.decision;
+    const comment = String(req.body?.comment || '').trim();
+    if (!['Accepted', 'Rejected'].includes(decision)) {
+      return res.status(400).json({ message: 'Choose Accepted or Rejected' });
+    }
+    if (decision === 'Rejected' && !comment) {
+      return res.status(400).json({ message: 'Explain what the guardian must correct before rejecting the form' });
+    }
+
+    const consent = await GuardianConsent.findById(req.params.id).populate('signedDocument', 'url fileName fileType');
+    if (!consent || consent.institution !== req.user.institution) {
+      return res.status(404).json({ message: 'Consent form not found or outside your institution' });
+    }
+    if (consent.submissionMethod !== 'Uploaded' || !consent.signedDocument) {
+      return res.status(400).json({ message: 'Only uploaded signed forms require institution review' });
+    }
+
+    const before = consent.toObject();
+    consent.reviewStatus = decision;
+    consent.reviewedBy = req.user._id;
+    consent.reviewedAt = new Date();
+    consent.reviewComment = comment;
+    await consent.save();
+
+    const learner = await Learner.findById(consent.learner).select('name');
+    const guardians = await User.find({ role: 'Guardian', linkedLearners: consent.learner, status: 'Active' }).select('_id');
+    await notifyUsers({
+      recipientIds: guardians.map((guardian) => guardian._id),
+      sender: req.user._id,
+      type: 'report',
+      title: decision === 'Accepted' ? 'Consent Form Accepted' : 'Consent Form Needs Correction',
+      message: decision === 'Accepted'
+        ? `The institution accepted the signed consent form for ${learner?.name || 'your learner'}.`
+        : `The signed consent form for ${learner?.name || 'your learner'} needs correction: ${comment}`,
+      link: '/guardian-dashboard',
+    });
+
+    await logAuditEvent({
+      req,
+      action: 'STATUS_CHANGE',
+      entityType: 'GuardianConsent',
+      entityId: consent._id,
+      summary: `${decision} uploaded guardian consent for ${learner?.name || consent.learner}`,
+      before,
+      after: consent,
+      changedFields: ['reviewStatus', 'reviewedBy', 'reviewedAt', 'reviewComment'],
+    });
+
+    res.json(consent);
+  } catch (error) {
+    console.error('Error reviewing guardian consent:', error);
+    res.status(500).json({ message: 'Error reviewing guardian consent form' });
   }
 });
 
@@ -7414,6 +7672,8 @@ router.get('/guardian-portal/dashboard', requireRole('Guardian'), async (req, re
         .sort({ evaluationDate: -1 })
         .lean(),
       GuardianConsent.find({ learner: { $in: learnerIds } })
+        .populate('signedDocument', 'url fileName fileType')
+        .populate('reviewedBy', 'name')
         .sort({ signedAt: -1, createdAt: -1 })
         .lean(),
       Notification.find({ recipient: req.user._id })
@@ -7492,7 +7752,7 @@ router.get('/guardian-portal/dashboard', requireRole('Guardian'), async (req, re
       const currentPlacement = learnerPlacements.find((placement) => placement.status === 'Active') || learnerPlacements[0] || null;
       const learnerConsentForms = consentByLearner.get(learner._id.toString()) || [];
       const currentConsent = currentPlacement
-        ? learnerConsentForms.find((consent) => consent.placement?.toString() === currentPlacement._id.toString()) || learnerConsentForms[0] || null
+        ? learnerConsentForms.find((consent) => consent.placement?.toString() === currentPlacement._id.toString()) || null
         : learnerConsentForms[0] || null;
       const learnerAttendance = attendanceByLearner.get(learner._id.toString()) || [];
       const latestAttendance = learnerAttendance[0] || null;

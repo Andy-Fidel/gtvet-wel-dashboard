@@ -102,6 +102,17 @@ type DueVisit = {
     overdueDays: number
 }
 
+type GpsEvidenceDocument = {
+    _id: string
+    url: string
+    fileName: string
+    fileType: string
+    fileSize: number
+    category: string
+    uploadedBy: { _id: string; name: string }
+    createdAt: string
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export const columns: ColumnDef<MonitoringVisit>[] = [
   {
@@ -281,7 +292,7 @@ export default function MonitoringVisits() {
     const [editingVisit, setEditingVisit] = useState<MonitoringVisit | null>(null)
     const [gpsReviewVisit, setGpsReviewVisit] = useState<MonitoringVisit | null>(null)
     const [gpsReviewComment, setGpsReviewComment] = useState("")
-    const [gpsDocuments, setGpsDocuments] = useState<any[]>([])
+    const [gpsDocuments, setGpsDocuments] = useState<GpsEvidenceDocument[]>([])
     const [gpsDocumentsLoading, setGpsDocumentsLoading] = useState(false)
     const [gpsDecisionSubmitting, setGpsDecisionSubmitting] = useState(false)
     const [bulkGpsOpen, setBulkGpsOpen] = useState(false)
@@ -971,7 +982,10 @@ export default function MonitoringVisits() {
             </Dialog>
 
             <Dialog open={bulkGpsOpen} onOpenChange={setBulkGpsOpen}>
-                <DialogContent className="sm:max-w-[560px] rounded-2xl border-0 shadow-2xl">
+                <DialogContent
+                    overlayClassName="bg-slate-900/45 backdrop-blur-sm"
+                    className="sm:max-w-[560px] rounded-2xl border border-slate-200 bg-white shadow-2xl [&>button]:bg-slate-100 [&>button]:text-slate-600 [&>button:hover]:bg-slate-200"
+                >
                     <DialogHeader>
                         <DialogTitle className="text-xl font-black text-gray-900">Bulk GPS Review</DialogTitle>
                         <DialogDescription className="text-gray-500 font-medium">

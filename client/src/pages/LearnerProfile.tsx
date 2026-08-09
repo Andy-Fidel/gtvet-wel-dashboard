@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, MapPin, Phone, Mail, Award, Clock, FileSignature, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Camera, Loader2, Edit2, Activity, ClipboardCheck, AlertTriangle, Archive, ChevronRight, RefreshCw } from "lucide-react"
+import { ArrowLeft, MapPin, Phone, Mail, Award, Clock, FileSignature, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Camera, Loader2, Edit2, Activity, ClipboardCheck, AlertTriangle, Archive, ChevronRight, RefreshCw, ExternalLink, XCircle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { format } from "date-fns"
@@ -239,10 +239,11 @@ interface ProfileData {
   placementHistory?: PlacementHistoryRecord[]
   readiness?: PlacementReadiness
   guardianConsent?: {
+    consentId?: string | null
     requiresConsent: boolean
     hasDateOfBirth: boolean
     age: number | null
-    status: "Signed" | "Pending"
+    status: "Signed" | "Pending" | "Submitted" | "Rejected"
     signedAt?: string | null
     signedByName?: string
     relationshipToLearner?: string
@@ -251,6 +252,12 @@ interface ProfileData {
     startDate?: string | null
     endDate?: string | null
     placementId?: string | null
+    submissionMethod?: "Electronic" | "Uploaded" | null
+    reviewStatus?: "NotRequired" | "PendingReview" | "Accepted" | "Rejected" | null
+    reviewedAt?: string | null
+    reviewedByName?: string
+    reviewComment?: string
+    signedDocument?: { id: string; url: string; fileName: string } | null
   };
   linkedGuardians?: Array<{
     _id: string
@@ -313,6 +320,8 @@ export default function LearnerProfile() {
   const [progress, setProgress] = useState<ProgressData | null>(null)
   const [progressLoading, setProgressLoading] = useState(true)
   const [showAllEvidence, setShowAllEvidence] = useState(false)
+  const [consentReviewComment, setConsentReviewComment] = useState("")
+  const [reviewingConsent, setReviewingConsent] = useState<"Accepted" | "Rejected" | null>(null)
   const [supportDraft, setSupportDraft] = useState({
     subject: "",
     category: "Workflow",
@@ -476,6 +485,7 @@ export default function LearnerProfile() {
   const isGraduatedArchive = learner.academicStatus === 'Graduated'
   const canManageOwnership = ['Admin', 'Manager', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && !isGraduatedArchive
   const canManageGuardians = ['Admin', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && !isGraduatedArchive
+  const canReviewGuardianConsent = ['Admin', 'Manager'].includes(user?.role || '') && !isGraduatedArchive
   const activePlacement = placements.find((placement) => placement.status === 'Active') || null
   const canInitiatePlacement = !isGraduatedArchive
     && !activePlacement
@@ -608,6 +618,31 @@ export default function LearnerProfile() {
       toast.error(error instanceof Error ? error.message : 'Failed to update placement owner')
     } finally {
       setSavingPlacementOwners((current) => ({ ...current, [placementId]: false }))
+    }
+  }
+
+  const reviewGuardianConsent = async (decision: "Accepted" | "Rejected") => {
+    if (!guardianConsent?.consentId) return
+    if (decision === "Rejected" && !consentReviewComment.trim()) {
+      toast.error("Explain what the guardian must correct before rejecting the form")
+      return
+    }
+    setReviewingConsent(decision)
+    try {
+      const response = await authFetch(`/api/guardian-consents/${guardianConsent.consentId}/review`, {
+        method: "PUT",
+        body: JSON.stringify({ decision, comment: consentReviewComment }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || "Failed to review guardian consent")
+      toast.success(decision === "Accepted" ? "Guardian consent accepted" : "Guardian consent returned for correction")
+      setConsentReviewComment("")
+      handleFormSuccess()
+    } catch (reviewError) {
+      console.error(reviewError)
+      toast.error(reviewError instanceof Error ? reviewError.message : "Failed to review guardian consent")
+    } finally {
+      setReviewingConsent(null)
     }
   }
 
@@ -915,6 +950,7 @@ export default function LearnerProfile() {
               </p>
               <p className="text-xs text-gray-600 mt-1">Due: {activePlacementManagement.attendance?.dueAt ? new Date(activePlacementManagement.attendance.dueAt).toLocaleDateString() : 'N/A'}</p>
               <p className="text-xs text-gray-600 mt-1">Pending sign-off: {activePlacementManagement.attendance?.pendingSignOffCount || 0}</p>
+              <p className="text-xs font-semibold text-indigo-700 mt-2">Next owner: {(activePlacementManagement.attendance?.pendingSignOffCount || 0) > 0 ? 'Workplace supervisor · review and sign off' : 'Placement owner · log the next period'}</p>
             </div>
 
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
@@ -924,6 +960,7 @@ export default function LearnerProfile() {
               </p>
               <p className="text-xs text-gray-600 mt-1">Next due: {activePlacementManagement.monitoring?.dueAt ? new Date(activePlacementManagement.monitoring.dueAt).toLocaleDateString() : 'N/A'}</p>
               <p className="text-xs text-gray-600 mt-1">Visits logged: {activePlacementManagement.monitoring?.visitCount || 0}</p>
+              <p className="text-xs font-semibold text-blue-700 mt-2">Next owner: Placement owner · {activePlacementManagement.monitoring?.overdue ? 'log overdue visit' : 'maintain visit cadence'}</p>
             </div>
 
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
@@ -933,6 +970,7 @@ export default function LearnerProfile() {
               </p>
               <p className="text-xs text-gray-600 mt-1">{activePlacementManagement.assessments?.summary || 'No assessment yet'}</p>
               <p className="text-xs text-gray-600 mt-1">Due: {activePlacementManagement.assessments?.dueAt ? new Date(activePlacementManagement.assessments.dueAt).toLocaleDateString() : 'N/A'}</p>
+              <p className="text-xs font-semibold text-emerald-700 mt-2">Next owner: Placement owner · {activePlacementManagement.assessments?.complete ? 'review recorded assessment' : 'complete assessment'}</p>
             </div>
 
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
@@ -942,6 +980,7 @@ export default function LearnerProfile() {
               </p>
               <p className="text-xs text-gray-600 mt-1">Due: {activePlacementManagement.evaluations?.dueAt ? new Date(activePlacementManagement.evaluations.dueAt).toLocaleDateString() : 'N/A'}</p>
               {activePlacementManagement.evaluations?.overdue ? <p className="text-xs font-semibold text-red-600 mt-1">Evaluation overdue</p> : null}
+              <p className="text-xs font-semibold text-violet-700 mt-2">Next owner: Workplace supervisor · {activePlacementManagement.evaluations?.complete ? 'evaluation complete' : 'submit employer feedback'}</p>
             </div>
           </div>
 
@@ -1247,17 +1286,44 @@ export default function LearnerProfile() {
                           Industry: {guardianConsent.industryName || 'Not assigned'} · Start: {guardianConsent.startDate ? format(new Date(guardianConsent.startDate), 'PP') : 'TBD'} · End: {guardianConsent.endDate ? format(new Date(guardianConsent.endDate), 'PP') : 'TBD'}
                         </p>
                         {guardianConsent.status === 'Signed' ? (
-                          <p className="mt-2 text-xs text-emerald-700">
-                            Signed by {guardianConsent.signedByName} ({guardianConsent.relationshipToLearner}) on {guardianConsent.signedAt ? format(new Date(guardianConsent.signedAt), 'PP') : 'N/A'}.
-                          </p>
+                          <div className="mt-2 space-y-1 text-xs text-emerald-700">
+                            <p>Signed by {guardianConsent.signedByName} ({guardianConsent.relationshipToLearner}) on {guardianConsent.signedAt ? format(new Date(guardianConsent.signedAt), 'PP') : 'N/A'}.</p>
+                            {guardianConsent.reviewedByName ? <p>Accepted by {guardianConsent.reviewedByName}{guardianConsent.reviewedAt ? ` on ${format(new Date(guardianConsent.reviewedAt), 'PP')}` : ''}.</p> : null}
+                          </div>
+                        ) : guardianConsent.status === 'Submitted' ? (
+                          <p className="mt-2 text-xs font-semibold text-teal-800">Signed paper form submitted. Institution review is the next action.</p>
+                        ) : guardianConsent.status === 'Rejected' ? (
+                          <p className="mt-2 text-xs font-semibold text-red-700">Returned for correction: {guardianConsent.reviewComment || 'Guardian must upload a corrected form.'}</p>
                         ) : (
                           <p className="mt-2 text-xs text-amber-800">Waiting for parent or guardian consent in the guardian portal.</p>
                         )}
                       </div>
-                      <Badge className={guardianConsent.status === 'Signed' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-700 border-amber-200'}>
+                      <Badge className={guardianConsent.status === 'Signed' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : guardianConsent.status === 'Submitted' ? 'bg-teal-100 text-teal-700 border-teal-200' : guardianConsent.status === 'Rejected' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-amber-100 text-amber-700 border-amber-200'}>
                         {guardianConsent.status}
                       </Badge>
                     </div>
+                    {guardianConsent.signedDocument?.url ? (
+                      <a href={guardianConsent.signedDocument.url} target="_blank" rel="noreferrer" className="mt-4 inline-flex min-h-10 items-center rounded-xl border border-amber-200 bg-white px-4 text-sm font-black text-amber-800 hover:bg-amber-100">
+                        <ExternalLink className="mr-2 h-4 w-4" /> Open uploaded signed form
+                      </a>
+                    ) : null}
+                    {canReviewGuardianConsent && guardianConsent.reviewStatus === 'PendingReview' ? (
+                      <div className="mt-4 space-y-3 rounded-xl border border-teal-200 bg-white p-4">
+                        <div>
+                          <p className="text-sm font-black text-slate-900">Next owner: Institution Admin or Manager</p>
+                          <p className="mt-1 text-xs text-slate-600">Open the uploaded form, confirm it is complete and signed, then accept it or return it with a correction note.</p>
+                        </div>
+                        <Textarea aria-label="Consent review comment" rows={3} placeholder="Required when returning the form; optional when accepting" value={consentReviewComment} onChange={(event) => setConsentReviewComment(event.target.value)} />
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <Button type="button" className="rounded-xl bg-emerald-600 text-white hover:bg-emerald-700" disabled={Boolean(reviewingConsent)} onClick={() => void reviewGuardianConsent('Accepted')}>
+                            <CheckCircle2 className="mr-2 h-4 w-4" /> {reviewingConsent === 'Accepted' ? 'Accepting…' : 'Accept form'}
+                          </Button>
+                          <Button type="button" variant="outline" className="rounded-xl border-red-200 bg-red-50 text-red-700 hover:bg-red-100" disabled={Boolean(reviewingConsent)} onClick={() => void reviewGuardianConsent('Rejected')}>
+                            <XCircle className="mr-2 h-4 w-4" /> {reviewingConsent === 'Rejected' ? 'Returning…' : 'Return for correction'}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
             </div>

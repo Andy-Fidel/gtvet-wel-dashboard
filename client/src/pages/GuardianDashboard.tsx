@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { formatDistanceToNow } from "date-fns"
-import { AlertTriangle, ArrowRight, Bell, Briefcase, CheckCircle2, ClipboardCheck, FileSignature, History, LifeBuoy, MapPin, MessageSquare, RefreshCw, Send, ShieldAlert, UserRound } from "lucide-react"
+import { AlertTriangle, ArrowRight, Bell, Briefcase, CheckCircle2, ClipboardCheck, Download, ExternalLink, FileSignature, History, LifeBuoy, MapPin, MessageSquare, RefreshCw, Send, ShieldAlert, Upload, UserRound } from "lucide-react"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
+import { downloadGuardianConsentPdf } from "@/lib/guardianConsentPdf"
 
 type GuardianLearnerCard = {
   learner: {
@@ -32,7 +33,7 @@ type GuardianLearnerCard = {
     requiresConsent: boolean
     hasDateOfBirth: boolean
     age: number | null
-    status: "Signed" | "Pending"
+    status: "Signed" | "Pending" | "Submitted" | "Rejected"
     signedAt?: string | null
     signedByName?: string
     relationshipToLearner?: string
@@ -41,6 +42,10 @@ type GuardianLearnerCard = {
     startDate?: string | null
     endDate?: string | null
     placementId?: string | null
+    submissionMethod?: "Electronic" | "Uploaded" | null
+    signedDocument?: { id: string; url: string; fileName: string } | null
+    reviewStatus?: "NotRequired" | "PendingReview" | "Accepted" | "Rejected" | null
+    reviewComment?: string
   }
   currentPlacement: {
     _id: string
@@ -131,6 +136,20 @@ type DashboardPayload = {
   unreadNotificationCount: number
 }
 
+const consentStatusClass = (status: GuardianLearnerCard["consentForm"]["status"]) => {
+  if (status === "Signed") return "bg-emerald-100 text-emerald-700 border-emerald-200"
+  if (status === "Submitted") return "bg-teal-100 text-teal-700 border-teal-200"
+  if (status === "Rejected") return "bg-red-100 text-red-700 border-red-200"
+  return "bg-amber-100 text-amber-700 border-amber-200"
+}
+
+const consentActionLabel = (status: GuardianLearnerCard["consentForm"]["status"]) => {
+  if (status === "Signed") return "Update Consent"
+  if (status === "Submitted") return "Replace Uploaded Form"
+  if (status === "Rejected") return "Correct Consent"
+  return "Sign Consent"
+}
+
 export default function GuardianDashboard() {
   const { authFetch } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -142,6 +161,9 @@ export default function GuardianDashboard() {
   const [consentOpen, setConsentOpen] = useState(false)
   const [consentLearner, setConsentLearner] = useState<GuardianLearnerCard | null>(null)
   const [signingConsent, setSigningConsent] = useState(false)
+  const [consentMethod, setConsentMethod] = useState<"electronic" | "upload">("electronic")
+  const [signedConsentFile, setSignedConsentFile] = useState<File | null>(null)
+  const [uploadingConsent, setUploadingConsent] = useState(false)
   const [ticketOpen, setTicketOpen] = useState(false)
   const [activeTicket, setActiveTicket] = useState<SupportTicket | null>(null)
   const [submittingReply, setSubmittingReply] = useState(false)
@@ -212,11 +234,11 @@ export default function GuardianDashboard() {
     [data]
   )
   const pendingConsentCount = useMemo(
-    () => (data?.learners || []).filter((item) => item.requiresGuardianConsent && item.consentForm.status !== "Signed").length,
+    () => (data?.learners || []).filter((item) => item.requiresGuardianConsent && ["Pending", "Rejected"].includes(item.consentForm.status)).length,
     [data]
   )
   const pendingConsentLearners = useMemo(
-    () => (data?.learners || []).filter((item) => item.requiresGuardianConsent && item.consentForm.status !== "Signed"),
+    () => (data?.learners || []).filter((item) => item.requiresGuardianConsent && ["Pending", "Rejected"].includes(item.consentForm.status)),
     [data]
   )
   const totalPlacementRecords = useMemo(
@@ -271,7 +293,87 @@ export default function GuardianDashboard() {
       respectfulResponsible: false,
       reportProblems: false,
     })
+    setConsentMethod("electronic")
+    setSignedConsentFile(null)
     setConsentOpen(true)
+  }
+
+  const handleDownloadConsent = async () => {
+    if (!consentLearner) return
+    try {
+      await downloadGuardianConsentPdf({
+        learnerName: consentLearner.learner.name,
+        trackingId: consentLearner.learner.trackingId,
+        dateOfBirth: consentLearner.learner.dateOfBirth,
+        institution: consentLearner.learner.institution,
+        program: consentLearner.learner.program,
+        studyYear: consentLearner.learner.year,
+        industryName: consentLearner.consentForm.industryName || consentLearner.currentPlacement?.companyName,
+        startDate: consentLearner.consentForm.startDate || consentLearner.currentPlacement?.startDate,
+        endDate: consentLearner.consentForm.endDate || consentLearner.currentPlacement?.endDate,
+        guardianName: consentDraft.guardianFullName,
+        guardianPhone: consentDraft.contactNumber,
+        relationship: consentDraft.relationshipToLearner,
+      })
+      toast.success("Consent form downloaded")
+    } catch (error) {
+      console.error(error)
+      toast.error("Could not download the consent form")
+    }
+  }
+
+  const handleUploadSignedConsent = async () => {
+    if (!consentLearner || !signedConsentFile) return
+    if (!consentDraft.guardianFullName.trim() || !consentDraft.contactNumber.trim() || !consentDraft.relationshipToLearner.trim()) {
+      toast.error("Guardian name, contact number, and relationship are required")
+      return
+    }
+    const placementId = consentLearner.consentForm.placementId || consentLearner.currentPlacement?._id
+    if (!placementId) {
+      toast.error("A placement is required before consent can be uploaded")
+      return
+    }
+
+    setUploadingConsent(true)
+    let uploadedDocumentId = ""
+    try {
+      const formData = new FormData()
+      formData.append("file", signedConsentFile)
+      formData.append("category", "Guardian Consent Form")
+      formData.append("learnerId", consentLearner.learner._id)
+      formData.append("placementId", placementId)
+      const uploadResponse = await authFetch("/api/documents/upload", { method: "POST", body: formData })
+      const uploadedDocument = await uploadResponse.json().catch(() => ({}))
+      if (!uploadResponse.ok) throw new Error(uploadedDocument.message || "Failed to upload signed form")
+      uploadedDocumentId = uploadedDocument._id
+
+      const consentResponse = await authFetch("/api/guardian-portal/consent-forms", {
+        method: "POST",
+        body: JSON.stringify({
+          learnerId: consentLearner.learner._id,
+          guardianFullName: consentDraft.guardianFullName,
+          contactNumber: consentDraft.contactNumber,
+          relationshipToLearner: consentDraft.relationshipToLearner,
+          submissionMethod: "Uploaded",
+          signedDocumentId: uploadedDocumentId,
+        }),
+      })
+      const payload = await consentResponse.json().catch(() => ({}))
+      if (!consentResponse.ok) throw new Error(payload.message || "Failed to submit signed consent form")
+      toast.success("Signed consent form submitted for institution review")
+      setConsentOpen(false)
+      setConsentLearner(null)
+      setSignedConsentFile(null)
+      await fetchDashboard()
+    } catch (error) {
+      if (uploadedDocumentId) {
+        await authFetch(`/api/documents/${uploadedDocumentId}`, { method: "DELETE" }).catch(() => undefined)
+      }
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : "Failed to upload signed consent form")
+    } finally {
+      setUploadingConsent(false)
+    }
   }
 
   const handleSignConsent = async () => {
@@ -480,11 +582,11 @@ export default function GuardianDashboard() {
             {pendingConsentLearners.map((item) => (
               <div key={item.learner._id} className="flex flex-col justify-between gap-4 rounded-2xl border border-amber-200 bg-white p-4 sm:flex-row sm:items-center">
                 <div>
-                  <p className="font-black text-slate-900">Guardian consent required</p>
-                  <p className="mt-1 text-sm text-slate-600">Review and sign the WEL consent for {item.learner.name}.</p>
+                  <p className="font-black text-slate-900">{item.consentForm.status === "Rejected" ? "Consent form needs correction" : "Guardian consent required"}</p>
+                  <p className="mt-1 text-sm text-slate-600">{item.consentForm.status === "Rejected" ? item.consentForm.reviewComment || `Upload a corrected form for ${item.learner.name}.` : `Review and sign the WEL consent for ${item.learner.name}.`}</p>
                 </div>
                 <Button type="button" className="min-h-11 shrink-0 rounded-xl bg-amber-600 text-white hover:bg-amber-700" disabled={!item.consentForm.hasDateOfBirth || !item.consentForm.industryName} onClick={() => openConsentForm(item)}>
-                  Sign consent
+                  {item.consentForm.status === "Rejected" ? "Correct consent" : "Sign consent"}
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </div>
@@ -541,8 +643,8 @@ export default function GuardianDashboard() {
                       <Badge className="bg-slate-100 text-slate-700 border-slate-200">{item.learner.academicStatus}</Badge>
                       <Badge className="bg-teal-100 text-teal-700 border-teal-200">{item.learner.status}</Badge>
                       {item.requiresGuardianConsent ? (
-                        <Badge className={item.consentForm.status === "Signed" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-amber-100 text-amber-700 border-amber-200"}>
-                          {item.consentForm.status === "Signed" ? "Consent signed" : "Consent required"}
+                        <Badge className={consentStatusClass(item.consentForm.status)}>
+                          Consent {item.consentForm.status.toLowerCase()}
                         </Badge>
                       ) : null}
                     </div>
@@ -582,13 +684,23 @@ export default function GuardianDashboard() {
                           <p className="mt-2 text-xs font-semibold text-red-600">Date of birth is missing on the learner record. Ask the institution to complete it before consent can be signed.</p>
                         ) : null}
                         {item.consentForm.status === "Signed" ? (
-                          <p className="mt-2 text-xs text-emerald-700">
-                            Signed by {item.consentForm.signedByName} ({item.consentForm.relationshipToLearner}) on {item.consentForm.signedAt ? new Date(item.consentForm.signedAt).toLocaleDateString() : "N/A"}.
-                          </p>
+                          <div className="mt-2 space-y-1 text-xs text-emerald-700">
+                            <p>Signed by {item.consentForm.signedByName} ({item.consentForm.relationshipToLearner}) on {item.consentForm.signedAt ? new Date(item.consentForm.signedAt).toLocaleDateString() : "N/A"}.</p>
+                            {item.consentForm.submissionMethod === "Uploaded" ? <p>A signed paper copy was uploaded.</p> : null}
+                            {item.consentForm.signedDocument?.url ? (
+                              <a className="inline-flex items-center font-bold underline underline-offset-2" href={item.consentForm.signedDocument.url} target="_blank" rel="noreferrer">
+                                View uploaded form <ExternalLink className="ml-1 h-3 w-3" />
+                              </a>
+                            ) : null}
+                          </div>
+                        ) : item.consentForm.status === "Submitted" ? (
+                          <p className="mt-2 text-xs font-semibold text-teal-700">Your signed form was submitted and is awaiting institution review.</p>
+                        ) : item.consentForm.status === "Rejected" ? (
+                          <p className="mt-2 text-xs font-semibold text-red-700">The institution returned this form: {item.consentForm.reviewComment || "Please upload a corrected signed copy."}</p>
                         ) : null}
                       </div>
                       <div className="flex flex-col items-start gap-2">
-                        <Badge className={item.consentForm.status === "Signed" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-amber-100 text-amber-700 border-amber-200"}>
+                        <Badge className={consentStatusClass(item.consentForm.status)}>
                           {item.consentForm.status}
                         </Badge>
                         <Button
@@ -597,7 +709,7 @@ export default function GuardianDashboard() {
                           onClick={() => openConsentForm(item)}
                         >
                           <FileSignature className="mr-2 h-4 w-4" />
-                          {item.consentForm.status === "Signed" ? "Update Consent" : "Sign Consent"}
+                          {consentActionLabel(item.consentForm.status)}
                         </Button>
                       </div>
                     </div>
@@ -890,44 +1002,100 @@ export default function GuardianDashboard() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Learner Declaration</p>
-                <p className="mt-2 text-sm text-slate-600">Confirm that the learner understands the WEL expectations captured in the source consent form.</p>
-                <div className="mt-4 space-y-3">
-                  {[
-                    ["understandsProgram", "The learner understands what the WEL program is."],
-                    ["followRules", "The learner will follow all company rules and instructions."],
-                    ["respectfulResponsible", "The learner will be respectful and responsible at all times."],
-                    ["reportProblems", "The learner will inform the supervisor or teacher if any problems arise."],
-                  ].map(([key, label]) => (
-                    <label key={key} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <Checkbox
-                        checked={consentDraft[key as keyof typeof consentDraft] as boolean}
-                        onCheckedChange={(checked) => setConsentDraft((current) => ({ ...current, [key]: Boolean(checked) }))}
+              <Tabs value={consentMethod} onValueChange={(value) => setConsentMethod(value as "electronic" | "upload")} className="space-y-5">
+                <TabsList className="grid min-h-12 w-full grid-cols-2 rounded-xl bg-slate-100 p-1">
+                  <TabsTrigger value="electronic" className="min-h-10 rounded-lg font-bold">Sign online</TabsTrigger>
+                  <TabsTrigger value="upload" className="min-h-10 rounded-lg font-bold">Download & upload</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="electronic" className="space-y-5">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <p className="text-xs font-black uppercase tracking-wider text-slate-400">Learner Declaration</p>
+                    <p className="mt-2 text-sm text-slate-600">Confirm that the learner understands the WEL expectations captured in the source consent form.</p>
+                    <div className="mt-4 space-y-3">
+                      {[
+                        ["understandsProgram", "The learner understands what the WEL program is."],
+                        ["followRules", "The learner will follow all company rules and instructions."],
+                        ["respectfulResponsible", "The learner will be respectful and responsible at all times."],
+                        ["reportProblems", "The learner will inform the supervisor or teacher if any problems arise."],
+                      ].map(([key, label]) => (
+                        <label key={key} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <Checkbox
+                            checked={consentDraft[key as keyof typeof consentDraft] as boolean}
+                            onCheckedChange={(checked) => setConsentDraft((current) => ({ ...current, [key]: Boolean(checked) }))}
+                          />
+                          <span className="text-sm text-slate-700">{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Input aria-label="Parent or guardian full name" placeholder="Parent/Guardian full name" value={consentDraft.guardianFullName} onChange={(e) => setConsentDraft((current) => ({ ...current, guardianFullName: e.target.value }))} />
+                    <Input aria-label="Guardian contact number" placeholder="Contact number" value={consentDraft.contactNumber} onChange={(e) => setConsentDraft((current) => ({ ...current, contactNumber: e.target.value }))} />
+                    <Input aria-label="Relationship to learner" placeholder="Relationship to learner" value={consentDraft.relationshipToLearner} onChange={(e) => setConsentDraft((current) => ({ ...current, relationshipToLearner: e.target.value }))} />
+                    <Input aria-label="Guardian signature name" placeholder="Type full name as signature" value={consentDraft.signatureName} onChange={(e) => setConsentDraft((current) => ({ ...current, signatureName: e.target.value }))} />
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                    <p>I hereby give my consent for my child to participate in the Workplace Experience Learning (WEL) Program as required by their institution.</p>
+                    <p className="mt-2">I understand that my child will be in a real working environment and must follow all safety and conduct rules.</p>
+                  </div>
+
+                  {!consentDeclarationsComplete ? <p className="text-sm font-semibold text-amber-700">Confirm all four learner declarations to enable signing.</p> : null}
+                  <Button className="min-h-11 w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={signingConsent || !consentDeclarationsComplete} onClick={handleSignConsent}>
+                    <FileSignature className="mr-2 h-4 w-4" />
+                    {signingConsent ? "Signing..." : "Sign Consent Form"}
+                  </Button>
+                </TabsContent>
+
+                <TabsContent value="upload" className="space-y-5">
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+                    <p className="font-black text-slate-900">1. Download and sign</p>
+                    <p className="mt-1 text-sm text-slate-600">Download the prefilled form, print it, complete every checkbox, then sign and date it.</p>
+                    <Button type="button" variant="outline" className="mt-4 min-h-11 rounded-xl border-sky-200 bg-white" onClick={() => void handleDownloadConsent()}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download consent form (PDF)
+                    </Button>
+                  </div>
+
+                  <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
+                    <div>
+                      <p className="font-black text-slate-900">2. Upload the signed form</p>
+                      <p className="mt-1 text-sm text-slate-600">Upload a clear PDF or photo showing the completed and signed form.</p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Input aria-label="Parent or guardian full name for uploaded consent" placeholder="Parent/Guardian full name" value={consentDraft.guardianFullName} onChange={(e) => setConsentDraft((current) => ({ ...current, guardianFullName: e.target.value }))} />
+                      <Input aria-label="Guardian contact number for uploaded consent" placeholder="Contact number" value={consentDraft.contactNumber} onChange={(e) => setConsentDraft((current) => ({ ...current, contactNumber: e.target.value }))} />
+                      <Input className="md:col-span-2" aria-label="Relationship for uploaded consent" placeholder="Relationship to learner" value={consentDraft.relationshipToLearner} onChange={(e) => setConsentDraft((current) => ({ ...current, relationshipToLearner: e.target.value }))} />
+                    </div>
+                    <label className="block rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-5 text-center transition-colors hover:border-teal-400">
+                      <Upload className="mx-auto h-7 w-7 text-teal-600" />
+                      <span className="mt-2 block text-sm font-bold text-slate-800">{signedConsentFile ? signedConsentFile.name : "Choose signed PDF or photo"}</span>
+                      <span className="mt-1 block text-xs text-slate-500">PDF, JPG, PNG, or WebP · maximum 10 MB</span>
+                      <input
+                        type="file"
+                        className="sr-only"
+                        accept=".pdf,image/jpeg,image/png,image/webp"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0] || null
+                          if (file && file.size > 10 * 1024 * 1024) {
+                            toast.error("The signed form must be 10 MB or smaller")
+                            event.target.value = ""
+                            setSignedConsentFile(null)
+                            return
+                          }
+                          setSignedConsentFile(file)
+                        }}
                       />
-                      <span className="text-sm text-slate-700">{label}</span>
                     </label>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <Input aria-label="Parent or guardian full name" placeholder="Parent/Guardian full name" value={consentDraft.guardianFullName} onChange={(e) => setConsentDraft((current) => ({ ...current, guardianFullName: e.target.value }))} />
-                <Input aria-label="Guardian contact number" placeholder="Contact number" value={consentDraft.contactNumber} onChange={(e) => setConsentDraft((current) => ({ ...current, contactNumber: e.target.value }))} />
-                <Input aria-label="Relationship to learner" placeholder="Relationship to learner" value={consentDraft.relationshipToLearner} onChange={(e) => setConsentDraft((current) => ({ ...current, relationshipToLearner: e.target.value }))} />
-                <Input aria-label="Guardian signature name" placeholder="Type full name as signature" value={consentDraft.signatureName} onChange={(e) => setConsentDraft((current) => ({ ...current, signatureName: e.target.value }))} />
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                <p>I hereby give my consent for my child to participate in the Workplace Experience Learning (WEL) Program as required by their institution.</p>
-                <p className="mt-2">I understand that my child will be in a real working environment and must follow all safety and conduct rules.</p>
-              </div>
-
-              {!consentDeclarationsComplete ? <p className="text-sm font-semibold text-amber-700">Confirm all four learner declarations to enable signing.</p> : null}
-              <Button className="min-h-11 w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={signingConsent || !consentDeclarationsComplete} onClick={handleSignConsent}>
-                <FileSignature className="mr-2 h-4 w-4" />
-                {signingConsent ? "Signing..." : "Sign Consent Form"}
-              </Button>
+                    <Button className="min-h-11 w-full rounded-xl bg-teal-600 text-white hover:bg-teal-700" disabled={uploadingConsent || !signedConsentFile} onClick={() => void handleUploadSignedConsent()}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      {uploadingConsent ? "Uploading and submitting..." : "Upload signed consent form"}
+                    </Button>
+                  </div>
+                </TabsContent>
+              </Tabs>
             </div>
           ) : null}
         </DialogContent>

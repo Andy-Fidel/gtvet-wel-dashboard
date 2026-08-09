@@ -1,159 +1,156 @@
-import { useEffect, useState } from "react"
-import { useAuth } from "@/context/AuthContext"
+import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { AlertCircle, User, Activity, Clock, ChevronRight } from "lucide-react"
+import { Activity, AlertCircle, ChevronRight, Clock, RefreshCw, User } from "lucide-react"
+import { useAuth } from "@/context/AuthContext"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 
+type TaskScope = "my" | "institution"
+
 interface ActionAlert {
-  type: 'Needs Placement' | 'Needs Visit' | 'Needs Assessment' | 'Setup Required' | 'Attendance Overdue' | 'Support Blocker';
-  learnerId: string;
-  learnerName: string;
-  trackingId: string;
-  message: string;
-  actionUrl: string;
+  id: string
+  type: "Needs Placement" | "Needs Visit" | "Needs Assessment" | "Setup Required" | "Attendance Overdue" | "Guardian Consent" | "Consent Review" | "Support Blocker"
+  learnerId: string
+  learnerName: string
+  trackingId: string
+  message: string
+  actionUrl: string
+  actionLabel: string
+  workflowStage: string
+  priority: "Critical" | "High" | "Medium" | "Low"
+  blockedBy?: string
+  dueAt?: string | null
+  owner: { id: string | null; name: string; role?: string }
+}
+
+const taskStyles: Record<string, string> = {
+  "Needs Placement": "bg-indigo-50 text-indigo-700 border-indigo-100",
+  "Needs Visit": "bg-amber-50 text-amber-700 border-amber-100",
+  "Needs Assessment": "bg-pink-50 text-pink-700 border-pink-100",
+  "Setup Required": "bg-orange-50 text-orange-700 border-orange-100",
+  "Attendance Overdue": "bg-red-50 text-red-700 border-red-100",
+  "Guardian Consent": "bg-cyan-50 text-cyan-700 border-cyan-100",
+  "Consent Review": "bg-teal-50 text-teal-700 border-teal-100",
+  "Support Blocker": "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-100",
+}
+
+const formatDueDate = (value?: string | null) => {
+  if (!value) return "No due date"
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? "No due date" : `Due ${date.toLocaleDateString()}`
 }
 
 export function ActionRequiredWidget() {
   const [alerts, setAlerts] = useState<ActionAlert[]>([])
+  const [scope, setScope] = useState<TaskScope>("my")
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
   const [sendingReminders, setSendingReminders] = useState(false)
   const { authFetch } = useAuth()
   const navigate = useNavigate()
 
-  useEffect(() => {
-    const fetchAlerts = async () => {
-      try {
-        const res = await authFetch('/api/dashboard/action-alerts')
-        if (res.ok) {
-          const data = await res.json()
-          setAlerts(data)
-        }
-      } catch (error) {
-        console.error("Failed to fetch action alerts", error)
-      } finally {
-        setLoading(false)
-      }
+  const fetchAlerts = useCallback(async () => {
+    setLoading(true)
+    setError("")
+    try {
+      const response = await authFetch(`/api/dashboard/action-alerts?scope=${scope}`)
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || "Failed to load operational tasks")
+      setAlerts(Array.isArray(payload) ? payload : payload.alerts || [])
+    } catch (fetchError) {
+      console.error("Failed to fetch action alerts", fetchError)
+      setAlerts([])
+      setError(fetchError instanceof Error ? fetchError.message : "Failed to load operational tasks")
+    } finally {
+      setLoading(false)
     }
-    fetchAlerts()
-  }, [authFetch])
+  }, [authFetch, scope])
+
+  useEffect(() => {
+    void fetchAlerts()
+  }, [fetchAlerts])
 
   const handleBulkReminders = async () => {
     setSendingReminders(true)
     try {
-      const res = await authFetch('/api/dashboard/bulk-reminders', {
-        method: 'POST',
+      const response = await authFetch("/api/dashboard/bulk-reminders", {
+        method: "POST",
         body: JSON.stringify({}),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.message || 'Failed to send reminders')
-      toast.success(
-        data.remindersCreated > 0
-          ? `Sent ${data.remindersCreated} reminder notification(s)`
-          : 'No new reminders were needed'
-      )
-    } catch (error) {
-      console.error('Failed to send bulk reminders', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to send reminders')
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || "Failed to send reminders")
+      toast.success(payload.remindersCreated > 0 ? `Sent ${payload.remindersCreated} reminder notification(s)` : "No new reminders were needed")
+    } catch (reminderError) {
+      console.error("Failed to send bulk reminders", reminderError)
+      toast.error(reminderError instanceof Error ? reminderError.message : "Failed to send reminders")
     } finally {
       setSendingReminders(false)
     }
   }
 
-  if (loading) {
-    return (
-      <div className="space-y-4">
-        {[1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-20 w-full rounded-[1.5rem]" />
-        ))}
-      </div>
-    )
-  }
-
-  if (alerts.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center p-8 text-center bg-gray-50/50 rounded-[1.5rem] border border-dashed border-gray-200 h-full min-h-[250px]">
-        <div className="w-16 h-16 bg-gradient-to-br from-emerald-100 to-teal-100 text-emerald-600 rounded-2xl flex items-center justify-center mb-4 shadow-sm transform -rotate-3">
-          <Activity className="w-8 h-8 transform rotate-3" />
-        </div>
-        <h4 className="text-lg font-black text-gray-900">All Caught Up!</h4>
-        <p className="text-sm font-medium text-gray-500 mt-1 max-w-[200px]">No pending actions required at the moment.</p>
-      </div>
-    )
-  }
-
-  const getIconForType = (type: string) => {
-    switch (type) {
-      case 'Needs Placement': return <User className="w-5 h-5 text-indigo-500" />;
-      case 'Needs Visit': return <Clock className="w-5 h-5 text-amber-500" />;
-      case 'Needs Assessment': return <AlertCircle className="w-5 h-5 text-pink-500" />;
-      case 'Setup Required': return <AlertCircle className="w-5 h-5 text-orange-500" />;
-      case 'Attendance Overdue': return <Clock className="w-5 h-5 text-red-500" />;
-      case 'Support Blocker': return <AlertCircle className="w-5 h-5 text-fuchsia-500" />;
-      default: return <Activity className="w-5 h-5 text-blue-500" />;
-    }
-  }
-
-  const getBgForType = (type: string) => {
-    switch (type) {
-      case 'Needs Placement': return 'bg-indigo-50 text-indigo-700 border-indigo-100';
-      case 'Needs Visit': return 'bg-amber-50 text-amber-700 border-amber-100';
-      case 'Needs Assessment': return 'bg-pink-50 text-pink-700 border-pink-100';
-      case 'Setup Required': return 'bg-orange-50 text-orange-700 border-orange-100';
-      case 'Attendance Overdue': return 'bg-red-50 text-red-700 border-red-100';
-      case 'Support Blocker': return 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-100';
-      default: return 'bg-blue-50 text-blue-700 border-blue-100';
-    }
-  }
-
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button
-          variant="outline"
-          size="sm"
-          className="rounded-xl"
-          disabled={sendingReminders}
-          onClick={handleBulkReminders}
-        >
-          {sendingReminders ? 'Sending…' : 'Send Overdue Reminders'}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="inline-flex w-full rounded-xl bg-slate-100 p-1 sm:w-auto" aria-label="Task scope">
+          <button type="button" onClick={() => setScope("my")} className={`min-h-10 flex-1 rounded-lg px-4 text-sm font-black transition sm:flex-none ${scope === "my" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>
+            My Tasks
+          </button>
+          <button type="button" onClick={() => setScope("institution")} className={`min-h-10 flex-1 rounded-lg px-4 text-sm font-black transition sm:flex-none ${scope === "institution" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>
+            Institution Tasks
+          </button>
+        </div>
+        <Button variant="outline" size="sm" className="min-h-10 rounded-xl" disabled={sendingReminders} onClick={handleBulkReminders}>
+          {sendingReminders ? "Sending…" : "Send overdue reminders"}
         </Button>
       </div>
-      {alerts.map((alert, index) => {
-        // More urgent actions get a pulsing dot
-        const isUrgent = alert.type === 'Needs Assessment' || alert.type === 'Needs Visit' || alert.type === 'Attendance Overdue' || alert.type === 'Support Blocker';
 
-        return (
-          <div 
-            key={`${alert.learnerId}-${index}`}
-            onClick={() => navigate(alert.actionUrl || `/learners/${alert.learnerId}`)}
-            className={`group flex items-start gap-4 p-4 rounded-[1.5rem] border cursor-pointer hover:shadow-lg transition-all duration-300 relative overflow-hidden ${getBgForType(alert.type)}`}
-          >
-            {isUrgent && (
-               <div className="absolute top-4 right-4 flex h-3 w-3">
-                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                 <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
-               </div>
-            )}
-            
-            <div className="p-3 bg-white/60 backdrop-blur-sm rounded-xl shrink-0 shadow-sm group-hover:bg-white transition-colors">
-              {getIconForType(alert.type)}
-            </div>
-            <div className="flex-1 min-w-0 pr-6">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[10px] font-black uppercase tracking-widest opacity-80">{alert.type}</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 bg-white/60 rounded-full">{alert.trackingId}</span>
+      {loading ? (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {[1, 2, 3, 4].map((item) => <Skeleton key={item} className="h-40 w-full rounded-2xl" />)}
+        </div>
+      ) : error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center" role="alert">
+          <AlertCircle className="mx-auto h-8 w-8 text-red-600" />
+          <p className="mt-3 font-black text-red-900">Operational tasks could not be loaded</p>
+          <p className="mt-1 text-sm text-red-700">{error}</p>
+          <Button type="button" variant="outline" className="mt-4 rounded-xl border-red-200 bg-white" onClick={() => void fetchAlerts()}>
+            <RefreshCw className="mr-2 h-4 w-4" /> Retry
+          </Button>
+        </div>
+      ) : alerts.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/50 p-8 text-center">
+          <Activity className="mx-auto h-9 w-9 text-emerald-600" />
+          <p className="mt-3 font-black text-slate-900">{scope === "my" ? "No tasks assigned to you" : "Institution workflow is up to date"}</p>
+          <p className="mt-1 text-sm text-slate-600">{scope === "my" ? "Check Institution Tasks for unassigned or team-owned work." : "No pending operational actions were found."}</p>
+        </div>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {alerts.map((alert) => (
+            <button key={alert.id} type="button" onClick={() => navigate(alert.actionUrl)} className={`group rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:shadow-lg ${taskStyles[alert.type] || "bg-blue-50 text-blue-700 border-blue-100"}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="border-0 bg-white/80 text-current">{alert.priority}</Badge>
+                    <span className="text-[10px] font-black uppercase tracking-widest opacity-80">{alert.workflowStage}</span>
+                  </div>
+                  <p className="mt-3 truncate text-base font-black text-slate-900">{alert.learnerName}</p>
+                  <p className="mt-1 text-xs font-bold opacity-80">{alert.trackingId} · {alert.type}</p>
+                </div>
+                <ChevronRight className="mt-1 h-5 w-5 shrink-0 transition-transform group-hover:translate-x-1" />
               </div>
-              <h4 className="font-black text-base truncate text-gray-900">{alert.learnerName}</h4>
-              <p className="text-xs font-bold opacity-75 mt-0.5 line-clamp-1">{alert.message}</p>
-            </div>
-            <div className="shrink-0 flex items-center justify-center auto rounded-full bg-white/0 group-hover:bg-white/50 transition-colors opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0 self-center">
-              <ChevronRight className="w-5 h-5 opacity-70" />
-            </div>
-          </div>
-        )
-      })}
+              <p className="mt-3 text-sm font-semibold text-slate-700">{alert.message}</p>
+              <div className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
+                <span className="inline-flex items-center gap-1.5"><User className="h-3.5 w-3.5" /> Owner: {alert.owner.name}</span>
+                <span className="inline-flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> {formatDueDate(alert.dueAt)}</span>
+              </div>
+              {alert.blockedBy ? <p className="mt-2 text-xs font-bold text-slate-700">Blocked by: {alert.blockedBy}</p> : null}
+              <p className="mt-3 text-sm font-black underline underline-offset-2">{alert.actionLabel}</p>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

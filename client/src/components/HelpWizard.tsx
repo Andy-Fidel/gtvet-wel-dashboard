@@ -998,32 +998,32 @@ export function HelpWizard() {
             }}
           />
         ) : null}
-        <DialogContent className="max-w-2xl bg-[#111827]/95 border-white/10 text-white">
+        <DialogContent className="max-w-2xl border-slate-200 bg-white text-slate-900">
           <DialogHeader className="space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge className="bg-[#FFB800] text-gray-900 border-0 font-black">{guide.label}</Badge>
-              <Badge className="bg-white/10 text-white border-white/10">{currentStepIndex + 1} / {steps.length}</Badge>
+              <Badge className="border-slate-200 bg-slate-100 text-slate-700">{currentStepIndex + 1} / {steps.length}</Badge>
               {currentStep.targetId && targetRect ? (
-                <Badge className="bg-emerald-500/15 text-emerald-200 border-emerald-400/20">Element highlighted</Badge>
+                <Badge className="border-emerald-200 bg-emerald-100 text-emerald-700">Element highlighted</Badge>
               ) : null}
             </div>
             <DialogTitle className="flex items-center gap-3">
               <Sparkles className="h-6 w-6 text-[#FFB800]" />
               {currentStep.title}
             </DialogTitle>
-            <DialogDescription className="text-white/70 text-base">
+            <DialogDescription className="text-slate-600 text-base">
               {currentStep.description}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="rounded-[2rem] bg-white/5 border border-white/10 p-5">
+          <div className="rounded-[2rem] border border-slate-200 bg-slate-50 p-5">
             <div className="flex items-center gap-2 mb-4">
               <BookOpenText className="h-5 w-5 text-[#FFB800]" />
-              <p className="font-black text-white">What To Know</p>
+              <p className="font-black text-slate-900">What To Know</p>
             </div>
             <ul className="space-y-3">
               {currentStep.bullets.map((bullet) => (
-                <li key={bullet} className="flex items-start gap-3 text-sm text-white/80">
+                <li key={bullet} className="flex items-start gap-3 text-sm text-slate-700">
                   <span className="mt-1 h-2 w-2 rounded-full bg-[#FFB800] shrink-0" />
                   <span>{bullet}</span>
                 </li>
@@ -1035,14 +1035,14 @@ export function HelpWizard() {
             <div className="flex items-center gap-3">
               <Button
                 variant="outline"
-                className="rounded-2xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                className="rounded-2xl border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
                 onClick={resetProgress}
               >
                 Restart Guide
               </Button>
               <Button
                 variant="outline"
-                className="rounded-2xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                className="rounded-2xl border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
                 onClick={() => setOpen(false)}
               >
                 Close Guide
@@ -1052,7 +1052,7 @@ export function HelpWizard() {
             <div className="flex items-center gap-3">
               <Button
                 variant="outline"
-                className="rounded-2xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                className="rounded-2xl border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
                 onClick={() => {
                   const nextIndex = Math.max(0, currentStepIndex - 1)
                   setCurrentStepIndex(nextIndex)

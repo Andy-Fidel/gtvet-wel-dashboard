@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/card"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Overview } from "@/components/dashboard/Overview"
 import { ActionRequiredWidget } from "@/components/dashboard/ActionRequiredWidget"
@@ -18,6 +19,14 @@ import type { AdminOverviewStats, DashboardStats } from "@/types/dashboard"
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton"
 import { AdminDashboardView } from "./AdminDashboardView"
 import { useEffect } from "react";
+
+type DelegatedPlacementSummary = {
+  _id: string
+  institution: string
+  companyName: string
+  learner?: { name?: string }
+}
+
 export default function Dashboard() {
   const { authFetch, user } = useAuth();
   const navigate = useNavigate();
@@ -38,11 +47,14 @@ export default function Dashboard() {
      }
   }, [user, navigate]);
 
-  const downloadCSV = (dataset: any[], filename: string) => {
+  const downloadCSV = (dataset: unknown[], filename: string) => {
     if (!dataset.length) return;
-    const headers = Object.keys(dataset[0]).join(",");
+    const firstRecord = dataset[0] && typeof dataset[0] === "object" ? dataset[0] as Record<string, unknown> : { value: dataset[0] };
+    const headerKeys = Object.keys(firstRecord);
+    const headers = headerKeys.join(",");
     const rows = dataset.map(item => {
-      return Object.values(item).map(val => {
+      const record = item && typeof item === "object" ? item as Record<string, unknown> : { value: item };
+      return headerKeys.map((key) => record[key]).map(val => {
         const str = String(val);
         return str.includes(",") ? `"${str.replace(/"/g, '""')}"` : str;
       }).join(",");
@@ -77,7 +89,7 @@ export default function Dashboard() {
   });
 
   // Fetch delegated placements for institution-level users
-  const { data: delegatedPlacements } = useQuery<any[]>({
+  const { data: delegatedPlacements } = useQuery<DelegatedPlacementSummary[]>({
     queryKey: ['delegatedPlacements', user?._id],
     queryFn: async () => {
       const res = await authFetch('/api/placements/delegated-to-me');
@@ -174,7 +186,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-3 mt-4">
              <div className="px-3 py-1 bg-amber-50 text-amber-600 rounded-full text-xs items-center inline-flex font-bold border border-amber-100">
                 <div className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-2 animate-pulse"></div>
-                {stats?.pending || 0} Pending Placements
+                {stats?.pending || 0} Learners Awaiting Placement
              </div>
              <div className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-xs items-center inline-flex font-bold border border-indigo-100">
                 <Users className="w-3 h-3 mr-1" />
@@ -210,6 +222,21 @@ export default function Dashboard() {
         </Card>
       ) : (
         <>
+          <Card className="overflow-hidden rounded-[2rem] border-amber-200 bg-white shadow-xl">
+            <CardHeader className="border-b border-amber-100 bg-amber-50/60 p-5 md:p-7">
+              <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <CardTitle className="text-2xl font-black text-slate-900">My Work Today</CardTitle>
+                  <CardDescription className="mt-1 font-semibold text-slate-600">Owner-scoped tasks, deadlines, blockers, and the next action for each learner workflow.</CardDescription>
+                </div>
+                <Badge className="w-fit border-amber-200 bg-white text-amber-800">Operational priority</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4 md:p-6">
+              <ActionRequiredWidget />
+            </CardContent>
+          </Card>
+
           {/* Enhanced Stat Cards */}
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300 relative overflow-hidden group">
@@ -240,7 +267,7 @@ export default function Dashboard() {
                 </div>
                 <div className="space-y-1">
                   <h3 className="text-2xl md:text-3xl font-black text-gray-900">{stats?.placed || 0}</h3>
-                  <p className="text-sm font-bold text-gray-400">Successfully Placed</p>
+                  <p className="text-sm font-bold text-gray-400">Learners With WEL Placement</p>
                 </div>
               </CardContent>
             </Card>
@@ -255,7 +282,7 @@ export default function Dashboard() {
                 </div>
                 <div className="space-y-1">
                   <h3 className="text-2xl md:text-3xl font-black text-gray-900">{stats?.pending || 0}</h3>
-                  <p className="text-sm font-bold text-gray-400">Pending Placements</p>
+                  <p className="text-sm font-bold text-gray-400">Learners Awaiting Placement</p>
                 </div>
               </CardContent>
             </Card>
@@ -365,7 +392,7 @@ export default function Dashboard() {
                       Showing 5 of {delegatedPlacements.length} delegated placements.
                     </p>
                   )}
-                  {delegatedPlacements.slice(0, 5).map((p: any, index) => (
+                  {delegatedPlacements.slice(0, 5).map((p, index) => (
                     <button
                       key={p._id}
                       type="button"
@@ -660,25 +687,9 @@ export default function Dashboard() {
           )}
 
           {/* Bento Box Grid */}
-          <div className="grid gap-6 grid-cols-1 xl:grid-cols-3">
-            
-            {/* Action Required Widget */}
-            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden flex flex-col max-h-[500px] xl:col-span-1 border-t-4 border-t-amber-400">
-              <CardHeader className="p-4 md:p-6 pb-2">
-                <CardTitle className="text-xl font-black flex items-center gap-2">
-                   Action Required
-                </CardTitle>
-                <CardDescription className="text-sm font-bold text-gray-400">
-                  Tasks needing immediate attention.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="p-4 md:p-6 pt-2 flex-1 overflow-y-auto custom-scrollbar">
-                <ActionRequiredWidget />
-              </CardContent>
-            </Card>
-
+          <div className="grid gap-6 grid-cols-1">
             {/* Overview Chart */}
-            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden min-h-[400px] xl:col-span-2">
+            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden min-h-[400px]">
               <CardHeader className="p-6 md:p-8 pb-0">
                 <CardTitle className="text-xl md:text-2xl font-black border-l-4 border-indigo-500 pl-4">Placement Trends</CardTitle>
                 <CardDescription className="text-sm md:text-base font-bold text-gray-400 mt-2 pl-4">

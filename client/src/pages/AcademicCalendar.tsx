@@ -510,7 +510,7 @@ export default function AcademicCalendarPage() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="md:col-span-2">
                   <div className="mb-1 flex items-center justify-between">
-                    <label className="text-sm font-bold text-white">Title *</label>
+                    <label className="text-sm font-bold text-slate-700">Title *</label>
                     {formData.eventType === 'WEL Window' ? (
                       <button
                         type="button"
@@ -531,12 +531,12 @@ export default function AcademicCalendarPage() {
                     value={formData.title}
                     onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   />
-                  <p className="mt-2 text-xs font-medium text-white">
+                  <p className="mt-2 text-xs font-medium text-slate-500">
                     Use a clear operational title that staff can recognize quickly in calendar views and previews.
                   </p>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="text-sm font-bold text-white block mb-1">Description</label>
+                  <label className="text-sm font-bold text-slate-700 block mb-1">Description</label>
                   <textarea
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50 resize-none"
                     rows={3}
@@ -544,12 +544,12 @@ export default function AcademicCalendarPage() {
                     value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   />
-                  <p className="mt-2 text-xs font-medium text-white">
+                  <p className="mt-2 text-xs font-medium text-slate-500">
                     Add context that explains how this event should be interpreted or used by institutions.
                   </p>
                 </div>
                 <div>
-                  <label className="text-sm font-bold text-white block mb-1">Event Type</label>
+                  <label className="text-sm font-bold text-slate-700 block mb-1">Event Type</label>
                   <select
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
                     value={formData.eventType}
@@ -559,12 +559,12 @@ export default function AcademicCalendarPage() {
                       <option key={option} value={option}>{option}</option>
                     ))}
                   </select>
-                  <p className="mt-2 text-xs font-medium text-white">
-                    Choose <span className="font-bold text-white">WEL Window</span> only for cohort schedules that should control placement eligibility.
+                  <p className="mt-2 text-xs font-medium text-slate-500">
+                    Choose <span className="font-bold text-slate-700">WEL Window</span> only for cohort schedules that should control placement eligibility.
                   </p>
                 </div>
                 <div>
-                  <label className="text-sm font-bold text-white block mb-1">Status</label>
+                  <label className="text-sm font-bold text-slate-700 block mb-1">Status</label>
                   <select
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
                     value={formData.isActive ? 'Active' : 'Inactive'}
@@ -573,36 +573,36 @@ export default function AcademicCalendarPage() {
                     <option value="Active">Active</option>
                     <option value="Inactive">Inactive</option>
                   </select>
-                  <p className="mt-2 text-xs font-medium text-white">
+                  <p className="mt-2 text-xs font-medium text-slate-500">
                     Inactive templates remain on record but stop driving operational scheduling.
                   </p>
                 </div>
                 <div>
-                  <label className="text-sm font-bold text-white block mb-1">Start Date *</label>
+                  <label className="text-sm font-bold text-slate-700 block mb-1">Start Date *</label>
                   <input
                     type="date"
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
                     value={formData.startDate}
                     onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
                   />
-                  <p className="mt-2 text-xs font-medium text-white">
+                  <p className="mt-2 text-xs font-medium text-slate-500">
                     The first day the event or WEL window becomes operational.
                   </p>
                 </div>
                 <div>
-                  <label className="text-sm font-bold text-white block mb-1">End Date *</label>
+                  <label className="text-sm font-bold text-slate-700 block mb-1">End Date *</label>
                   <input
                     type="date"
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
                     value={formData.endDate}
                     onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
                   />
-                  <p className="mt-2 text-xs font-medium text-white">
+                  <p className="mt-2 text-xs font-medium text-slate-500">
                     The last day covered by this event or cohort window.
                   </p>
                 </div>
                 <div>
-                  <label className="text-sm font-bold text-white block mb-1">Semester</label>
+                  <label className="text-sm font-bold text-slate-700 block mb-1">Semester</label>
                   <select
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
                     value={formData.semester}
@@ -613,12 +613,12 @@ export default function AcademicCalendarPage() {
                       <option key={option} value={option}>{option}</option>
                     ))}
                   </select>
-                  <p className="mt-2 text-xs font-medium text-white">
+                  <p className="mt-2 text-xs font-medium text-slate-500">
                     Link the event to the semester it belongs to for filtering and reporting.
                   </p>
                 </div>
                 <div>
-                  <label className="text-sm font-bold text-white block mb-1">Academic Year</label>
+                  <label className="text-sm font-bold text-slate-700 block mb-1">Academic Year</label>
                   <input
                     type="text"
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
@@ -626,8 +626,8 @@ export default function AcademicCalendarPage() {
                     value={formData.academicYear}
                     onChange={(e) => setFormData({ ...formData, academicYear: e.target.value })}
                   />
-                  <p className="mt-2 text-xs font-medium text-white">
-                    Use the academic cycle format the system already uses, for example <span className="font-bold text-white">2026/2027</span>.
+                  <p className="mt-2 text-xs font-medium text-slate-500">
+                    Use the academic cycle format the system already uses, for example <span className="font-bold text-slate-700">2026/2027</span>.
                   </p>
                 </div>
               </div>
