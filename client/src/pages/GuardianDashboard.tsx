@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { formatDistanceToNow } from "date-fns"
-import { Bell, Briefcase, ClipboardCheck, FileSignature, LifeBuoy, MapPin, MessageSquare, Send, ShieldAlert, UserRound } from "lucide-react"
+import { AlertTriangle, ArrowRight, Bell, Briefcase, CheckCircle2, ClipboardCheck, FileSignature, History, LifeBuoy, MapPin, MessageSquare, RefreshCw, Send, ShieldAlert, UserRound } from "lucide-react"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -56,7 +57,11 @@ type GuardianLearnerCard = {
     cycleNumber: number
     academicYear?: string
     companyName: string
+    partnerName?: string
+    sector?: string
     location?: string
+    supervisorName?: string
+    institution?: string
     status: string
     startDate?: string
     endDate?: string
@@ -93,7 +98,10 @@ type NotificationItem = {
   message: string
   createdAt: string
   read?: boolean
+  link?: string
 }
+
+type GuardianSection = "overview" | "history" | "alerts" | "support"
 
 type SupportTicket = {
   _id: string
@@ -125,8 +133,12 @@ type DashboardPayload = {
 
 export default function GuardianDashboard() {
   const { authFetch } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [data, setData] = useState<DashboardPayload | null>(null)
   const [loading, setLoading] = useState(true)
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
   const [consentOpen, setConsentOpen] = useState(false)
   const [consentLearner, setConsentLearner] = useState<GuardianLearnerCard | null>(null)
   const [signingConsent, setSigningConsent] = useState(false)
@@ -153,13 +165,19 @@ export default function GuardianDashboard() {
   })
   const [creatingConcern, setCreatingConcern] = useState(false)
 
-  const fetchDashboard = async () => {
+  const sectionParam = searchParams.get("section")
+  const activeSection: GuardianSection = sectionParam === "history" || sectionParam === "alerts" || sectionParam === "support" ? sectionParam : "overview"
+
+  const fetchDashboard = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const res = await authFetch("/api/guardian-portal/dashboard")
       if (!res.ok) throw new Error("Failed to load guardian dashboard")
       const payload = await res.json()
       setData(payload)
+      setHasLoaded(true)
+      setLastUpdatedAt(new Date())
       setConcernDraft((current) => ({
         ...current,
           learnerId: current.learnerId || payload.learners?.[0]?.learner?._id || "",
@@ -167,15 +185,26 @@ export default function GuardianDashboard() {
       return payload as DashboardPayload
     } catch (error) {
       console.error(error)
+      setLoadError("Check your connection, then try again.")
       toast.error(error instanceof Error ? error.message : "Failed to load guardian dashboard")
     } finally {
       setLoading(false)
     }
-  }
+  }, [authFetch])
 
   useEffect(() => {
-    fetchDashboard()
-  }, [])
+    void fetchDashboard()
+  }, [fetchDashboard])
+
+  const initialLoading = loading && !hasLoaded
+  const dashboardUnavailable = Boolean(loadError && !hasLoaded)
+
+  const updateSection = (section: GuardianSection) => {
+    const next = new URLSearchParams(searchParams)
+    if (section === "overview") next.delete("section")
+    else next.set("section", section)
+    setSearchParams(next, { replace: false })
+  }
 
   const linkedLearnerOptions = data?.learners || []
   const totalPendingAttendance = useMemo(
@@ -186,6 +215,49 @@ export default function GuardianDashboard() {
     () => (data?.learners || []).filter((item) => item.requiresGuardianConsent && item.consentForm.status !== "Signed").length,
     [data]
   )
+  const pendingConsentLearners = useMemo(
+    () => (data?.learners || []).filter((item) => item.requiresGuardianConsent && item.consentForm.status !== "Signed"),
+    [data]
+  )
+  const totalPlacementRecords = useMemo(
+    () => (data?.learners || []).reduce((sum, item) => sum + item.placementHistory.length, 0),
+    [data]
+  )
+  const consentDeclarationsComplete = consentDraft.understandsProgram
+    && consentDraft.followRules
+    && consentDraft.respectfulResponsible
+    && consentDraft.reportProblems
+
+  const handleMarkNotificationRead = async (notification: NotificationItem) => {
+    if (notification.read) return
+    try {
+      const res = await authFetch(`/api/notifications/${notification._id}/read`, { method: "PUT" })
+      if (!res.ok) throw new Error("Failed to mark alert as read")
+      setData((current) => current ? {
+        ...current,
+        notifications: current.notifications.map((item) => item._id === notification._id ? { ...item, read: true } : item),
+        unreadNotificationCount: Math.max(0, current.unreadNotificationCount - 1),
+      } : current)
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : "Failed to update alert")
+    }
+  }
+
+  const handleMarkAllNotificationsRead = async () => {
+    try {
+      const res = await authFetch("/api/notifications/read-all", { method: "PUT" })
+      if (!res.ok) throw new Error("Failed to mark alerts as read")
+      setData((current) => current ? {
+        ...current,
+        notifications: current.notifications.map((item) => ({ ...item, read: true })),
+        unreadNotificationCount: 0,
+      } : current)
+    } catch (error) {
+      console.error(error)
+      toast.error(error instanceof Error ? error.message : "Failed to update alerts")
+    }
+  }
 
   const openConsentForm = (item: GuardianLearnerCard) => {
     setConsentLearner(item)
@@ -207,6 +279,10 @@ export default function GuardianDashboard() {
 
     if (!consentDraft.guardianFullName.trim() || !consentDraft.contactNumber.trim() || !consentDraft.relationshipToLearner.trim() || !consentDraft.signatureName.trim()) {
       toast.error("Guardian name, contact number, relationship, and signature are required")
+      return
+    }
+    if (!consentDeclarationsComplete) {
+      toast.error("Confirm all learner declarations before signing")
       return
     }
 
@@ -310,7 +386,7 @@ export default function GuardianDashboard() {
     }
   }
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <div className="space-y-6 p-8">
         <Skeleton className="h-32 w-full rounded-[2rem]" />
@@ -330,8 +406,14 @@ export default function GuardianDashboard() {
             <p className="mt-2 max-w-2xl text-sm text-slate-600">
               Track placements, attendance, assessments, and notifications for your linked learners. Use the concern desk to contact the institution support team.
             </p>
+            {lastUpdatedAt ? <p className="mt-2 text-xs font-medium text-slate-500">Last updated {lastUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p> : null}
           </div>
-          <div className="grid grid-cols-2 gap-3 md:min-w-[320px]">
+          <div className="space-y-3 md:min-w-[320px]">
+            <Button type="button" variant="outline" className="min-h-11 w-full rounded-xl bg-white/80" disabled={loading} onClick={() => void fetchDashboard()}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "Refreshing..." : "Refresh data"}
+            </Button>
+            {!dashboardUnavailable ? <div className="grid grid-cols-2 gap-3">
             <Card className="rounded-2xl border-teal-100 bg-white/80 shadow-none">
               <CardContent className="p-4">
                 <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Linked Learners</p>
@@ -340,8 +422,9 @@ export default function GuardianDashboard() {
             </Card>
             <Card className="rounded-2xl border-amber-100 bg-white/80 shadow-none">
               <CardContent className="p-4">
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Pending Hours</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Awaiting Supervisor</p>
                 <p className="mt-2 text-2xl font-black text-amber-600">{totalPendingAttendance}</p>
+                <p className="mt-1 text-xs text-slate-500">Hours for review</p>
               </CardContent>
             </Card>
             <Card className="rounded-2xl border-sky-100 bg-white/80 shadow-none">
@@ -356,18 +439,91 @@ export default function GuardianDashboard() {
                 <p className="mt-2 text-2xl font-black text-rose-600">{data?.unreadNotificationCount || 0}</p>
               </CardContent>
             </Card>
+            </div> : (
+              <div className="rounded-2xl border border-dashed border-red-200 bg-white/70 p-4 text-center text-sm font-semibold text-red-700">
+                Dashboard totals are unavailable.
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      <Tabs defaultValue="learners" className="space-y-6">
-        <TabsList className="grid w-full max-w-xl grid-cols-3 rounded-2xl bg-slate-100 p-1">
-          <TabsTrigger data-help-id="guardian-dashboard-tab-learners" value="learners" className="rounded-xl font-bold">Learners</TabsTrigger>
-          <TabsTrigger data-help-id="guardian-dashboard-tab-alerts" value="alerts" className="rounded-xl font-bold">Alerts</TabsTrigger>
-          <TabsTrigger data-help-id="guardian-dashboard-tab-concerns" value="concerns" className="rounded-xl font-bold">Concerns</TabsTrigger>
+      <p className="sr-only" role="status" aria-live="polite">
+        {loading ? "Updating guardian dashboard." : loadError ? "Guardian dashboard update failed." : hasLoaded ? "Guardian dashboard is up to date." : ""}
+      </p>
+
+      {loadError ? (
+        <Card className="rounded-2xl border-red-200 bg-red-50 shadow-sm" role="alert">
+          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+              <div>
+                <p className="font-black text-slate-900">{hasLoaded ? "Could not refresh the family overview" : "Could not load the family overview"}</p>
+                <p className="mt-1 text-sm text-slate-700">{hasLoaded ? "Your last loaded information remains visible. " : "No totals are being presented as current. "}{loadError}</p>
+              </div>
+            </div>
+            <Button type="button" variant="outline" className="min-h-11 rounded-xl border-red-200 bg-white" onClick={() => void fetchDashboard()}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Try again
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {!dashboardUnavailable && activeSection === "overview" && (pendingConsentLearners.length > 0 || (data?.unreadNotificationCount || 0) > 0) ? (
+        <Card className="rounded-[2rem] border border-amber-200 bg-amber-50/70 shadow-sm" aria-labelledby="guardian-actions-title">
+          <CardHeader>
+            <CardTitle id="guardian-actions-title" className="text-xl font-black text-slate-900">Needs Your Attention</CardTitle>
+            <CardDescription>Only items that you can review or complete are shown here.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 pt-0 md:grid-cols-2">
+            {pendingConsentLearners.map((item) => (
+              <div key={item.learner._id} className="flex flex-col justify-between gap-4 rounded-2xl border border-amber-200 bg-white p-4 sm:flex-row sm:items-center">
+                <div>
+                  <p className="font-black text-slate-900">Guardian consent required</p>
+                  <p className="mt-1 text-sm text-slate-600">Review and sign the WEL consent for {item.learner.name}.</p>
+                </div>
+                <Button type="button" className="min-h-11 shrink-0 rounded-xl bg-amber-600 text-white hover:bg-amber-700" disabled={!item.consentForm.hasDateOfBirth || !item.consentForm.industryName} onClick={() => openConsentForm(item)}>
+                  Sign consent
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+            {(data?.unreadNotificationCount || 0) > 0 ? (
+              <div className="flex flex-col justify-between gap-4 rounded-2xl border border-rose-200 bg-white p-4 sm:flex-row sm:items-center">
+                <div>
+                  <p className="font-black text-slate-900">Review new alerts</p>
+                  <p className="mt-1 text-sm text-slate-600">{data?.unreadNotificationCount} update{data?.unreadNotificationCount === 1 ? "" : "s"} from the institution need your attention.</p>
+                </div>
+                <Button type="button" variant="outline" className="min-h-11 shrink-0 rounded-xl" onClick={() => updateSection("alerts")}>
+                  View alerts
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {!dashboardUnavailable ? <Tabs value={activeSection} onValueChange={(value) => updateSection(value as GuardianSection)} className="space-y-6">
+        <TabsList className="grid min-h-14 w-full grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1 sm:max-w-3xl sm:grid-cols-4">
+          <TabsTrigger data-help-id="guardian-dashboard-tab-learners" value="overview" className="min-h-11 rounded-xl font-bold">Overview</TabsTrigger>
+          <TabsTrigger value="history" className="min-h-11 rounded-xl font-bold">History{totalPlacementRecords > 0 ? <Badge className="ml-2 border-slate-200 bg-white text-slate-700">{totalPlacementRecords}</Badge> : null}</TabsTrigger>
+          <TabsTrigger data-help-id="guardian-dashboard-tab-alerts" value="alerts" className="min-h-11 rounded-xl font-bold">Alerts{(data?.unreadNotificationCount || 0) > 0 ? <Badge className="ml-2 border-0 bg-rose-500 text-white">{data?.unreadNotificationCount}</Badge> : null}</TabsTrigger>
+          <TabsTrigger data-help-id="guardian-dashboard-tab-concerns" value="support" className="min-h-11 rounded-xl font-bold">Support</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="learners" className="space-y-6">
+        <TabsContent value="overview" className="space-y-6">
+          {(data?.learners || []).length === 0 ? (
+            <Card className="rounded-[2rem] border border-dashed border-slate-300 bg-slate-50 shadow-none">
+              <CardContent className="p-10 text-center">
+                <UserRound className="mx-auto h-12 w-12 text-slate-300" />
+                <p className="mt-4 font-black text-slate-900">No learners are linked yet</p>
+                <p className="mt-2 text-sm text-slate-600">Ask your institution administrator to link the correct learner to this guardian account.</p>
+                <Button type="button" variant="outline" className="mt-5 min-h-11 rounded-xl" onClick={() => updateSection("support")}>Contact support</Button>
+              </CardContent>
+            </Card>
+          ) : null}
           {(data?.learners || []).map((item) => (
             <Card key={item.learner._id} data-help-id="guardian-dashboard-learners" className="rounded-[2rem] border border-slate-200 shadow-sm">
               <CardHeader className="space-y-4">
@@ -457,9 +613,10 @@ export default function GuardianDashboard() {
                     <p className="mt-2 text-2xl font-black text-slate-900">{item.attendanceSummary.totalHours}</p>
                     <p className="text-xs text-slate-500">Total hours logged</p>
                     {item.attendanceSummary.latestEntry ? (
-                      <p className="mt-2 text-xs text-slate-600">
-                        Latest: {new Date(item.attendanceSummary.latestEntry.periodEnd).toLocaleDateString()} · {item.attendanceSummary.latestEntry.status}
-                      </p>
+                      <div className="mt-2 space-y-1 text-xs text-slate-600">
+                        <p>Latest: {new Date(item.attendanceSummary.latestEntry.periodEnd).toLocaleDateString()} · {item.attendanceSummary.latestEntry.status}</p>
+                        {item.attendanceSummary.pendingEntries > 0 ? <p className="font-semibold text-amber-700">Owner: workplace supervisor · Next: review and sign off</p> : null}
+                      </div>
                     ) : null}
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -503,142 +660,174 @@ export default function GuardianDashboard() {
                   </div>
                 </div>
 
-                <div>
-                  <p className="text-sm font-black uppercase tracking-wider text-slate-400">Placement History</p>
-                  {item.placementHistory.length === 0 ? (
-                    <p className="mt-3 text-sm text-slate-500">No placement history recorded yet.</p>
-                  ) : (
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      {item.placementHistory.map((placement) => (
-                        <div key={placement.placementId} className="rounded-2xl border border-slate-200 bg-white p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="font-bold text-slate-900">{placement.companyName}</p>
-                              <p className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
-                                Cycle {placement.cycleNumber}{placement.academicYear ? ` · ${placement.academicYear}` : ""}
-                              </p>
-                            </div>
-                            <Badge variant="outline">{placement.status}</Badge>
-                          </div>
-                          <p className="mt-2 text-sm text-slate-600">{placement.location || "Location not set"}</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {placement.startDate ? new Date(placement.startDate).toLocaleDateString() : "TBD"} to {placement.endDate ? new Date(placement.endDate).toLocaleDateString() : "TBD"}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-black text-slate-900">Placement History</p>
+                    <p className="mt-1 text-sm text-slate-600">{item.placementHistory.length} placement record{item.placementHistory.length === 1 ? "" : "s"} available for this learner.</p>
+                  </div>
+                  <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={() => updateSection("history")}>
+                    <History className="mr-2 h-4 w-4" />
+                    View history
+                  </Button>
                 </div>
               </CardContent>
             </Card>
           ))}
         </TabsContent>
 
-        <TabsContent value="alerts" className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <TabsContent value="history" className="space-y-6">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-700">
+              <History className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-xl font-black text-slate-900">Placement History for Your Wards</h3>
+              <p className="mt-1 text-sm text-slate-600">Review current and previous workplace placements for every learner linked to your guardian account.</p>
+            </div>
+          </div>
+
+          {(data?.learners || []).length === 0 ? (
+            <Card className="rounded-[2rem] border border-dashed border-slate-300 bg-slate-50 shadow-none">
+              <CardContent className="p-10 text-center text-sm text-slate-600">No linked learners are available for placement history.</CardContent>
+            </Card>
+          ) : (data?.learners || []).map((item) => (
+            <Card key={item.learner._id} className="overflow-hidden rounded-[2rem] border border-slate-200 shadow-sm">
+              <CardHeader className="border-b border-slate-100 bg-slate-50/70">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-xl font-black text-slate-900"><UserRound className="h-5 w-5 text-teal-600" />{item.learner.name}</CardTitle>
+                    <CardDescription className="mt-1">{item.learner.trackingId} · {item.learner.program} · {item.learner.institution}</CardDescription>
+                  </div>
+                  <Badge className="w-fit border-violet-200 bg-violet-100 text-violet-700">{item.placementHistory.length} record{item.placementHistory.length === 1 ? "" : "s"}</Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="p-5 md:p-6">
+                {item.placementHistory.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">No placement history has been recorded for this learner.</div>
+                ) : (
+                  <ol className="space-y-4" aria-label={`Placement history for ${item.learner.name}`}>
+                    {item.placementHistory.map((placement) => (
+                      <li key={placement.placementId} className="relative rounded-2xl border border-slate-200 bg-white p-5">
+                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-lg font-black text-slate-900">{placement.companyName}</p>
+                              <Badge className={placement.status === "Active" ? "border-emerald-200 bg-emerald-100 text-emerald-700" : placement.status === "Completed" ? "border-sky-200 bg-sky-100 text-sky-700" : "border-slate-200 bg-slate-100 text-slate-700"}>{placement.status}</Badge>
+                            </div>
+                            <p className="mt-1 text-xs font-black uppercase tracking-wider text-violet-600">Cycle {placement.cycleNumber}{placement.academicYear ? ` · ${placement.academicYear}` : ""}</p>
+                            {placement.partnerName && placement.partnerName !== placement.companyName ? <p className="mt-2 text-sm text-slate-600">Industry partner: {placement.partnerName}</p> : null}
+                          </div>
+                          <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 md:text-right">
+                            {placement.startDate ? new Date(placement.startDate).toLocaleDateString() : "Start date TBD"}
+                            <span className="mx-2 text-slate-400">to</span>
+                            {placement.endDate ? new Date(placement.endDate).toLocaleDateString() : "End date TBD"}
+                          </div>
+                        </div>
+                        <dl className="mt-4 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+                          <div><dt className="text-xs font-black uppercase tracking-wider text-slate-400">Location</dt><dd className="mt-1 text-sm font-semibold text-slate-700">{placement.location || "Not recorded"}</dd></div>
+                          <div><dt className="text-xs font-black uppercase tracking-wider text-slate-400">Sector</dt><dd className="mt-1 text-sm font-semibold text-slate-700">{placement.sector || "Not recorded"}</dd></div>
+                          <div><dt className="text-xs font-black uppercase tracking-wider text-slate-400">Supervisor</dt><dd className="mt-1 text-sm font-semibold text-slate-700">{placement.supervisorName || "Not recorded"}</dd></div>
+                          <div><dt className="text-xs font-black uppercase tracking-wider text-slate-400">Institution</dt><dd className="mt-1 text-sm font-semibold text-slate-700">{placement.institution || item.learner.institution}</dd></div>
+                        </dl>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </TabsContent>
+
+        <TabsContent value="alerts">
           <Card className="rounded-[2rem] border border-slate-200 shadow-sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-slate-900"><Bell className="h-5 w-5 text-rose-600" /> Latest Notifications</CardTitle>
-              <CardDescription>Recent learner and placement updates sent to your portal.</CardDescription>
+            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-slate-900"><Bell className="h-5 w-5 text-rose-600" /> Latest Alerts</CardTitle>
+                <CardDescription className="mt-1">Updates for awareness. Items requiring action appear on Overview.</CardDescription>
+              </div>
+              {(data?.unreadNotificationCount || 0) > 0 ? (
+                <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={() => void handleMarkAllNotificationsRead()}>
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Mark all as read
+                </Button>
+              ) : null}
             </CardHeader>
             <CardContent className="space-y-3">
               {(data?.notifications || []).length === 0 ? (
                 <p className="text-sm text-slate-500">No notifications yet.</p>
               ) : (data?.notifications || []).map((notification) => (
-                <div key={notification._id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <article key={notification._id} className={`rounded-2xl border p-4 ${notification.read ? "border-slate-200 bg-slate-50" : "border-rose-200 bg-rose-50/60"}`}>
                   <div className="flex items-center justify-between gap-3">
                     <p className="font-bold text-slate-900">{notification.title}</p>
                     {!notification.read ? <Badge className="bg-rose-100 text-rose-700 border-rose-200">New</Badge> : null}
                   </div>
                   <p className="mt-2 text-sm text-slate-600">{notification.message}</p>
-                  <p className="mt-2 text-xs text-slate-400">{formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true })}</p>
-                </div>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-xs text-slate-400">{formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true })}</p>
+                    {!notification.read ? (
+                      <Button type="button" variant="ghost" className="min-h-11 rounded-xl text-teal-700" onClick={() => void handleMarkNotificationRead(notification)}>
+                        Mark as read
+                      </Button>
+                    ) : null}
+                  </div>
+                </article>
               ))}
             </CardContent>
           </Card>
+        </TabsContent>
 
+        <TabsContent value="support" className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
           <Card data-help-id="guardian-dashboard-concerns" className="rounded-[2rem] border border-slate-200 shadow-sm">
             <CardHeader>
-              <CardTitle className="text-slate-900">Concern Desk</CardTitle>
-              <CardDescription>Report a welfare, placement, or communication concern to the institution support team.</CardDescription>
+              <CardTitle className="text-slate-900">New Concern</CardTitle>
+              <CardDescription>Report a welfare, placement, data, or communication concern to the institution.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <select
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
-                value={concernDraft.learnerId}
-                onChange={(e) => setConcernDraft((current) => ({ ...current, learnerId: e.target.value }))}
-              >
-                <option value="">Select learner</option>
-                {linkedLearnerOptions.map((item) => (
-                  <option key={item.learner._id} value={item.learner._id}>
-                    {item.learner.name} ({item.learner.trackingId})
-                  </option>
-                ))}
-              </select>
-              <Input placeholder="Concern subject" value={concernDraft.subject} onChange={(e) => setConcernDraft((current) => ({ ...current, subject: e.target.value }))} />
-              <div className="grid gap-3 md:grid-cols-2">
-                <select
-                  className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-                  value={concernDraft.category}
-                  onChange={(e) => setConcernDraft((current) => ({ ...current, category: e.target.value }))}
-                >
-                  <option value="Workflow">Workflow</option>
-                  <option value="Data">Data</option>
-                  <option value="Training">Training</option>
-                  <option value="Other">Other</option>
+              <label className="block space-y-2 text-sm font-bold text-slate-700">
+                Learner
+                <select aria-label="Learner for concern" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal" value={concernDraft.learnerId} onChange={(e) => setConcernDraft((current) => ({ ...current, learnerId: e.target.value }))}>
+                  <option value="">Select learner</option>
+                  {linkedLearnerOptions.map((item) => <option key={item.learner._id} value={item.learner._id}>{item.learner.name} ({item.learner.trackingId})</option>)}
                 </select>
-                <select
-                  className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-                  value={concernDraft.priority}
-                  onChange={(e) => setConcernDraft((current) => ({ ...current, priority: e.target.value }))}
-                >
-                  <option value="Low">Low</option>
-                  <option value="Medium">Medium</option>
-                  <option value="High">High</option>
-                  <option value="Urgent">Urgent</option>
+              </label>
+              <Input aria-label="Concern subject" placeholder="Concern subject" value={concernDraft.subject} onChange={(e) => setConcernDraft((current) => ({ ...current, subject: e.target.value }))} />
+              <div className="grid gap-3 md:grid-cols-2">
+                <select aria-label="Concern category" className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={concernDraft.category} onChange={(e) => setConcernDraft((current) => ({ ...current, category: e.target.value }))}>
+                  <option value="Workflow">Workflow</option><option value="Data">Data</option><option value="Training">Training</option><option value="Other">Other</option>
+                </select>
+                <select aria-label="Concern priority" className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={concernDraft.priority} onChange={(e) => setConcernDraft((current) => ({ ...current, priority: e.target.value }))}>
+                  <option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Urgent">Urgent</option>
                 </select>
               </div>
-              <Textarea
-                placeholder="Describe the concern, including any learner welfare or placement issues you want the institution to review."
-                value={concernDraft.description}
-                onChange={(e) => setConcernDraft((current) => ({ ...current, description: e.target.value }))}
-                rows={5}
-              />
-              <Button className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={creatingConcern} onClick={handleCreateConcern}>
-                <LifeBuoy className="mr-2 h-4 w-4" />
-                {creatingConcern ? "Submitting..." : "Submit Concern"}
+              <Textarea aria-label="Concern details" placeholder="Describe the concern and what you need the institution to review." value={concernDraft.description} onChange={(e) => setConcernDraft((current) => ({ ...current, description: e.target.value }))} rows={5} />
+              <Button className="min-h-11 w-full rounded-xl bg-teal-600 text-white hover:bg-teal-700" disabled={creatingConcern} onClick={handleCreateConcern}>
+                <LifeBuoy className="mr-2 h-4 w-4" />{creatingConcern ? "Submitting..." : "Submit Concern"}
               </Button>
             </CardContent>
           </Card>
-        </TabsContent>
 
-        <TabsContent value="concerns" className="space-y-4">
-          {(data?.tickets || []).length === 0 ? (
-            <Card className="rounded-[2rem] border border-slate-200 shadow-sm">
-              <CardContent className="p-8 text-center text-sm text-slate-500">No concern threads yet.</CardContent>
-            </Card>
-          ) : (data?.tickets || []).map((ticket) => (
-            <Card key={ticket._id} className="rounded-[2rem] border border-slate-200 shadow-sm">
-              <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-bold text-slate-900">{ticket.subject}</p>
-                    <Badge variant="outline">{ticket.status}</Badge>
-                    <Badge className="bg-slate-100 text-slate-700 border-slate-200">{ticket.priority}</Badge>
+          <section aria-labelledby="guardian-concern-threads-title" className="space-y-4">
+            <div>
+              <h3 id="guardian-concern-threads-title" className="text-xl font-black text-slate-900">Concern Threads</h3>
+              <p className="mt-1 text-sm text-slate-600">Continue existing conversations and monitor the institution’s response.</p>
+            </div>
+            {(data?.tickets || []).length === 0 ? (
+              <Card className="rounded-[2rem] border border-slate-200 shadow-sm"><CardContent className="p-8 text-center text-sm text-slate-500">No concern threads yet.</CardContent></Card>
+            ) : (data?.tickets || []).map((ticket) => (
+              <Card key={ticket._id} className="rounded-[2rem] border border-slate-200 shadow-sm">
+                <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2"><p className="font-bold text-slate-900">{ticket.subject}</p><Badge variant="outline">{ticket.status}</Badge><Badge className="bg-slate-100 text-slate-700 border-slate-200">{ticket.priority}</Badge></div>
+                    <p className="mt-2 text-sm text-slate-600">{ticket.description}</p>
+                    <p className="mt-2 text-xs text-slate-500">{ticket.learner?.name || "Learner"} · Updated {formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })}</p>
                   </div>
-                  <p className="mt-2 text-sm text-slate-600">{ticket.description}</p>
-                  <p className="mt-2 text-xs text-slate-500">
-                    {ticket.learner?.name || "Learner"} · Updated {formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })}
-                  </p>
-                </div>
-                <Button variant="outline" className="rounded-xl" onClick={() => openTicketThread(ticket)}>
-                  <MessageSquare className="mr-2 h-4 w-4" />
-                  Open Thread
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
+                  <Button variant="outline" className="min-h-11 rounded-xl" onClick={() => openTicketThread(ticket)}><MessageSquare className="mr-2 h-4 w-4" />Open Thread</Button>
+                </CardContent>
+              </Card>
+            ))}
+          </section>
         </TabsContent>
-      </Tabs>
+      </Tabs> : null}
 
       <Dialog open={ticketOpen} onOpenChange={setTicketOpen}>
         <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-2xl bg-white border-slate-200">
@@ -665,8 +854,8 @@ export default function GuardianDashboard() {
                 </div>
               ))}
             </div>
-            <Textarea rows={4} placeholder="Write a reply..." value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} />
-            <Button className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={submittingReply} onClick={handleReply}>
+            <Textarea aria-label="Reply to concern thread" rows={4} placeholder="Write a reply..." value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} />
+            <Button className="min-h-11 w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={submittingReply || !replyDraft.trim()} onClick={handleReply}>
               <Send className="mr-2 h-4 w-4" />
               {submittingReply ? "Sending..." : "Send Reply"}
             </Button>
@@ -723,10 +912,10 @@ export default function GuardianDashboard() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Input placeholder="Parent/Guardian full name" value={consentDraft.guardianFullName} onChange={(e) => setConsentDraft((current) => ({ ...current, guardianFullName: e.target.value }))} />
-                <Input placeholder="Contact number" value={consentDraft.contactNumber} onChange={(e) => setConsentDraft((current) => ({ ...current, contactNumber: e.target.value }))} />
-                <Input placeholder="Relationship to learner" value={consentDraft.relationshipToLearner} onChange={(e) => setConsentDraft((current) => ({ ...current, relationshipToLearner: e.target.value }))} />
-                <Input placeholder="Type full name as signature" value={consentDraft.signatureName} onChange={(e) => setConsentDraft((current) => ({ ...current, signatureName: e.target.value }))} />
+                <Input aria-label="Parent or guardian full name" placeholder="Parent/Guardian full name" value={consentDraft.guardianFullName} onChange={(e) => setConsentDraft((current) => ({ ...current, guardianFullName: e.target.value }))} />
+                <Input aria-label="Guardian contact number" placeholder="Contact number" value={consentDraft.contactNumber} onChange={(e) => setConsentDraft((current) => ({ ...current, contactNumber: e.target.value }))} />
+                <Input aria-label="Relationship to learner" placeholder="Relationship to learner" value={consentDraft.relationshipToLearner} onChange={(e) => setConsentDraft((current) => ({ ...current, relationshipToLearner: e.target.value }))} />
+                <Input aria-label="Guardian signature name" placeholder="Type full name as signature" value={consentDraft.signatureName} onChange={(e) => setConsentDraft((current) => ({ ...current, signatureName: e.target.value }))} />
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
@@ -734,7 +923,8 @@ export default function GuardianDashboard() {
                 <p className="mt-2">I understand that my child will be in a real working environment and must follow all safety and conduct rules.</p>
               </div>
 
-              <Button className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={signingConsent} onClick={handleSignConsent}>
+              {!consentDeclarationsComplete ? <p className="text-sm font-semibold text-amber-700">Confirm all four learner declarations to enable signing.</p> : null}
+              <Button className="min-h-11 w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={signingConsent || !consentDeclarationsComplete} onClick={handleSignConsent}>
                 <FileSignature className="mr-2 h-4 w-4" />
                 {signingConsent ? "Signing..." : "Sign Consent Form"}
               </Button>

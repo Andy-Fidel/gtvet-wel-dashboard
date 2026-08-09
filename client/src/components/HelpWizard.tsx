@@ -594,6 +594,7 @@ const guideDefinitions: GuideDefinition[] = [
         activateTargetId: "guardian-dashboard-tab-learners",
         bullets: [
           "Use it to monitor linked learners and stay aware of status changes.",
+          "Open History to review every current and previous placement for your linked learners.",
           "The portal is for visibility and communication, not administrative editing.",
           "Where something is wrong, raise a concern instead of creating duplicate records elsewhere.",
         ],
@@ -602,7 +603,7 @@ const guideDefinitions: GuideDefinition[] = [
         title: "Best Use",
         description: "Keep communication focused and traceable.",
         targetId: "guardian-dashboard-concerns",
-        activateTargetId: "guardian-dashboard-tab-alerts",
+        activateTargetId: "guardian-dashboard-tab-concerns",
         bullets: [
           "Review the learner context before submitting a concern.",
           "Use existing concern threads to continue the same issue.",
@@ -931,7 +932,7 @@ export function HelpWizard() {
   }, [guide?.key, location.pathname, user?.role, steps.length])
 
   useEffect(() => {
-    if (!guide || !user?._id) return
+    if (!guide || !user?._id || guide.key === "partner-dashboard" || guide.key === "guardian-dashboard") return
     const autoStartKey = buildAutoStartKey(user._id)
     if (window.localStorage.getItem(autoStartKey) === "seen") return
 

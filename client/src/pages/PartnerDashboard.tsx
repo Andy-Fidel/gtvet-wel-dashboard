@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
-import { AlertTriangle, Building2, Briefcase, CalendarClock, CheckCircle2, ChevronDown, ClipboardCheck, ClipboardList, Clock3, FileClock, FileSignature, LifeBuoy, MessageSquare, NotebookPen, Pencil, Plus, Search, Star, Trash2, UserCircle2, XCircle, Users } from "lucide-react"
+import { AlertTriangle, Building2, Briefcase, CalendarClock, CheckCircle2, ChevronDown, ClipboardCheck, ClipboardList, Clock3, FileClock, FileSignature, LifeBuoy, MessageSquare, NotebookPen, Pencil, Plus, RefreshCw, Search, Star, Trash2, UserCircle2, XCircle, Users } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -20,6 +20,11 @@ import { PlacementMessagesDialog } from "@/components/PlacementMessagesDialog"
 import { DocumentList } from "@/components/DocumentList"
 import { DocumentUpload } from "@/components/DocumentUpload"
 import { PartnerHandoffStatus, type PartnerHandoff } from "@/components/PartnerHandoffStatus"
+import { PartnerAttendanceMobileCard } from "@/components/PartnerAttendanceMobileCard"
+import { PartnerDashboardLoadError } from "@/components/PartnerDashboardLoadError"
+import { PartnerGettingStartedChecklist, type PartnerChecklistStep } from "@/components/PartnerGettingStartedChecklist"
+import { PartnerWorkflowHandoffs } from "@/components/PartnerWorkflowHandoffs"
+import { useMediaQuery } from "@/hooks/useMediaQuery"
 import { downloadPlacementAgreementPdf } from "@/lib/placementAgreementPdf"
 import { downloadWELLogbookPdf } from "@/lib/welLogbookPdf"
 
@@ -332,6 +337,9 @@ export default function PartnerDashboard() {
   const [supervisorDrafts, setSupervisorDrafts] = useState<Record<string, string>>({})
   const [actionQueue, setActionQueue] = useState<PartnerActionItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [evaluateOpen, setEvaluateOpen] = useState(false)
   const [supportOpen, setSupportOpen] = useState(false)
@@ -396,6 +404,7 @@ export default function PartnerDashboard() {
     ? sectionParam
     : "overview"
   const isPartnerCoordinator = user?.partnerPortalRole !== "Supervisor"
+  const isDesktopViewport = useMediaQuery("(min-width: 768px)")
 
   const activePlacements = useMemo(
     () => placements.filter((placement) => placement.status === "Active"),
@@ -408,8 +417,11 @@ export default function PartnerDashboard() {
   )
 
   useEffect(() => {
+    let active = true
+
     const fetchDashboard = async () => {
       setLoading(true)
+      setLoadError(null)
       try {
         const attendanceParams = new URLSearchParams()
         if (attendanceStatusFilter) attendanceParams.set("status", attendanceStatusFilter)
@@ -435,22 +447,33 @@ export default function PartnerDashboard() {
           attendanceRes.json(),
         ])
 
+        if (!active) return
         setPlacements(placementsData)
         setActionQueue(queueData)
         setSupervisors(supervisorsData)
         setPerformanceRows(performanceData.supervisors || [])
         setUnassignedPerformance(performanceData.unassignedSummary || null)
         setAttendanceLogs(Array.isArray(attendanceData) ? attendanceData : [])
+        setHasLoaded(true)
+        setLastUpdatedAt(new Date())
       } catch (error) {
+        if (!active) return
         console.error("Error fetching partner dashboard:", error)
-        toast.error("Failed to load partner dashboard")
+        setLoadError("Check your connection, then try again.")
+        toast.error("Failed to update partner dashboard")
       } finally {
-        setLoading(false)
+        if (active) setLoading(false)
       }
     }
 
     fetchDashboard()
+    return () => {
+      active = false
+    }
   }, [attendanceStatusFilter, attendanceTypeFilter, authFetch, refreshKey])
+
+  const initialLoading = loading && !hasLoaded
+  const dashboardUnavailable = Boolean(loadError && !hasLoaded)
 
   const filteredAttendanceLogs = useMemo(() => {
     const query = attendanceSearchQuery.toLowerCase()
@@ -489,10 +512,14 @@ export default function PartnerDashboard() {
       return
     }
 
-    if (!expandedPlacementId || !filteredPlacements.some((placement) => placement._id === expandedPlacementId)) {
-      setExpandedPlacementId(filteredPlacements[0]._id)
-    }
-  }, [expandedPlacementId, filteredPlacements])
+    if (expandedPlacementId && filteredPlacements.some((placement) => placement._id === expandedPlacementId)) return
+
+    const requestedPlacementId = searchParams.get("placement")
+    const requestedPlacement = requestedPlacementId && filteredPlacements.some((placement) => placement._id === requestedPlacementId)
+      ? requestedPlacementId
+      : null
+    setExpandedPlacementId(requestedPlacement || (isDesktopViewport ? filteredPlacements[0]._id : null))
+  }, [expandedPlacementId, filteredPlacements, isDesktopViewport, searchParams])
 
   const stats = useMemo(() => ({
     activePlacements: activePlacements.length,
@@ -1022,8 +1049,73 @@ export default function PartnerDashboard() {
     if (action === "message") handleOpenMessages(placement)
   }, [canActOnPlacement, focusPlacement, placements, searchParams])
 
+  const checklistSteps: PartnerChecklistStep[] = [
+    {
+      id: "assign-supervisor",
+      title: "Assign your first supervisor",
+      description: stats.unassignedPlacements === 0
+        ? "Every active placement has a supervisor."
+        : `${stats.unassignedPlacements} active placement${stats.unassignedPlacements === 1 ? " needs" : "s need"} an owner.`,
+      completed: stats.unassignedPlacements === 0,
+      actionLabel: "Assign supervisor",
+      onAction: () => {
+        const placement = activePlacements.find((entry) => !entry.partnerSupervisor?._id)
+        updateDashboardSection("placements", { placement: placement?._id || null, action: "assignment" })
+        if (placement) focusPlacement(placement._id)
+      },
+    },
+    {
+      id: "review-hours",
+      title: "Review pending hours",
+      description: attendanceStats.pendingCount === 0
+        ? "There are no attendance entries awaiting review."
+        : `${attendanceStats.pendingCount} attendance entr${attendanceStats.pendingCount === 1 ? "y is" : "ies are"} waiting for review.`,
+      completed: attendanceStats.pendingCount === 0,
+      actionLabel: "Review hours",
+      onAction: () => {
+        setAttendanceStatusFilter("Pending")
+        updateDashboardSection("hours", { action: "attendance", placement: null, learner: null })
+      },
+    },
+    {
+      id: "read-messages",
+      title: "Read placement messages",
+      description: stats.unreadMessages === 0
+        ? "You are caught up on placement conversations."
+        : `${stats.unreadMessages} unread message${stats.unreadMessages === 1 ? "" : "s"} need attention.`,
+      completed: stats.unreadMessages === 0,
+      actionLabel: "Read messages",
+      onAction: () => {
+        const placement = activePlacements.find((entry) => (entry.unreadMessageCount || 0) > 0)
+        if (!placement) return
+        updateDashboardSection("placements", { placement: placement._id, action: "message" })
+        focusPlacement(placement._id)
+        handleOpenMessages(placement)
+      },
+    },
+    {
+      id: "complete-evaluation",
+      title: "Complete an evaluation",
+      description: stats.pendingEvaluations === 0
+        ? "All active placements have an employer evaluation."
+        : `${stats.pendingEvaluations} evaluation${stats.pendingEvaluations === 1 ? " is" : "s are"} still pending.`,
+      completed: stats.pendingEvaluations === 0,
+      actionLabel: "Complete evaluation",
+      onAction: () => {
+        const placement = activePlacements.find((entry) => !entry.evaluationSubmitted && canActOnPlacement(entry))
+        if (!placement) {
+          updateDashboardSection("placements")
+          return
+        }
+        updateDashboardSection("placements", { placement: placement._id, action: "evaluation" })
+        focusPlacement(placement._id)
+        handleOpenEvaluation(placement)
+      },
+    },
+  ]
+
   return (
-    <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
+    <div className="flex-1 space-y-6 p-4 md:space-y-8 md:p-8 max-w-7xl mx-auto w-full">
       <Dialog open={evaluateOpen} onOpenChange={setEvaluateOpen}>
         <DialogContent className="sm:max-w-[700px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="p-6 pb-0">
@@ -1655,12 +1747,30 @@ export default function PartnerDashboard() {
           <p className="text-muted-foreground mt-1 font-medium">
             Welcome, {user?.name}. Manage active placements, communications, hours, and support from one workspace.
           </p>
+          {lastUpdatedAt ? (
+            <p className="mt-2 text-xs font-medium text-gray-500">
+              Last updated {lastUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </p>
+          ) : null}
+          <p className="sr-only" role="status" aria-live="polite">
+            {loading ? "Updating partner dashboard." : loadError ? "Partner dashboard update failed." : hasLoaded ? "Partner dashboard is up to date." : ""}
+          </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
           <Button
             type="button"
             variant="outline"
-            className="rounded-xl"
+            className="min-h-11 rounded-xl"
+            onClick={() => setRefreshKey((current) => current + 1)}
+            disabled={loading}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            {loading ? "Refreshing..." : "Refresh data"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-11 rounded-xl"
             onClick={() => navigate("/partner-history")}
           >
             View Placement History
@@ -1686,6 +1796,7 @@ export default function PartnerDashboard() {
           {dashboardSection === "placements" ? <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
             <Input
+              aria-label="Search active placements"
               placeholder="Search learners, company, or institution..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -1717,7 +1828,19 @@ export default function PartnerDashboard() {
         ))}
       </nav>
 
-      {dashboardSection === "overview" ? (loading ? (
+      {loadError ? (
+        <PartnerDashboardLoadError
+          message={loadError}
+          hasCachedData={hasLoaded}
+          onRetry={() => setRefreshKey((current) => current + 1)}
+        />
+      ) : null}
+
+      {dashboardSection === "overview" && !initialLoading && !dashboardUnavailable && user?._id ? (
+        <PartnerGettingStartedChecklist key={user._id} userId={user._id} steps={checklistSteps} />
+      ) : null}
+
+      {dashboardSection === "overview" && !dashboardUnavailable ? (initialLoading ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-6 lg:gap-6">
           {[...Array(6)].map((_, index) => <Card key={index} className="h-28 rounded-2xl animate-pulse bg-white border-none shadow-xl" />)}
         </div>
@@ -1732,7 +1855,7 @@ export default function PartnerDashboard() {
         </div>
       )) : null}
 
-      {dashboardSection === "placements" && !loading && historicalPlacements.length > 0 ? (
+      {dashboardSection === "placements" && !initialLoading && !dashboardUnavailable && historicalPlacements.length > 0 ? (
         <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
           <CardContent className="p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
@@ -1747,12 +1870,12 @@ export default function PartnerDashboard() {
         </Card>
       ) : null}
 
-      {dashboardSection === "overview" ? <Card data-help-id="partner-dashboard-action-queue" className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
+      {dashboardSection === "overview" && !dashboardUnavailable ? <Card data-help-id="partner-dashboard-action-queue" className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
         <CardHeader>
           <CardTitle className="text-xl font-black">Partner Action Queue</CardTitle>
         </CardHeader>
         <CardContent className="p-6 pt-0">
-          {loading ? (
+          {initialLoading ? (
             <div className="text-gray-400 font-medium py-8">
             <div className="space-y-3">
               {[...Array(3)].map((_, index) => <Skeleton key={index} className="h-20 rounded-2xl" />)}
@@ -1803,7 +1926,7 @@ export default function PartnerDashboard() {
         </CardContent>
       </Card> : null}
 
-      {dashboardSection === "overview" && recentlyCompleted.length > 0 ? (
+      {dashboardSection === "overview" && !dashboardUnavailable && recentlyCompleted.length > 0 ? (
         <Card className="rounded-2xl border-none bg-white shadow-xl">
           <CardHeader>
             <CardTitle className="text-xl font-black">Recently Completed</CardTitle>
@@ -1825,12 +1948,12 @@ export default function PartnerDashboard() {
         </Card>
       ) : null}
 
-      {dashboardSection === "team" ? <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
+      {dashboardSection === "team" && !dashboardUnavailable ? <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
         <CardHeader>
           <CardTitle className="text-xl font-black">Supervisor Performance</CardTitle>
         </CardHeader>
         <CardContent className="p-6 pt-0 space-y-4">
-          {loading ? (
+          {initialLoading ? (
           <div className="py-8">
             <div className="space-y-3">
               {[...Array(3)].map((_, index) => <Skeleton key={index} className="h-28 rounded-2xl" />)}
@@ -1918,7 +2041,7 @@ export default function PartnerDashboard() {
         </CardContent>
       </Card> : null}
 
-      {dashboardSection === "hours" ? <div className="space-y-6">
+      {dashboardSection === "hours" && !dashboardUnavailable ? <div className="space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h3 className="text-xl font-black text-gray-900 flex items-center gap-3">
@@ -1946,13 +2069,14 @@ export default function PartnerDashboard() {
           <CardContent className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Input
+                aria-label="Search attendance logs"
                 placeholder="Search learner, tracking ID, or company..."
                 value={attendanceSearchQuery}
                 onChange={(e) => setAttendanceSearchQuery(e.target.value)}
                 className="bg-gray-50 border-gray-200 rounded-xl"
               />
               <Select value={attendanceStatusFilter || ALL_STATUS} onValueChange={(value) => setAttendanceStatusFilter(value === ALL_STATUS ? "" : value)}>
-                <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
+                <SelectTrigger aria-label="Filter attendance by status" className="bg-gray-50 border-gray-200 rounded-xl">
                   <SelectValue placeholder="All statuses" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1963,7 +2087,7 @@ export default function PartnerDashboard() {
                 </SelectContent>
               </Select>
               <Select value={attendanceTypeFilter || ALL_TYPES} onValueChange={(value) => setAttendanceTypeFilter(value === ALL_TYPES ? "" : value)}>
-                <SelectTrigger className="bg-gray-50 border-gray-200 rounded-xl">
+                <SelectTrigger aria-label="Filter attendance by entry type" className="bg-gray-50 border-gray-200 rounded-xl">
                   <SelectValue placeholder="All entry types" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1981,7 +2105,7 @@ export default function PartnerDashboard() {
             <CardTitle className="text-lg font-black text-gray-900">Hours Register</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {loading ? (
+            {initialLoading ? (
               <div className="p-6 space-y-4">
                 {[...Array(5)].map((_, index) => (
                   <Skeleton key={index} className="h-16 rounded-xl" />
@@ -1993,7 +2117,26 @@ export default function PartnerDashboard() {
                 <p className="text-gray-500 font-medium">No attendance logs found</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              <div className="md:hidden">
+                {filteredAttendanceLogs.map((log) => {
+                  const canEdit = log.status !== "SignedOff" && log.submittedBy?._id === user?._id
+                  const canSignOff = log.status !== "SignedOff" && log.submittedSource !== "Partner"
+                  return (
+                    <PartnerAttendanceMobileCard
+                      key={log._id}
+                      log={log}
+                      canEdit={canEdit}
+                      canSignOff={canSignOff}
+                      onEdit={() => handleEditAttendance(log)}
+                      onDelete={() => handleDeleteAttendance(log._id)}
+                      onSignOff={() => handleAttendancePartnerAction(log, "sign-off")}
+                      onReject={() => handleAttendancePartnerAction(log, "reject")}
+                    />
+                  )
+                })}
+              </div>
+              <div className="hidden overflow-x-auto md:block">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -2069,19 +2212,32 @@ export default function PartnerDashboard() {
                 </TableBody>
               </Table>
               </div>
+              </>
             )}
           </CardContent>
         </Card>
+        <div className="h-16 md:hidden" aria-hidden="true" />
+        <div className="fixed inset-x-4 bottom-4 z-20 rounded-2xl border border-amber-300 bg-white/95 p-2 shadow-2xl backdrop-blur md:hidden">
+          <Button
+            className="min-h-11 w-full rounded-xl bg-[#FFB800] font-bold text-gray-900 hover:bg-[#e5a600]"
+            onClick={() => { setSelectedPlacement(null); setEditingAttendanceLog(null); setAttendanceOpen(true) }}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Record Hours
+          </Button>
+        </div>
       </div> : null}
 
-      {dashboardSection === "placements" ? <div data-help-id="partner-dashboard-placements" className="space-y-6">
-        <div className="flex items-center gap-3">
-          <Briefcase className="h-5 w-5 text-[#FFB800]" />
-          <h3 className="text-xl font-black text-gray-900">Active Placement Workspace</h3>
-          {placementView === "mine" ? <Badge className="bg-sky-100 text-sky-700 border-sky-200">Showing placements assigned to you plus unassigned placements</Badge> : null}
+      {dashboardSection === "placements" && !dashboardUnavailable ? <div data-help-id="partner-dashboard-placements" className="space-y-6">
+        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <div className="flex items-center gap-3">
+            <Briefcase className="h-5 w-5 text-[#FFB800]" />
+            <h3 className="text-xl font-black text-gray-900">Active Placement Workspace</h3>
+          </div>
+          {placementView === "mine" ? <Badge className="h-auto whitespace-normal bg-sky-100 py-1 text-sky-700 border-sky-200">Showing placements assigned to you plus unassigned placements</Badge> : null}
         </div>
 
-        {loading ? (
+        {initialLoading ? (
           <div className="space-y-4">
             {[...Array(3)].map((_, index) => <Skeleton key={index} className="h-32 rounded-2xl" />)}
           </div>
@@ -2099,7 +2255,7 @@ export default function PartnerDashboard() {
                   type="button"
                   aria-expanded={expandedPlacementId === placement._id}
                   aria-controls={`placement-workspace-${placement._id}`}
-                  className="w-full border-b border-gray-100 px-6 py-5 text-left transition hover:bg-gray-50/70"
+                  className="min-h-11 w-full border-b border-gray-100 px-4 py-4 text-left transition hover:bg-gray-50/70 md:px-6 md:py-5"
                   onClick={() => setExpandedPlacementId((current) => current === placement._id ? null : placement._id)}
                 >
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -2135,7 +2291,7 @@ export default function PartnerDashboard() {
                   </div>
                 </button>
                 {expandedPlacementId === placement._id ? (
-                <CardContent id={`placement-workspace-${placement._id}`} className="p-6 space-y-5">
+                <CardContent id={`placement-workspace-${placement._id}`} className="space-y-5 p-4 md:p-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
                       <p className="text-xs font-black uppercase tracking-wider text-gray-400">Placement Site</p>
@@ -2173,24 +2329,7 @@ export default function PartnerDashboard() {
                   </div>
 
                   {placement.workflowHandoffs ? (
-                    <section className="rounded-2xl border border-gray-200 bg-white p-4" aria-labelledby={`handoff-heading-${placement._id}`}>
-                      <div className="mb-4">
-                        <p id={`handoff-heading-${placement._id}`} className="text-xs font-black uppercase tracking-wider text-gray-400">Workflow Handoffs</p>
-                        <p className="mt-1 text-sm text-gray-600">See who owns each step, what it is waiting for, and what happens next.</p>
-                      </div>
-                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                        {(Object.keys(HANDOFF_LABELS) as Array<keyof typeof HANDOFF_LABELS>).map((key) => {
-                          const handoff = placement.workflowHandoffs?.[key]
-                          if (!handoff) return null
-                          return (
-                            <div key={key} className="rounded-xl border border-gray-100 bg-gray-50/80 p-4">
-                              <p className="mb-3 text-sm font-black text-gray-900">{HANDOFF_LABELS[key]}</p>
-                              <PartnerHandoffStatus {...handoff} />
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </section>
+                    <PartnerWorkflowHandoffs placementId={placement._id} handoffs={placement.workflowHandoffs} />
                   ) : null}
 
                   <div className="rounded-2xl border border-sky-100 bg-sky-50/70 p-4 space-y-3">
