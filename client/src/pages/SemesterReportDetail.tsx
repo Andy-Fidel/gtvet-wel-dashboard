@@ -103,6 +103,24 @@ const statusLabels: Record<string, string> = {
   Rejected: "Rejected",
 };
 
+const reportWorkflowStages = [
+  { status: "Draft", label: "Draft", owner: "Institution" },
+  { status: "Certified", label: "Certified", owner: "Institution leadership" },
+  { status: "Submitted", label: "Regional review", owner: "Regional office" },
+  { status: "Regional_Approved", label: "HQ review", owner: "Headquarters" },
+  { status: "HQ_Approved", label: "Complete", owner: "Approved nationally" },
+] as const;
+
+const nextWorkflowActions: Record<string, string> = {
+  Generated: "Institution must refresh and prepare the legacy report",
+  Draft: "Institution leadership must certify the report",
+  Certified: "Institution must submit the report to the regional office",
+  Submitted: "Regional office must approve or return the report",
+  Regional_Approved: "Headquarters must approve or return the report",
+  HQ_Approved: "Workflow complete — no further approval is required",
+  Rejected: "Institution must correct the report and certify it again",
+};
+
 export default function SemesterReportDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -206,6 +224,8 @@ export default function SemesterReportDetail() {
   const isRegionalApproved = report.status === 'Regional_Approved';
   const isApproved = report.status === 'HQ_Approved';
   const canEdit = isDraft || isRejected;
+  const currentWorkflowIndex = Math.max(0, reportWorkflowStages.findIndex((stage) => stage.status === report.status));
+  const rejectedAtIndex = report.reviewedByHQ ? 3 : report.reviewedByRegional ? 2 : 0;
 
   return (
     <div className="flex-1 space-y-6 p-4 md:p-8 pt-12 md:pt-16">
@@ -239,6 +259,63 @@ export default function SemesterReportDetail() {
           </Button>
         )}
       </div>
+
+      <Card className="rounded-[2rem] border-indigo-100 bg-white shadow-sm" aria-label="Report approval workflow">
+        <CardHeader className="p-5 pb-3 md:p-6 md:pb-3">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle className="text-lg font-black text-gray-950">Approval workflow</CardTitle>
+              <CardDescription className="mt-1 font-semibold text-gray-500">
+                Institution submission → regional validation → headquarters approval
+              </CardDescription>
+            </div>
+            <div className={`rounded-xl px-4 py-2 text-sm font-black ${isRejected ? 'bg-red-50 text-red-700' : isApproved ? 'bg-emerald-50 text-emerald-700' : 'bg-indigo-50 text-indigo-700'}`}>
+              Next: {nextWorkflowActions[report.status] || "Review current report status"}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-5 pt-2 md:p-6 md:pt-2">
+          {isRejected ? (
+            <div className="mb-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-red-800">
+              <XCircle className="mt-0.5 h-5 w-5 shrink-0" />
+              <div>
+                <p className="font-black">Returned for correction</p>
+                <p className="mt-1 text-sm font-medium">The report remains with the institution until corrections are completed and the approval chain restarts.</p>
+              </div>
+            </div>
+          ) : null}
+          <ol className="grid gap-3 md:grid-cols-5">
+            {reportWorkflowStages.map((stage, index) => {
+              const isComplete = isApproved || (!isRejected && index < currentWorkflowIndex) || (isRejected && index < rejectedAtIndex);
+              const isCurrent = !isRejected && !isApproved && index === currentWorkflowIndex;
+              const isReturnedStage = isRejected && index === rejectedAtIndex;
+              const actor = stage.status === "Draft"
+                ? report.generatedBy?.name
+                : stage.status === "Certified"
+                  ? report.certifiedBy?.name
+                  : stage.status === "Submitted"
+                    ? report.reviewedByRegional?.name
+                    : stage.status === "Regional_Approved"
+                      ? report.reviewedByHQ?.name
+                      : report.reviewedByHQ?.name;
+              return (
+                <li key={stage.status} className={`relative rounded-2xl border p-4 ${isReturnedStage ? 'border-red-200 bg-red-50' : isCurrent ? 'border-indigo-300 bg-indigo-50' : isComplete ? 'border-emerald-200 bg-emerald-50' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`flex h-7 w-7 items-center justify-center rounded-full ${isReturnedStage ? 'bg-red-600 text-white' : isCurrent ? 'bg-indigo-600 text-white' : isComplete ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                      {isReturnedStage ? <XCircle className="h-4 w-4" /> : isComplete ? <CheckCircle2 className="h-4 w-4" /> : <span className="text-xs font-black">{index + 1}</span>}
+                    </span>
+                    <span className={`text-[10px] font-black uppercase tracking-wider ${isReturnedStage ? 'text-red-600' : isCurrent ? 'text-indigo-600' : isComplete ? 'text-emerald-600' : 'text-gray-400'}`}>
+                      {isReturnedStage ? 'Returned' : isCurrent ? 'Current' : isComplete ? 'Complete' : 'Upcoming'}
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm font-black text-gray-950">{stage.label}</p>
+                  <p className="mt-1 text-xs font-medium text-gray-500">{actor || stage.owner}</p>
+                </li>
+              );
+            })}
+          </ol>
+        </CardContent>
+      </Card>
 
       {/* --- Auto-Generated Metrics Strip --- */}
       {m && (

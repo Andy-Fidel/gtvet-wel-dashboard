@@ -36,7 +36,7 @@ const formSchema = z.object({
   calendarType: z.enum(["Single Track", "Transitional"]),
 })
 
-type InstitutionFormValues = z.infer<typeof formSchema>
+export type InstitutionFormValues = z.infer<typeof formSchema>
 
 interface InstitutionFormProps {
     onSuccess: (data: unknown) => void;
@@ -91,14 +91,14 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
         <div className="grid grid-cols-2 gap-5">
             <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Institution Name</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Institution Name</FormLabel>
                   <FormControl><Input placeholder="Ghana Tech Institute" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
             <FormField control={form.control} name="code" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Institution Code</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Institution Code</FormLabel>
                   <FormControl><Input placeholder="GTI-001" className="uppercase" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
@@ -108,14 +108,14 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
         <div className="grid grid-cols-2 gap-5">
             <FormField control={form.control} name="district" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">District</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">District</FormLabel>
                   <FormControl><Input placeholder="Accra Metro" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
             <FormField control={form.control} name="region" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Region</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Region</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select region" /></SelectTrigger></FormControl>
                     <SelectContent className="max-h-[300px]">
@@ -144,7 +144,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
 
         <FormField control={form.control} name="location" render={({ field }) => (
             <FormItem>
-              <FormLabel className="text-sm font-semibold text-white">Specific Location</FormLabel>
+              <FormLabel className="text-sm font-semibold text-gray-800">Specific Location</FormLabel>
               <FormControl><Input placeholder="East Legon" {...field} /></FormControl>
               <FormMessage />
             </FormItem>
@@ -153,7 +153,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
         <div className="grid grid-cols-2 gap-5">
             <FormField control={form.control} name="category" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Category</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Category</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Category" /></SelectTrigger></FormControl>
                     <SelectContent>
@@ -167,7 +167,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
             )} />
             <FormField control={form.control} name="calendarType" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Academic Calendar Type</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Academic Calendar Type</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Calendar type" /></SelectTrigger></FormControl>
                     <SelectContent>
@@ -183,7 +183,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
         <div className="grid grid-cols-2 gap-5">
             <FormField control={form.control} name="status" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Status</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Status</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger></FormControl>
                     <SelectContent>
@@ -196,7 +196,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
             )} />
             <FormField control={form.control} name="gender" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Gender</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-800">Gender</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Gender" /></SelectTrigger></FormControl>
                     <SelectContent>

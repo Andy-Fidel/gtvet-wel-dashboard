@@ -51,6 +51,10 @@ function HomeRoute() {
     return <Navigate to="/guardian-dashboard" replace />;
   }
 
+  if (user?.role === 'SuperAdmin') {
+    return <Navigate to="/system-overview" replace />;
+  }
+
   return (
     <ErrorBoundary>
       <Suspense fallback={<PageSkeleton />}>

@@ -11170,9 +11170,11 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
             ]),
             SupportTicket.find(unresolvedSupportFilter)
                 .populate('requester', 'name')
+                .populate('assignedTo', 'name role')
+                .populate('escalatedTo', 'name role')
                 .sort({ updatedAt: 1, createdAt: 1 })
                 .limit(6)
-                .select('subject priority status institution region createdAt updatedAt replies requester'),
+                .select('subject priority status institution region createdAt updatedAt replies requester assignedTo escalatedTo escalationLevel firstResponseDueAt resolutionDueAt'),
         ]);
         const oldestOpenTicket = await SupportTicket.findOne(unresolvedSupportFilter)
             .sort({ createdAt: 1 })
@@ -11867,6 +11869,19 @@ router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async 
                     institution: ticket.institution,
                     region: ticket.region,
                     requesterName: ticket.requester?.name || 'Unknown',
+                    assignedTo: ticket.assignedTo ? {
+                        _id: ticket.assignedTo._id,
+                        name: ticket.assignedTo.name,
+                        role: ticket.assignedTo.role,
+                    } : null,
+                    escalatedTo: ticket.escalatedTo ? {
+                        _id: ticket.escalatedTo._id,
+                        name: ticket.escalatedTo.name,
+                        role: ticket.escalatedTo.role,
+                    } : null,
+                    escalationLevel: ticket.escalationLevel || 'None',
+                    firstResponseDueAt: ticket.firstResponseDueAt || null,
+                    resolutionDueAt: ticket.resolutionDueAt || null,
                     createdAt: ticket.createdAt,
                     updatedAt: ticket.updatedAt,
                     replyCount: ticket.replies?.length || 0,

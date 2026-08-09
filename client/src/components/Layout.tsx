@@ -1,6 +1,6 @@
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
-import { LayoutDashboard, Users, Briefcase, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake, Archive } from 'lucide-react';
+import { LayoutDashboard, Users, Briefcase, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake, Archive, ArrowLeft } from 'lucide-react';
 import type { FocusEvent, MouseEvent } from 'react';
 import { useState } from 'react';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
@@ -12,6 +12,43 @@ import { Toaster } from 'sonner';
 import { PlacementProgressWidget } from './PlacementProgressWidget';
 import { usePushNotificationEvents } from '@/hooks/usePushNotifications';
 
+const HQ_NAV_GROUPS = [
+  {
+    label: 'Action Centre',
+    items: [{ to: '/system-overview', label: 'HQ Action Centre', icon: LayoutDashboard }],
+  },
+  {
+    label: 'Operations',
+    items: [
+      { to: '/semester-reports', label: 'Report Approvals', icon: FileText },
+      { to: '/monitoring-visits', label: 'Monitoring Reviews', icon: ClipboardList },
+      { to: '/assessments', label: 'Assessments', icon: GraduationCap },
+      { to: '/support-center', label: 'Support Escalations', icon: LifeBuoy },
+    ],
+  },
+  {
+    label: 'Governance',
+    items: [
+      { to: '/users', label: 'User Governance', icon: Users },
+      { to: '/hq-industry-partners', label: 'Partner Registry', icon: HeartHandshake },
+    ],
+  },
+  {
+    label: 'Compliance',
+    items: [
+      { to: '/academic-calendar', label: 'Reporting Calendar', icon: CalendarIcon },
+      { to: '/activity-log', label: 'Audit Log', icon: Shield },
+    ],
+  },
+  {
+    label: 'System Administration',
+    items: [
+      { to: '/settings', label: 'Settings', icon: Settings2 },
+      { to: '/offline-sync', label: 'Offline Sync', icon: WifiOff },
+    ],
+  },
+] as const;
+
 export default function Layout() {
   usePushNotificationEvents();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -19,12 +56,15 @@ export default function Layout() {
   const [sidebarTooltip, setSidebarTooltip] = useState<{ label: string; top: number } | null>(null);
   const { user, offlineQueueCount } = useAuth();
   const { unreadCount } = useNotifications();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const isAdminOrSuper = user?.role === 'Admin' || user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin';
   const isSuperAdmin = user?.role === 'SuperAdmin';
   const isRegionalAdmin = user?.role === 'RegionalAdmin';
   const isIndustryPartner = user?.role === 'IndustryPartner';
   const isGuardian = user?.role === 'Guardian';
+  const returnToActionCentre = new URLSearchParams(location.search).get('from') === 'hq-action-centre';
   const showSidebarTooltip = (label: string, element: HTMLElement) => {
     if (!isSidebarCollapsed) return;
 
@@ -114,7 +154,7 @@ export default function Layout() {
           )}
         </div>
         <nav className="flex-1 px-4 space-y-2 overflow-y-auto overflow-x-hidden pb-4">
-          {!isIndustryPartner && !isGuardian && (
+          {!isSuperAdmin && !isIndustryPartner && !isGuardian && (
               <NavLink 
                 to="/" 
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
@@ -130,6 +170,42 @@ export default function Layout() {
                 )}
               </NavLink>
           )}
+
+          {isSuperAdmin ? HQ_NAV_GROUPS.map((group) => (
+            <div key={group.label} className="pt-2 first:pt-0">
+              <p className={`px-6 pb-2 text-[10px] font-black uppercase tracking-[0.16em] text-gray-400 ${isSidebarCollapsed ? 'text-center' : ''}`}>
+                {isSidebarCollapsed ? '•' : group.label}
+              </p>
+              <div className="space-y-1">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.to === '/system-overview'}
+                      className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-3 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-gray-950 font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/70'}`}
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      {...collapsedNavTooltip(item.label)}
+                    >
+                      {({ isActive }) => (
+                        <>
+                          <div className={`absolute right-0 top-1/2 h-8 w-1.5 -translate-y-1/2 rounded-l-full bg-[#FFB800] transition-opacity ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                          <Icon size={20} className={`transition-transform group-hover:scale-110 ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                          {!isSidebarCollapsed ? <span className="text-sm">{item.label}</span> : null}
+                          {item.to === '/offline-sync' && !isSidebarCollapsed && offlineQueueCount > 0 ? (
+                            <Badge className="ml-auto h-5 min-w-5 rounded-full border-0 bg-amber-500 p-0 text-[10px] text-white">
+                              {offlineQueueCount > 9 ? '9+' : offlineQueueCount}
+                            </Badge>
+                          ) : null}
+                        </>
+                      )}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            </div>
+          )) : null}
 
           {isIndustryPartner && (
               <>
@@ -437,25 +513,8 @@ export default function Layout() {
             </>
           )}
 
-          {isSuperAdmin && (
-            <NavLink 
-              to="/hq-industry-partners" 
-              className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
-              onClick={() => setIsMobileMenuOpen(false)}
-              {...collapsedNavTooltip('HQ Partner Registry')}
-            >
-              {({ isActive }) => (
-                <>
-                  <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
-                  <HeartHandshake size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                  {!isSidebarCollapsed && <span className="text-base">HQ Partner Registry</span>}
-                </>
-              )}
-            </NavLink>
-          )}
-
           {/* Admin-only links */}
-          {isAdminOrSuper && (
+          {isAdminOrSuper && !isSuperAdmin && (
             <NavLink 
               to="/users" 
               className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
@@ -472,7 +531,7 @@ export default function Layout() {
             </NavLink>
           )}
 
-          {isAdminOrSuper && (
+          {isAdminOrSuper && !isSuperAdmin && (
             <NavLink 
               to="/activity-log" 
               className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
@@ -489,7 +548,7 @@ export default function Layout() {
             </NavLink>
           )}
 
-          <NavLink 
+          {!isSuperAdmin && <NavLink
             to="/support-center" 
             className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
             onClick={() => setIsMobileMenuOpen(false)}
@@ -502,9 +561,9 @@ export default function Layout() {
                 {!isSidebarCollapsed && <span className="text-base">Help & Support</span>}
               </>
             )}
-          </NavLink>
+          </NavLink>}
 
-          <NavLink 
+          {!isSuperAdmin && <NavLink
             to="/settings" 
             className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
             onClick={() => setIsMobileMenuOpen(false)}
@@ -517,9 +576,9 @@ export default function Layout() {
                 {!isSidebarCollapsed && <span className="text-base">Settings</span>}
               </>
             )}
-          </NavLink>
+          </NavLink>}
 
-          <NavLink 
+          {!isSuperAdmin && <NavLink
             to="/offline-sync" 
             className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
             onClick={() => setIsMobileMenuOpen(false)}
@@ -548,41 +607,8 @@ export default function Layout() {
                 )}
               </>
             )}
-          </NavLink>
+          </NavLink>}
 
-          {/* SuperAdmin-only links */}
-          {isSuperAdmin && (
-            <>
-              <NavLink 
-                to="/academic-calendar" 
-                className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
-                onClick={() => setIsMobileMenuOpen(false)}
-                {...collapsedNavTooltip('Academic Calendar')}
-              >
-                {({ isActive }) => (
-                  <>
-                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
-                    <CalendarIcon size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">Academic Calendar</span>}
-                  </>
-                )}
-              </NavLink>
-              <NavLink 
-                to="/system-overview" 
-                className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
-                onClick={() => setIsMobileMenuOpen(false)}
-                {...collapsedNavTooltip('System Overview')}
-              >
-                {({ isActive }) => (
-                  <>
-                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
-                    <Shield size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">System Overview</span>}
-                  </>
-                )}
-              </NavLink>
-            </>
-          )}
         </nav>
         {!isSidebarCollapsed && !isIndustryPartner && !isGuardian && (
           <div className="mt-auto p-8">
@@ -604,6 +630,21 @@ export default function Layout() {
       <main className={`flex-1 flex flex-col min-w-0 min-h-screen md:min-h-0 relative z-20 transition-[margin] duration-200 ease-in-out ml-0 ${isSidebarCollapsed ? 'md:ml-32' : 'md:ml-80'}`}>
         <Navbar />
         <div className="flex-1 overflow-auto glass-panel rounded-[1.5rem] md:rounded-[2.5rem] mt-4 p-2 sm:p-4 md:p-8 w-full">
+          {returnToActionCentre ? (
+            <div className="mx-2 mb-3 flex flex-col gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-indigo-900 sm:mx-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-black">Opened from the HQ Action Centre</p>
+                <p className="text-xs font-medium text-indigo-700">Your current filters and record context are preserved.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/system-overview?view=operations')}
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-black text-white hover:bg-indigo-700"
+              >
+                <ArrowLeft className="h-4 w-4" /> Return to Action Centre
+              </button>
+            </div>
+          ) : null}
           <Outlet />
         </div>
       </main>
