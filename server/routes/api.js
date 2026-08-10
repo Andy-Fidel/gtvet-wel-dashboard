@@ -3969,10 +3969,10 @@ router.get('/monitoring-visits', async (req, res) => {
       if (req.query.gpsReviewStatus) visitFilter.gpsReviewStatus = req.query.gpsReviewStatus;
 
       const visitsQuery = MonitoringVisit.find(visitFilter)
-        .select('visitDate visitType attendanceStatus performanceRating keyObservations issuesIdentified actionRequired locationVerified gpsReviewStatus gpsExceptionReason gpsReviewComment gpsReviewedAt distanceFromSite learner isDelegatedVisit delegatedFromInstitution createdAt updatedAt')
+        .select('visitDate visitType attendanceStatus performanceRating keyObservations issuesIdentified actionRequired locationVerified gpsReviewStatus gpsExceptionReason gpsReviewComment gpsReviewedAt distanceFromSite learner institution isDelegatedVisit delegatedFromInstitution createdAt updatedAt')
         .populate({
             path: 'learner',
-            select: 'firstName middleName lastName name trackingId placement',
+            select: 'firstName middleName lastName name trackingId program placement',
             populate: { path: 'placement', select: 'location companyName' }
         })
         .sort({ visitDate: -1, createdAt: -1 });
@@ -3981,7 +3981,7 @@ router.get('/monitoring-visits', async (req, res) => {
         visitsQuery.skip((page - 1) * pageSize).limit(pageSize);
       }
 
-      const [visits, total, stats] = await Promise.all([
+      const [visits, total, stats, institutionRanking] = await Promise.all([
         visitsQuery.lean(),
         usePagination ? MonitoringVisit.countDocuments(visitFilter) : Promise.resolve(null),
         usePagination ? MonitoringVisit.aggregate([
@@ -3996,8 +3996,43 @@ router.get('/monitoring-visits', async (req, res) => {
             gpsVerified: { $sum: { $cond: [{ $eq: ['$locationVerified', 'Verified'] }, 1, 0] } },
             gpsUnverified: { $sum: { $cond: [{ $eq: ['$locationVerified', 'Unverified'] }, 1, 0] } },
             pendingReview: { $sum: { $cond: [{ $eq: ['$gpsReviewStatus', 'PendingReview'] }, 1, 0] } },
+            exceptionApproved: { $sum: { $cond: [{ $eq: ['$gpsReviewStatus', 'ExceptionApproved'] }, 1, 0] } },
+            gpsRejected: { $sum: { $cond: [{ $eq: ['$gpsReviewStatus', 'Rejected'] }, 1, 0] } },
+            attendancePresent: { $sum: { $cond: [{ $eq: ['$attendanceStatus', 'Present'] }, 1, 0] } },
+            attendanceAbsent: { $sum: { $cond: [{ $eq: ['$attendanceStatus', 'Absent'] }, 1, 0] } },
+            attendanceExcused: { $sum: { $cond: [{ $eq: ['$attendanceStatus', 'Excused'] }, 1, 0] } },
+            attendanceLate: { $sum: { $cond: [{ $eq: ['$attendanceStatus', 'Late'] }, 1, 0] } },
+            ratingStrong: { $sum: { $cond: [{ $gte: ['$performanceRating', 4] }, 1, 0] } },
+            ratingWatch: { $sum: { $cond: [{ $and: [{ $gte: ['$performanceRating', 3] }, { $lt: ['$performanceRating', 4] }] }, 1, 0] } },
+            ratingAtRisk: { $sum: { $cond: [{ $lt: ['$performanceRating', 3] }, 1, 0] } },
           }}
         ]) : Promise.resolve(null),
+        usePagination ? MonitoringVisit.aggregate([
+          { $match: visitFilter },
+          {
+            $group: {
+              _id: { $ifNull: ['$institution', 'Unspecified'] },
+              count: { $sum: 1 },
+              avgRating: { $avg: '$performanceRating' },
+              exceptions: {
+                $sum: {
+                  $cond: [
+                    { $or: [
+                      { $eq: ['$gpsReviewStatus', 'PendingReview'] },
+                      { $eq: ['$gpsReviewStatus', 'Rejected'] },
+                      { $lt: ['$performanceRating', 3] },
+                    ] },
+                    1,
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+          { $sort: { count: -1, _id: 1 } },
+          { $limit: 8 },
+          { $project: { _id: 0, institution: '$_id', count: 1, avgRating: 1, exceptions: 1 } },
+        ]) : Promise.resolve([]),
       ]);
       const mappedVisits = visits.map((visit) => ({
         ...visit,
@@ -4022,6 +4057,23 @@ router.get('/monitoring-visits', async (req, res) => {
             gpsVerified: s.gpsVerified || 0,
             gpsUnverified: s.gpsUnverified || 0,
             pendingReview: s.pendingReview || 0,
+            exceptionApproved: s.exceptionApproved || 0,
+            gpsRejected: s.gpsRejected || 0,
+            byAttendance: {
+              Present: s.attendancePresent || 0,
+              Absent: s.attendanceAbsent || 0,
+              Excused: s.attendanceExcused || 0,
+              Late: s.attendanceLate || 0,
+            },
+            byRating: {
+              Strong: s.ratingStrong || 0,
+              Watch: s.ratingWatch || 0,
+              'At risk': s.ratingAtRisk || 0,
+            },
+            institutionRanking: institutionRanking.map((item) => ({
+              ...item,
+              avgRating: item.avgRating ? Number(item.avgRating.toFixed(1)) : 0,
+            })),
           },
         });
       }
@@ -4099,7 +4151,8 @@ router.get('/monitoring-visits/due', async (req, res) => {
 
 const canMutateMonitoringVisit = (user, visit, action = 'update') => {
     if (!visit) return false;
-    if (['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(user.role)) return true;
+    if (user.role === 'SuperAdmin') return false;
+    if (['RegionalAdmin', 'Admin'].includes(user.role)) return true;
 
     const isOwner = visit.submittedBy?.toString() === user._id.toString();
     if (!isOwner) return false;
@@ -4159,6 +4212,9 @@ const determineMonitoringVisitVerification = async ({ learnerId, submittedLocati
 
 router.post('/monitoring-visits', async (req, res) => {
     try {
+        if (req.user.role === 'SuperAdmin') {
+            return res.status(403).json({ message: 'Headquarters access is read-only for monitoring visits.' });
+        }
         const { submittedLocation, ...visitData } = req.body;
         const learnerRecord = await Learner.findById(visitData.learner).select('institution');
         if (!learnerRecord) {
@@ -4268,7 +4324,7 @@ router.get('/monitoring-visits/anomalies', async (req, res) => {
             ...filter,
             createdAt: { $gte: thirtyDaysAgo },
         })
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'name trackingId program')
             .populate('submittedBy', 'name email')
             .sort({ createdAt: -1 });
 
@@ -4424,7 +4480,7 @@ router.put('/monitoring-visits/:id', async (req, res) => {
     }
 });
 
-router.put('/monitoring-visits/:id/gps-review', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.put('/monitoring-visits/:id/gps-review', requireRole('Admin', 'RegionalAdmin'), async (req, res) => {
     try {
         const filter = await getFilter(req.user);
         const visit = await MonitoringVisit.findOne({ _id: req.params.id, ...filter });
@@ -4480,7 +4536,7 @@ router.put('/monitoring-visits/:id/gps-review', requireRole('Admin', 'SuperAdmin
     }
 });
 
-router.post('/monitoring-visits/gps-review/bulk', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.post('/monitoring-visits/gps-review/bulk', requireRole('Admin', 'RegionalAdmin'), async (req, res) => {
     try {
         const filter = await getFilter(req.user);
         const { visitIds = [], decision, comment = '' } = req.body;
@@ -6439,16 +6495,21 @@ router.get('/assessments', async (req, res) => {
         const assessmentFilter = { ...filter };
         if (learnerIds) assessmentFilter.learner = { $in: learnerIds };
         if (req.query.assessmentType) assessmentFilter.assessmentType = req.query.assessmentType;
+        if (req.query.scoreBand === 'low') assessmentFilter.overallScore = { $lt: 40 };
+        if (req.query.scoreBand === 'mid') assessmentFilter.overallScore = { $gte: 40, $lt: 70 };
+        if (req.query.scoreBand === 'high') assessmentFilter.overallScore = { $gte: 70 };
 
         const query = CompetencyAssessment.find(assessmentFilter)
-            .populate('learner', 'name trackingId')
-            .sort({ assessmentDate: -1, createdAt: -1 });
+            .populate('learner', 'name trackingId program')
+            .sort(req.query.scoreBand === 'low'
+                ? { overallScore: 1, assessmentDate: -1, createdAt: -1 }
+                : { assessmentDate: -1, createdAt: -1 });
 
         if (usePagination) {
             query.skip((page - 1) * pageSize).limit(pageSize);
         }
 
-        const [assessments, total, stats] = await Promise.all([
+        const [assessments, total, stats, programRanking, institutionRanking] = await Promise.all([
             query.lean(),
             usePagination ? CompetencyAssessment.countDocuments(assessmentFilter) : Promise.resolve(null),
             usePagination ? CompetencyAssessment.aggregate([
@@ -6465,6 +6526,35 @@ router.get('/assessments', async (req, res) => {
                     scoreLow: { $sum: { $cond: [{ $lt: ['$overallScore', 40] }, 1, 0] } },
                 }}
             ]) : Promise.resolve(null),
+            usePagination ? CompetencyAssessment.aggregate([
+                { $match: assessmentFilter },
+                { $lookup: { from: 'learners', localField: 'learner', foreignField: '_id', as: 'learnerRecord' } },
+                { $unwind: { path: '$learnerRecord', preserveNullAndEmptyArrays: true } },
+                {
+                    $group: {
+                        _id: { $ifNull: ['$learnerRecord.program', 'Unspecified'] },
+                        count: { $sum: 1 },
+                        avgScore: { $avg: '$overallScore' },
+                    },
+                },
+                { $sort: { count: -1, _id: 1 } },
+                { $limit: 8 },
+                { $project: { _id: 0, program: '$_id', count: 1, avgScore: 1 } },
+            ]) : Promise.resolve([]),
+            usePagination ? CompetencyAssessment.aggregate([
+                { $match: assessmentFilter },
+                {
+                    $group: {
+                        _id: { $ifNull: ['$institution', 'Unspecified'] },
+                        count: { $sum: 1 },
+                        avgScore: { $avg: '$overallScore' },
+                        lowScoreCount: { $sum: { $cond: [{ $lt: ['$overallScore', 40] }, 1, 0] } },
+                    },
+                },
+                { $sort: { avgScore: 1, count: -1 } },
+                { $limit: 8 },
+                { $project: { _id: 0, institution: '$_id', count: 1, avgScore: 1, lowScoreCount: 1 } },
+            ]) : Promise.resolve([]),
         ]);
 
         if (usePagination) {
@@ -6482,6 +6572,14 @@ router.get('/assessments', async (req, res) => {
                     scoreHigh: s.scoreHigh || 0,
                     scoreMid: s.scoreMid || 0,
                     scoreLow: s.scoreLow || 0,
+                    programRanking: programRanking.map((item) => ({
+                        ...item,
+                        avgScore: item.avgScore ? Number(item.avgScore.toFixed(1)) : 0,
+                    })),
+                    institutionRanking: institutionRanking.map((item) => ({
+                        ...item,
+                        avgScore: item.avgScore ? Number(item.avgScore.toFixed(1)) : 0,
+                    })),
                 },
             });
         }
@@ -6494,6 +6592,9 @@ router.get('/assessments', async (req, res) => {
 
 router.post('/assessments', async (req, res) => {
     try {
+        if (req.user.role === 'SuperAdmin') {
+            return res.status(403).json({ message: 'Headquarters access is read-only for competency assessments.' });
+        }
         // Auto-populate trackingId from learner if not provided
         let trackingId = req.body.trackingId;
         if (!trackingId && req.body.learner) {
@@ -6543,6 +6644,9 @@ router.post('/assessments', async (req, res) => {
 
 router.put('/assessments/:id', async (req, res) => {
     try {
+        if (req.user.role === 'SuperAdmin') {
+            return res.status(403).json({ message: 'Headquarters access is read-only for competency assessments.' });
+        }
         const filter = await getFilter(req.user);
         const existingAssessment = await CompetencyAssessment.findOne({ _id: req.params.id, ...filter });
         const updatedAssessment = await CompetencyAssessment.findOneAndUpdate(
@@ -6570,6 +6674,9 @@ router.put('/assessments/:id', async (req, res) => {
 
 router.delete('/assessments/:id', async (req, res) => {
     try {
+        if (req.user.role === 'SuperAdmin') {
+            return res.status(403).json({ message: 'Headquarters access is read-only for competency assessments.' });
+        }
         const filter = await getFilter(req.user);
         const deletedAssessment = await CompetencyAssessment.findOneAndDelete({ _id: req.params.id, ...filter });
         if (!deletedAssessment) return res.status(404).json({ message: 'Assessment not found or unauthorized' });

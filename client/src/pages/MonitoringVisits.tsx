@@ -16,7 +16,7 @@ import {
     DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
-import { MoreHorizontal, Download, ShieldCheck, ShieldAlert, ShieldQuestion, AlertTriangle, Handshake, ClipboardCheck, Plus, Search, X, Star, Clock } from "lucide-react"
+import { MoreHorizontal, Download, ShieldCheck, ShieldAlert, ShieldQuestion, AlertTriangle, Handshake, ClipboardCheck, Plus, Search, X, Star, Clock, Eye } from "lucide-react"
 import {
     Dialog,
     DialogContent,
@@ -36,9 +36,18 @@ import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
+import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+
+const VISIT_TYPE_COLORS = ['#2563eb', '#f59e0b', '#ef4444', '#8b5cf6']
+const GPS_STATUS_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#3b82f6', '#64748b']
+const ATTENDANCE_COLORS = ['#10b981', '#ef4444', '#3b82f6', '#f59e0b']
+const RATING_COLORS = ['#10b981', '#f59e0b', '#ef4444']
+type HeadquartersSection = 'overview' | 'exceptions' | 'records'
 
 export type MonitoringVisit = {
     _id: string
+    institution?: string
     visitDate: string
     visitType: string
     attendanceStatus: string
@@ -56,6 +65,7 @@ export type MonitoringVisit = {
         _id: string
         name: string
         trackingId: string
+        program?: string
         placement?: {
             _id?: string
             location: string
@@ -73,6 +83,11 @@ type VisitStats = {
     gpsVerified: number
     gpsUnverified: number
     pendingReview: number
+    exceptionApproved: number
+    gpsRejected: number
+    byAttendance: { Present: number; Absent: number; Excused: number; Late: number }
+    byRating: { Strong: number; Watch: number; 'At risk': number }
+    institutionRanking: { institution: string; count: number; avgRating: number; exceptions: number }[]
 }
 
 type MonitoringVisitsResponse = {
@@ -123,6 +138,16 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
   {
     accessorKey: "learner.trackingId",
     header: "Tracking ID",
+  },
+  {
+    accessorKey: "institution",
+    header: "Institution",
+    cell: ({ row }) => row.original.institution || "N/A",
+  },
+  {
+    accessorKey: "learner.program",
+    header: "Program",
+    cell: ({ row }) => row.original.learner.program || "N/A",
   },
   {
     id: "name",
@@ -227,6 +252,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
         onManageGps?: (visit: MonitoringVisit) => void,
         onCreateBlocker?: (visit: MonitoringVisit) => void,
         onStartAssessment?: (visit: MonitoringVisit) => void,
+        onView?: (visit: MonitoringVisit) => void,
         role?: string 
       }
 
@@ -242,6 +268,10 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Actions</DropdownMenuLabel>
+            <DropdownMenuItem onClick={() => meta?.onView?.(visit)}>
+              <Eye className="mr-2 h-4 w-4" />
+              View Details
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => navigator.clipboard.writeText(visit._id)}>
               Copy ID
             </DropdownMenuItem>
@@ -257,18 +287,6 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
                 ) : null}
                 <DropdownMenuItem onClick={() => meta?.onEdit(visit)}>Edit Details</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => meta?.onDelete(visit._id)} className="text-red-600">Delete Visit</DropdownMenuItem>
-              </>
-            )}
-            {isSuperAdmin && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => meta?.onManageGps?.(visit)}>GPS Review / Evidence</DropdownMenuItem>
-                {visit.performanceRating <= 2 ? (
-                  <>
-                    <DropdownMenuItem onClick={() => meta?.onCreateBlocker?.(visit)}>Create Support Blocker</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => meta?.onStartAssessment?.(visit)}>Start Competency Assessment</DropdownMenuItem>
-                  </>
-                ) : null}
               </>
             )}
           </DropdownMenuContent>
@@ -300,9 +318,12 @@ export default function MonitoringVisits() {
     const [bulkGpsSubmitting, setBulkGpsSubmitting] = useState(false)
     const [refreshKey, setRefreshKey] = useState(0)
     const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+    const [viewingVisit, setViewingVisit] = useState<MonitoringVisit | null>(null)
+    const [showAllMonitoringExceptions, setShowAllMonitoringExceptions] = useState(false)
     const { authFetch, user } = useAuth()
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
+    const isHeadquarters = user?.role === 'SuperAdmin'
 
     // Search & filters
     const [searchInput, setSearchInput] = useState(searchParams.get('search') || '')
@@ -311,6 +332,7 @@ export default function MonitoringVisits() {
     const filterAttendance = searchParams.get('attendanceStatus') || ''
     const filterGpsReview = searchParams.get('gpsReviewStatus') || ''
     const viewMode = searchParams.get('view') || 'visits'
+    const hqSection: HeadquartersSection = viewMode === 'exceptions' || viewMode === 'records' ? viewMode : 'overview'
 
     const setFilter = useCallback((key: string, value: string) => {
         const next = new URLSearchParams(searchParams)
@@ -330,7 +352,15 @@ export default function MonitoringVisits() {
 
     const clearAllFilters = () => {
         setSearchInput('')
-        setSearchParams({}, { replace: true })
+        setSearchParams(isHeadquarters ? { view: hqSection } : {}, { replace: true })
+        setPage(1)
+    }
+
+    const setHeadquartersSection = (section: HeadquartersSection) => {
+        const next = new URLSearchParams(searchParams)
+        next.set('view', section)
+        next.delete('page')
+        setSearchParams(next, { replace: true })
         setPage(1)
     }
 
@@ -349,8 +379,8 @@ export default function MonitoringVisits() {
     }
     const [anomalies, setAnomalies] = useState<Anomaly[]>([])
     const [showAnomalies, setShowAnomalies] = useState(false)
-    const isAdmin = user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin'
-    const canReviewGps = isAdmin || user?.role === 'Admin'
+    const isAdmin = isHeadquarters || user?.role === 'RegionalAdmin'
+    const canReviewGps = !isHeadquarters && (isAdmin || user?.role === 'Admin')
 
     useEffect(() => {
         const fetchData = async () => {
@@ -386,7 +416,7 @@ export default function MonitoringVisits() {
     }, [refreshKey, authFetch, isAdmin, page, pageSize, searchParams, filterVisitType, filterAttendance, filterGpsReview])
 
     useEffect(() => {
-        if (viewMode !== 'due') return
+        if (viewMode !== 'due' && !(isHeadquarters && hqSection === 'exceptions')) return
         setDueLoading(true)
         authFetch('/api/monitoring-visits/due')
             .then(async (res) => {
@@ -400,7 +430,7 @@ export default function MonitoringVisits() {
                 setDueVisits([])
             })
             .finally(() => setDueLoading(false))
-    }, [authFetch, refreshKey, viewMode])
+    }, [authFetch, hqSection, isHeadquarters, refreshKey, viewMode])
 
     // Fetch anomalies separately for admins
     useEffect(() => {
@@ -410,17 +440,28 @@ export default function MonitoringVisits() {
                 if (!res.ok) throw new Error('Failed to fetch anomalies')
                 return res.json()
             })
-            .then(data => Array.isArray(data) ? setAnomalies(data) : setAnomalies([]))
+            .then((payload) => {
+                if (!Array.isArray(payload)) {
+                    setAnomalies([])
+                    return
+                }
+                const severityRank: Record<string, number> = { high: 3, medium: 2, low: 1 }
+                setAnomalies([...payload].sort((left, right) => {
+                    const severityDelta = (severityRank[right.severity] || 0) - (severityRank[left.severity] || 0)
+                    return severityDelta || new Date(right.date).getTime() - new Date(left.date).getTime()
+                }))
+            })
             .catch(() => setAnomalies([]))
     }, [authFetch, isAdmin, refreshKey])
 
     useEffect(() => {
+        if (isHeadquarters) return
         if (searchParams.get("offlineReview") !== "1") return
         const bridge = getOfflineConflictBridge()
         if (!bridge || bridge.type !== "monitoring-visit") return
         setEditingVisit(bridge.payload as unknown as MonitoringVisit)
         setOpen(true)
-    }, [searchParams])
+    }, [isHeadquarters, searchParams])
 
     const handleSuccess = (result?: { offlineQueued?: boolean }) => {
         setOpen(false)
@@ -600,19 +641,46 @@ export default function MonitoringVisits() {
                     Monitoring Visits
                 </h2>
                 <p className="text-muted-foreground">
-                    Track and review monitoring visits and learner performance.
+                    {isHeadquarters
+                        ? 'National monitoring coverage, field evidence, attendance, and learner-performance oversight.'
+                        : 'Track and review monitoring visits and learner performance.'}
                 </p>
                 </div>
                 <div className="flex items-center space-x-3">
+                    {isHeadquarters ? (
+                        <Badge className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">Headquarters · Read only</Badge>
+                    ) : null}
                     <Button data-help-id="monitoring-visits-export" onClick={handleExport} variant="outline" className="rounded-xl border-gray-200 bg-white hover:bg-gray-50 text-gray-700 shadow-sm font-semibold">
                         <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
-                    <Button onClick={() => { setEditingVisit(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 shadow-sm font-bold">
-                        <Plus className="mr-2 h-4 w-4" /> Log Visit
-                    </Button>
+                    {!isHeadquarters ? (
+                        <Button onClick={() => { setEditingVisit(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 shadow-sm font-bold">
+                            <Plus className="mr-2 h-4 w-4" /> Log Visit
+                        </Button>
+                    ) : null}
                 </div>
             </div>
 
+            {isHeadquarters ? (
+                <nav className="grid gap-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm sm:grid-cols-3" aria-label="Headquarters monitoring views">
+                    {([
+                        { value: 'overview', label: 'Overview', description: 'National patterns and distributions' },
+                        { value: 'exceptions', label: 'Exceptions', description: `${dueVisits.length + anomalies.length} items requiring attention` },
+                        { value: 'records', label: 'All Records', description: 'Search and inspect detailed records' },
+                    ] as const).map((item) => (
+                        <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => setHeadquartersSection(item.value)}
+                            aria-pressed={hqSection === item.value}
+                            className={`rounded-xl px-4 py-3 text-left transition-colors ${hqSection === item.value ? 'bg-gray-950 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
+                        >
+                            <span className="block text-sm font-black">{item.label}</span>
+                            <span className={`mt-0.5 block text-[11px] font-medium ${hqSection === item.value ? 'text-gray-300' : 'text-gray-400'}`}>{item.description}</span>
+                        </button>
+                    ))}
+                </nav>
+            ) : (
             <div className="flex flex-wrap gap-2 px-4 sm:px-0">
                 <Button
                     variant={viewMode === 'visits' ? 'default' : 'outline'}
@@ -646,6 +714,20 @@ export default function MonitoringVisits() {
                     Pending GPS Review
                 </Button>
             </div>
+            )}
+
+            {isHeadquarters && hasActiveFilters ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-blue-800">
+                        <span>Active national filters:</span>
+                        {searchParams.get('search') ? <Badge className="border-blue-200 bg-white text-blue-700">Search: {searchParams.get('search')}</Badge> : null}
+                        {filterVisitType ? <Badge className="border-blue-200 bg-white text-blue-700">Type: {filterVisitType}</Badge> : null}
+                        {filterAttendance ? <Badge className="border-blue-200 bg-white text-blue-700">Attendance: {filterAttendance}</Badge> : null}
+                        {filterGpsReview ? <Badge className="border-blue-200 bg-white text-blue-700">GPS: {filterGpsReview}</Badge> : null}
+                    </div>
+                    <Button variant="ghost" size="sm" className="text-blue-700" onClick={clearAllFilters}>Clear filters</Button>
+                </div>
+            ) : null}
 
             {/* Stat Cards */}
             {loading ? (
@@ -690,7 +772,118 @@ export default function MonitoringVisits() {
                 </div>
             ) : null}
 
+            {isHeadquarters && hqSection === 'overview' && stats ? (
+                <section className="grid grid-cols-1 gap-6 px-4 sm:px-0 lg:grid-cols-2" aria-label="National monitoring visit analytics">
+                    {[
+                        {
+                            title: 'Visit Type Distribution',
+                            description: 'Mix of routine, urgent, emergency, and follow-up monitoring activity.',
+                            data: Object.entries(stats.byType).map(([name, value]) => ({ name, value })),
+                            colors: VISIT_TYPE_COLORS,
+                            donut: true,
+                        },
+                        {
+                            title: 'GPS Evidence Status',
+                            description: 'Verification and exception-review position across submitted visits.',
+                            data: [
+                                { name: 'Verified', value: stats.gpsVerified },
+                                { name: 'Unverified', value: stats.gpsUnverified },
+                                { name: 'Pending review', value: stats.pendingReview },
+                                { name: 'Exception approved', value: stats.exceptionApproved },
+                                { name: 'Rejected', value: stats.gpsRejected },
+                            ],
+                            colors: GPS_STATUS_COLORS,
+                            donut: true,
+                        },
+                        {
+                            title: 'Attendance Distribution',
+                            description: 'Learner attendance outcomes captured during monitoring visits.',
+                            data: Object.entries(stats.byAttendance).map(([name, value]) => ({ name, value })),
+                            colors: ATTENDANCE_COLORS,
+                            donut: false,
+                        },
+                        {
+                            title: 'Performance Risk Distribution',
+                            description: 'Ratings grouped into strong (4–5), watch (3), and at-risk (below 3).',
+                            data: Object.entries(stats.byRating).map(([name, value]) => ({ name, value })),
+                            colors: RATING_COLORS,
+                            donut: false,
+                        },
+                    ].map((chart) => {
+                        const visibleData = chart.data.filter((item) => item.value > 0)
+                        return (
+                            <div key={chart.title} className="overflow-hidden rounded-[2rem] border border-gray-100 bg-white p-5 shadow-xl md:p-7">
+                                <h3 className="text-xl font-black text-gray-900">{chart.title}</h3>
+                                <p className="mt-1 text-sm font-semibold text-gray-500">{chart.description}</p>
+                                {visibleData.length > 0 ? (
+                                    <>
+                                        <ResponsiveContainer width="100%" height={230}>
+                                            <PieChart>
+                                                <Pie
+                                                    data={visibleData}
+                                                    dataKey="value"
+                                                    nameKey="name"
+                                                    cx="50%"
+                                                    cy="50%"
+                                                    innerRadius={chart.donut ? 58 : 0}
+                                                    outerRadius={88}
+                                                    paddingAngle={chart.donut ? 2 : 0}
+                                                    strokeWidth={2}
+                                                >
+                                                    {visibleData.map((item, index) => (
+                                                        <Cell key={item.name} fill={chart.colors[index % chart.colors.length]} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip
+                                                    formatter={(value: number) => [value, 'Visits']}
+                                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                                />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                        <div className="flex flex-wrap justify-center gap-3" aria-label={`${chart.title} totals`}>
+                                            {visibleData.map((item, index) => (
+                                                <div key={item.name} className="flex items-center gap-2">
+                                                    <span className="h-3 w-3 rounded-full" style={{ backgroundColor: chart.colors[index % chart.colors.length] }} />
+                                                    <span className="text-sm font-bold text-gray-700">{item.name}: {item.value}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <p className="py-16 text-center text-sm font-semibold text-gray-400">No data available for the current filters.</p>
+                                )}
+                            </div>
+                        )
+                    })}
+                    <div className="overflow-hidden rounded-[2rem] border border-gray-100 bg-white p-5 shadow-xl md:col-span-2 md:p-7">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h3 className="text-xl font-black text-gray-900">Institution Monitoring Ranking</h3>
+                                <p className="mt-1 text-sm font-semibold text-gray-500">Eight institutions with the highest monitoring-visit volume under the active filters.</p>
+                            </div>
+                            <Button variant="outline" className="w-fit rounded-xl" onClick={() => setHeadquartersSection('records')}>View all records</Button>
+                        </div>
+                        {stats.institutionRanking?.length > 0 ? (
+                            <ResponsiveContainer width="100%" height={300}>
+                                <BarChart data={stats.institutionRanking} margin={{ top: 24, right: 12, left: 0, bottom: 44 }}>
+                                    <XAxis dataKey="institution" interval={0} angle={-18} textAnchor="end" height={74} tick={{ fontSize: 11 }} />
+                                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                                    <Tooltip
+                                        formatter={(value: number, name: string) => [value, name === 'count' ? 'Visits' : name]}
+                                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                    />
+                                    <Bar dataKey="count" name="Visits" fill="#2563eb" radius={[8, 8, 0, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <p className="py-16 text-center text-sm font-semibold text-gray-400">No institution ranking data is available.</p>
+                        )}
+                    </div>
+                </section>
+            ) : null}
+
             {/* Search & Filters */}
+            {(!isHeadquarters || hqSection === 'records') ? (
             <div className="flex flex-col md:flex-row gap-3 px-4 sm:px-0">
                 <div className="relative flex-1 max-w-md">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -733,8 +926,9 @@ export default function MonitoringVisits() {
                     <Button variant="ghost" size="sm" onClick={clearAllFilters} className="text-gray-500 hover:text-gray-700 font-bold h-10"><X className="mr-1 h-3.5 w-3.5" /> Clear All</Button>
                 )}
             </div>
+            ) : null}
 
-            {viewMode === 'due' ? (
+            {(!isHeadquarters && viewMode === 'due') || (isHeadquarters && hqSection === 'exceptions') ? (
                 <div className="rounded-none sm:rounded-2xl border-y sm:border border-amber-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-4 sm:p-6">
                     {dueLoading ? (
                         <div className="space-y-3">
@@ -752,9 +946,16 @@ export default function MonitoringVisits() {
                                     <h3 className="text-lg font-black text-gray-900">Overdue Monitoring Cadence</h3>
                                     <p className="text-sm font-medium text-gray-500">Active placements whose next visit is past the configured cadence.</p>
                                 </div>
-                                <Badge className="bg-amber-100 text-amber-700 border-amber-200">{dueVisits.length} due</Badge>
+                                <div className="flex items-center gap-2">
+                                    <Badge className="bg-amber-100 text-amber-700 border-amber-200">{dueVisits.length} due</Badge>
+                                    {isHeadquarters && dueVisits.length > 5 ? (
+                                        <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setShowAllMonitoringExceptions((current) => !current)}>
+                                            {showAllMonitoringExceptions ? 'Show top 5' : `View all ${dueVisits.length}`}
+                                        </Button>
+                                    ) : null}
+                                </div>
                             </div>
-                            {dueVisits.map((item) => (
+                            {(isHeadquarters && !showAllMonitoringExceptions ? dueVisits.slice(0, 5) : dueVisits).map((item) => (
                                 <div key={item.placementId} className="flex flex-col gap-4 rounded-2xl border border-amber-100 bg-amber-50/60 p-4 md:flex-row md:items-center md:justify-between">
                                     <div className="min-w-0">
                                         <div className="flex flex-wrap items-center gap-2">
@@ -768,16 +969,52 @@ export default function MonitoringVisits() {
                                             {item.lastVisitAt ? ` · Last ${item.lastVisitType || 'visit'} ${format(new Date(item.lastVisitAt), 'PP')}` : ' · No visit logged yet'}
                                         </p>
                                     </div>
-                                    <Button onClick={() => { setEditingVisit(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] font-bold text-gray-900 hover:bg-[#e5a600]">
-                                        <Plus className="mr-2 h-4 w-4" />
-                                        Log Visit
-                                    </Button>
+                                    {!isHeadquarters ? (
+                                        <Button onClick={() => { setEditingVisit(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] font-bold text-gray-900 hover:bg-[#e5a600]">
+                                            <Plus className="mr-2 h-4 w-4" />
+                                            Log Visit
+                                        </Button>
+                                    ) : null}
                                 </div>
                             ))}
                         </div>
                     )}
+                    {isHeadquarters ? (
+                        <div className="mt-6 border-t border-gray-100 pt-6">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 className="text-lg font-black text-gray-900">Recent Monitoring Anomalies</h3>
+                                    <p className="text-sm font-medium text-gray-500">Suspicious field patterns detected during the last 30 days.</p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Badge className={`${anomalies.length > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'} border-0`}>{anomalies.length} detected</Badge>
+                                    {anomalies.length > 5 ? (
+                                        <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setShowAllMonitoringExceptions((current) => !current)}>
+                                            {showAllMonitoringExceptions ? 'Show top 5' : `View all ${anomalies.length}`}
+                                        </Button>
+                                    ) : null}
+                                </div>
+                            </div>
+                            {anomalies.length > 0 ? (
+                                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                                    {anomalies.slice(0, showAllMonitoringExceptions ? anomalies.length : 5).map((anomaly) => (
+                                        <div key={`${anomaly.visit?._id}-${anomaly.type}-${anomaly.date}`} className={`rounded-2xl border p-4 ${anomaly.severity === 'high' ? 'border-red-100 bg-red-50' : 'border-amber-100 bg-amber-50'}`}>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <Badge className={`${anomaly.severity === 'high' ? 'bg-red-200 text-red-800' : 'bg-amber-200 text-amber-800'} border-0 text-[10px] font-black uppercase`}>{anomaly.type.replace('_', ' ')}</Badge>
+                                                <span className="text-xs font-bold text-gray-500">{new Date(anomaly.date).toLocaleDateString()}</span>
+                                            </div>
+                                            <p className="mt-2 text-sm font-bold text-gray-800">{anomaly.message}</p>
+                                            {anomaly.visit?.learner?.name ? <p className="mt-1 text-xs font-semibold text-gray-500">{anomaly.visit.learner.name} · {anomaly.visit.learner.trackingId}</p> : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="mt-4 rounded-2xl bg-emerald-50 p-6 text-center text-sm font-bold text-emerald-700">No recent monitoring anomalies detected.</div>
+                            )}
+                        </div>
+                    ) : null}
                 </div>
-            ) : (
+            ) : isHeadquarters && hqSection === 'overview' ? null : (
             <div data-help-id="monitoring-visits-table" className="rounded-none sm:rounded-2xl border-y sm:border border-gray-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-0 sm:p-2">
                 {loading ? (
                     <div className="p-4 space-y-3">
@@ -789,6 +1026,8 @@ export default function MonitoringVisits() {
                         <p className="text-sm font-bold text-gray-400">No monitoring visits found</p>
                         {hasActiveFilters ? (
                             <Button variant="ghost" size="sm" onClick={clearAllFilters} className="text-blue-600 hover:text-blue-700 font-bold">Clear filters →</Button>
+                        ) : isHeadquarters ? (
+                            <p className="text-xs font-semibold text-gray-400">No national monitoring records are available yet.</p>
                         ) : (
                             <Button variant="ghost" size="sm" onClick={() => { setEditingVisit(null); setOpen(true) }} className="text-blue-600 hover:text-blue-700 font-bold">Log your first visit →</Button>
                         )}
@@ -849,6 +1088,7 @@ export default function MonitoringVisits() {
                             onManageGps: handleManageGps,
                             onCreateBlocker: createVisitSupportBlocker,
                             onStartAssessment: startAssessmentFromVisit,
+                            onView: setViewingVisit,
                             role: user?.role 
                         }} 
                     />
@@ -858,7 +1098,7 @@ export default function MonitoringVisits() {
             )}
 
             {/* Anomalies Section (Admin Only) */}
-            {isAdmin && anomalies.length > 0 && (
+            {isAdmin && !isHeadquarters && anomalies.length > 0 && (
                 <div className="mt-6 rounded-none sm:rounded-2xl border-y sm:border border-red-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-4 sm:p-6">
                     <button
                         onClick={() => setShowAnomalies(!showAnomalies)}
@@ -909,6 +1149,55 @@ export default function MonitoringVisits() {
                     )}
                 </div>
             )}
+
+            <Sheet open={Boolean(viewingVisit)} onOpenChange={(next) => { if (!next) setViewingVisit(null) }}>
+                <SheetContent side="right" className="w-full overflow-y-auto border-l border-slate-200 bg-white p-0 sm:max-w-xl">
+                    {viewingVisit ? (
+                        <div className="p-6 md:p-8">
+                            <SheetHeader className="border-b border-gray-100 pb-5 pr-8 text-left">
+                                <SheetTitle className="text-2xl font-black text-gray-900">Monitoring Visit Details</SheetTitle>
+                                <SheetDescription>{viewingVisit.learner.name} · {viewingVisit.learner.trackingId}</SheetDescription>
+                            </SheetHeader>
+                            <div className="mt-6 space-y-5">
+                                <div className="grid grid-cols-2 gap-3">
+                                    {[
+                                        ['Institution', viewingVisit.institution || 'N/A'],
+                                        ['Program', viewingVisit.learner.program || 'N/A'],
+                                        ['Visit date', format(new Date(viewingVisit.visitDate), 'PPP')],
+                                        ['Visit type', viewingVisit.visitType],
+                                        ['Attendance', viewingVisit.attendanceStatus],
+                                        ['Performance', `${viewingVisit.performanceRating}/5`],
+                                    ].map(([label, value]) => (
+                                        <div key={label} className="rounded-2xl bg-gray-50 p-4">
+                                            <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">{label}</p>
+                                            <p className="mt-1 text-sm font-bold text-gray-900">{value}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="rounded-2xl border border-gray-100 p-4">
+                                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">GPS evidence</p>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        <Badge className="border-0 bg-slate-100 text-slate-700">{viewingVisit.locationVerified || 'No GPS'}</Badge>
+                                        <Badge className="border-0 bg-blue-50 text-blue-700">{viewingVisit.gpsReviewStatus || 'Pending review'}</Badge>
+                                        {viewingVisit.distanceFromSite ? <Badge className="border-0 bg-rose-50 text-rose-700">{(viewingVisit.distanceFromSite / 1000).toFixed(1)} km from site</Badge> : null}
+                                    </div>
+                                    {viewingVisit.gpsExceptionReason ? <p className="mt-3 text-sm text-gray-700"><span className="font-bold">Exception reason:</span> {viewingVisit.gpsExceptionReason}</p> : null}
+                                </div>
+                                {[
+                                    ['Key observations', viewingVisit.keyObservations],
+                                    ['Issues identified', viewingVisit.issuesIdentified],
+                                    ['Action required', viewingVisit.actionRequired],
+                                ].map(([label, value]) => (
+                                    <div key={label} className="rounded-2xl border border-gray-100 p-4">
+                                        <p className="text-xs font-black uppercase tracking-wider text-gray-400">{label}</p>
+                                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700">{value || 'None recorded'}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
+                </SheetContent>
+            </Sheet>
 
             {/* Dialogs */}
             <Dialog open={open} onOpenChange={(next) => {

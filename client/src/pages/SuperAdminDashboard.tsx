@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/context/AuthContext"
 import { Shield, Users, Building2, Download, Briefcase, FileText, AlertTriangle, CheckCircle2, LifeBuoy, ShieldCheck, ArrowRight, TrendingUp, TrendingDown, Minus, RefreshCw, Bell, Upload, Clock3, UserRoundCheck } from "lucide-react"
-import { Line, LineChart, ResponsiveContainer, Tooltip } from "recharts"
+import { Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts"
 import { InstitutionForm, type InstitutionFormValues } from "./InstitutionForm"
 import { GeolocatedMonitoringMap } from "@/components/dashboard/GeolocatedMonitoringMap"
 import jsPDF from "jspdf"
@@ -79,6 +79,10 @@ type HqActionCategory = "Reports" | "Support" | "Deadlines" | "Governance" | "Da
 type HqActionPriority = "Critical" | "High" | "Medium";
 type HqDashboardView = "operations" | "performance" | "governance" | "registries";
 
+const GENDER_CHART_COLORS = ['#4f46e5', '#ec4899', '#8b5cf6', '#6b7280'];
+const PROGRAM_CHART_COLORS = ['#FFB800', '#4f46e5', '#10b981', '#ec4899', '#f97316', '#8b5cf6', '#06b6d4'];
+const INSTITUTION_BREAKDOWN_PAGE_SIZE = 8;
+
 interface HqActionItem {
   id: string;
   category: HqActionCategory;
@@ -105,6 +109,8 @@ interface OverviewData {
   partnersDetails: PartnerDetail[];
   institutionStats: InstitutionStat[];
   regionalStats: RegionalStat[];
+  genderDistribution: { gender: string; count: number }[];
+  programDistribution: { program: string; count: number }[];
   approvalInbox: {
     pendingCount: number;
     overdueCount: number;
@@ -228,7 +234,7 @@ export default function SuperAdminDashboard() {
   const [editingInstitution, setEditingInstitution] = useState<InstitutionDetail | null>(null);
   const [instSearch, setInstSearch] = useState('');
   const [partnerSearch, setPartnerSearch] = useState('');
-  const [institutionBreakdownLimit, setInstitutionBreakdownLimit] = useState(12);
+  const [institutionBreakdownPage, setInstitutionBreakdownPage] = useState(1);
   const [csvImporting, setCsvImporting] = useState(false);
   const [notifyingDeadlineKeys, setNotifyingDeadlineKeys] = useState<string[]>([]);
   const [expandedRegions, setExpandedRegions] = useState<string[]>([]);
@@ -635,8 +641,13 @@ export default function SuperAdminDashboard() {
       partner.contactPerson?.toLowerCase().includes(q)
     );
   });
-  const visibleInstitutionStats = (data.institutionStats || []).slice(0, institutionBreakdownLimit);
-  const hasHiddenInstitutionStats = (data.institutionStats?.length || 0) > institutionBreakdownLimit;
+  const institutionBreakdownTotalPages = Math.max(1, Math.ceil((data.institutionStats?.length || 0) / INSTITUTION_BREAKDOWN_PAGE_SIZE));
+  const currentInstitutionBreakdownPage = Math.min(institutionBreakdownPage, institutionBreakdownTotalPages);
+  const institutionBreakdownStartIndex = (currentInstitutionBreakdownPage - 1) * INSTITUTION_BREAKDOWN_PAGE_SIZE;
+  const visibleInstitutionStats = (data.institutionStats || []).slice(
+    institutionBreakdownStartIndex,
+    institutionBreakdownStartIndex + INSTITUTION_BREAKDOWN_PAGE_SIZE,
+  );
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
@@ -877,6 +888,100 @@ export default function SuperAdminDashboard() {
 
       {/* Map Section */}
       {dashboardView === "performance" ? <GeolocatedMonitoringMap /> : null}
+
+      <div className={`${dashboardView === "performance" ? "grid" : "hidden"} gap-6 grid-cols-1 lg:grid-cols-2`}>
+        <Card className="overflow-hidden rounded-[2rem] border-gray-100 bg-white shadow-xl">
+          <CardHeader className="p-4 pb-0 md:p-8 md:pb-0">
+            <CardTitle className="text-xl font-black">Gender Distribution</CardTitle>
+            <CardDescription className="mt-1 text-sm font-bold text-gray-400">
+              National learner gender breakdown
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-4 md:p-8">
+            {data.genderDistribution?.length > 0 ? (
+              <>
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={data.genderDistribution}
+                      dataKey="count"
+                      nameKey="gender"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={55}
+                      outerRadius={88}
+                      strokeWidth={2}
+                    >
+                      {data.genderDistribution.map((entry, index) => (
+                        <Cell key={entry.gender} fill={GENDER_CHART_COLORS[index % GENDER_CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="mt-4 flex flex-wrap justify-center gap-3" aria-label="Gender distribution totals">
+                  {data.genderDistribution.map((entry, index) => (
+                    <div key={entry.gender} className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: GENDER_CHART_COLORS[index % GENDER_CHART_COLORS.length] }} />
+                      <span className="text-sm font-bold text-gray-700">{entry.gender}: {entry.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="py-12 text-center text-gray-400">No gender data available</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="overflow-hidden rounded-[2rem] border-gray-100 bg-white shadow-xl">
+          <CardHeader className="p-4 pb-0 md:p-8 md:pb-0">
+            <CardTitle className="text-xl font-black">Trade/Program Distribution</CardTitle>
+            <CardDescription className="mt-1 text-sm font-bold text-gray-400">
+              National learners across the ten most represented programs
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-4 md:p-8">
+            {data.programDistribution?.length > 0 ? (
+              <>
+                <ResponsiveContainer width="100%" height={240}>
+                  <PieChart>
+                    <Pie
+                      data={data.programDistribution}
+                      dataKey="count"
+                      nameKey="program"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={65}
+                      outerRadius={96}
+                      paddingAngle={2}
+                      strokeWidth={2}
+                    >
+                      {data.programDistribution.map((entry, index) => (
+                        <Cell key={entry.program} fill={PROGRAM_CHART_COLORS[index % PROGRAM_CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                      formatter={(value: number) => [value, 'Learners']}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="mt-4 flex flex-wrap justify-center gap-3" aria-label="Program distribution totals">
+                  {data.programDistribution.map((entry, index) => (
+                    <div key={entry.program} className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: PROGRAM_CHART_COLORS[index % PROGRAM_CHART_COLORS.length] }} />
+                      <span className="text-sm font-bold text-gray-700">{entry.program}: {entry.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="py-12 text-center text-gray-400">No program data available</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <div className={`${dashboardView === "operations" ? "grid" : "hidden"} gap-6 grid-cols-1 xl:grid-cols-2`}>
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
@@ -1221,18 +1326,18 @@ export default function SuperAdminDashboard() {
 
       <Card className={`${dashboardView === "performance" ? "block" : "hidden"} bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden`}>
         <CardHeader className="p-8 pb-4">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-2xl font-black">Calendar & Deadline Risk</CardTitle>
               <CardDescription className="text-base font-bold text-gray-400 mt-2">
                 Upcoming national deadlines, overdue submissions, and institutions at risk of missing the current reporting cycle.
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/academic-calendar')}>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+              <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/academic-calendar')}>
                 Open Calendar
               </Button>
-              <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/semester-reports')}>
+              <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/semester-reports')}>
                 Open Reports
               </Button>
             </div>
@@ -1935,19 +2040,35 @@ export default function SuperAdminDashboard() {
                   </div>
                 );
               })}
-              <div className="flex items-center justify-between border-t border-gray-100 pt-4">
+              <div className="flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-bold text-gray-400">
-                  Showing {visibleInstitutionStats.length} of {data.institutionStats.length} institutions
+                  Showing {institutionBreakdownStartIndex + 1}–{Math.min(institutionBreakdownStartIndex + visibleInstitutionStats.length, data.institutionStats.length)} of {data.institutionStats.length} institutions
                 </p>
-                {(data.institutionStats.length > 12) && (
+                {institutionBreakdownTotalPages > 1 ? (
+                  <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-start">
                   <Button
                     variant="outline"
+                    size="sm"
                     className="rounded-xl border-gray-200 font-bold"
-                    onClick={() => setInstitutionBreakdownLimit(hasHiddenInstitutionStats ? data.institutionStats.length : 12)}
+                    onClick={() => setInstitutionBreakdownPage(Math.max(1, currentInstitutionBreakdownPage - 1))}
+                    disabled={currentInstitutionBreakdownPage === 1}
                   >
-                    {hasHiddenInstitutionStats ? `Show all ${data.institutionStats.length}` : "Show fewer"}
+                    Previous
                   </Button>
-                )}
+                  <span className="min-w-[100px] text-center text-sm font-bold text-gray-600">
+                    Page {currentInstitutionBreakdownPage} of {institutionBreakdownTotalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="rounded-xl border-gray-200 font-bold"
+                    onClick={() => setInstitutionBreakdownPage(Math.min(institutionBreakdownTotalPages, currentInstitutionBreakdownPage + 1))}
+                    disabled={currentInstitutionBreakdownPage === institutionBreakdownTotalPages}
+                  >
+                    Next
+                  </Button>
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
