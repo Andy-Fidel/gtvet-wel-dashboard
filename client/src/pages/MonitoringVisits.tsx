@@ -16,7 +16,7 @@ import {
     DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
-import { MoreHorizontal, Download, ShieldCheck, ShieldAlert, ShieldQuestion, AlertTriangle, Handshake, ClipboardCheck, Plus, Search, X, Star, Clock, Eye } from "lucide-react"
+import { MoreHorizontal, Download, ShieldCheck, ShieldAlert, ShieldQuestion, AlertTriangle, Handshake, ClipboardCheck, Plus, Search, X, Star, Clock, Eye, ArrowUpRight } from "lucide-react"
 import {
     Dialog,
     DialogContent,
@@ -632,6 +632,33 @@ export default function MonitoringVisits() {
         }
     }
 
+    const visitStatCards = stats ? [
+        {
+            label: "Total Visits",
+            value: totalVisits,
+            Icon: ClipboardCheck,
+            detail: `${stats.byType.Routine} routine · ${stats.byType.Urgent + stats.byType.Emergency} urgent`,
+        },
+        {
+            label: "Avg Rating",
+            value: `${stats.avgRating}/5`,
+            Icon: Star,
+            detail: "Average performance rating",
+        },
+        {
+            label: "GPS Verified",
+            value: stats.gpsVerified,
+            Icon: ShieldCheck,
+            detail: `${stats.gpsUnverified} unverified · ${stats.pendingReview} pending`,
+        },
+        {
+            label: "Follow-up Visits",
+            value: stats.byType['Follow-up'],
+            Icon: Handshake,
+            detail: `${stats.byType.Routine} routine visits`,
+        },
+    ] : []
+
     return (
         <div className="h-full flex-1 flex-col space-y-4 md:space-y-8 pt-16 px-0 pb-4 sm:p-4 md:p-8 flex">
              <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-2 px-4 sm:px-0">
@@ -731,44 +758,36 @@ export default function MonitoringVisits() {
 
             {/* Stat Cards */}
             {loading ? (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 px-4 sm:px-0">
-                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl" />)}
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 px-4 sm:px-0">
+                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[180px] rounded-[2rem]" />)}
                 </div>
             ) : stats ? (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 px-4 sm:px-0">
-                    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <div className="p-1.5 bg-blue-100 rounded-lg"><ClipboardCheck className="h-3.5 w-3.5 text-blue-600" /></div>
-                            <p className="text-xs font-black uppercase tracking-wider text-gray-400">Total Visits</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 px-4 sm:px-0">
+                    {visitStatCards.map(({ label, value, Icon, detail }) => (
+                        <div
+                            key={label}
+                            className="relative isolate flex min-h-[180px] overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-5 text-gray-950 shadow-xl shadow-[#C98200]/20"
+                        >
+                            <div className="absolute -bottom-16 -right-10 -z-10 h-40 w-40 rounded-full bg-[#C77700]/25 blur-2xl" />
+                            <div className="flex w-full flex-col justify-between">
+                                <div className="flex items-start justify-between gap-3">
+                                    <p className="pt-1 text-sm font-black uppercase tracking-wider text-gray-900/65">{label}</p>
+                                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
+                                        <ArrowUpRight className="h-6 w-6" strokeWidth={2.75} />
+                                    </span>
+                                </div>
+
+                                <p className="text-5xl font-black leading-none tracking-tight">{value}</p>
+
+                                <div className="flex items-center gap-3 text-sm font-bold text-gray-900/70">
+                                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-950/10 text-gray-950">
+                                        <Icon className="h-4 w-4" strokeWidth={2.5} />
+                                    </span>
+                                    <span>{detail}</span>
+                                </div>
+                            </div>
                         </div>
-                        <p className="text-2xl font-black text-gray-900">{totalVisits}</p>
-                        <p className="text-xs text-gray-500 mt-1">{stats.byType.Routine} routine · {stats.byType.Urgent + stats.byType.Emergency} urgent/emergency</p>
-                    </div>
-                    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <div className="p-1.5 bg-amber-100 rounded-lg"><Star className="h-3.5 w-3.5 text-amber-600" /></div>
-                            <p className="text-xs font-black uppercase tracking-wider text-gray-400">Avg Rating</p>
-                        </div>
-                        <p className="text-2xl font-black text-gray-900">{stats.avgRating}<span className="text-sm text-gray-400 font-bold">/5</span></p>
-                    </div>
-                    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <div className="p-1.5 bg-emerald-100 rounded-lg"><ShieldCheck className="h-3.5 w-3.5 text-emerald-600" /></div>
-                            <p className="text-xs font-black uppercase tracking-wider text-gray-400">GPS Verified</p>
-                        </div>
-                        <p className="text-2xl font-black text-gray-900">{stats.gpsVerified}</p>
-                        <p className="text-xs text-gray-500 mt-1">{stats.gpsUnverified} unverified · {stats.pendingReview} pending</p>
-                    </div>
-                    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <div className="p-1.5 bg-purple-100 rounded-lg"><Handshake className="h-3.5 w-3.5 text-purple-600" /></div>
-                            <p className="text-xs font-black uppercase tracking-wider text-gray-400">By Type</p>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5 mt-1">
-                            <Badge variant="outline" className="text-[10px] font-bold">{stats.byType.Routine} Routine</Badge>
-                            <Badge variant="outline" className="text-[10px] font-bold">{stats.byType['Follow-up']} Follow-up</Badge>
-                        </div>
-                    </div>
+                    ))}
                 </div>
             ) : null}
 

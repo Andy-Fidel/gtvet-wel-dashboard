@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react"
 import { type Learner, columns } from "./learners/columns"
 import { DataTable } from "@/components/ui/data-table"
 import { Button } from "@/components/ui/button"
-import { Plus, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Users, GraduationCap, BookOpen, Search, X } from "lucide-react"
+import { Plus, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Users, GraduationCap, BookOpen, Search, X, ArrowUpRight } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -245,58 +245,44 @@ export default function LearnerRegister() {
     }
   }
 
+  const lifecycleStats = [
+    { label: "Year 1", value: lifecycleSummary.year1, Icon: BookOpen, detail: "Learners in this stage" },
+    { label: "Year 2", value: lifecycleSummary.year2, Icon: BookOpen, detail: "Learners in this stage" },
+    { label: "Year 3", value: lifecycleSummary.year3, Icon: BookOpen, detail: "Learners in this stage" },
+    { label: "Graduated", value: lifecycleSummary.graduated, Icon: GraduationCap, detail: "Completed their programme" },
+  ]
+
   return (
     <div className="h-full flex-1 flex-col space-y-4 md:space-y-8 pt-16 px-0 pb-4 sm:p-4 md:p-8 flex">
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 sm:px-0">
         {loading ? (
-          <>{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl" />)}</>
+          <>{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-[180px] rounded-[2rem]" />)}</>
         ) : (
-          <>
-            <div className="rounded-2xl bg-white shadow-lg p-5 border border-gray-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Year 1</p>
-                  <p className="text-3xl font-black text-gray-900 mt-1">{lifecycleSummary.year1}</p>
+          lifecycleStats.map(({ label, value, Icon, detail }) => (
+            <div
+              key={label}
+              className="relative isolate flex min-h-[180px] overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-5 text-gray-950 shadow-xl shadow-[#C98200]/20"
+            >
+              <div className="absolute -bottom-16 -right-10 -z-10 h-40 w-40 rounded-full bg-[#C77700]/25 blur-2xl" />
+              <div className="flex w-full flex-col justify-between">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="pt-1 text-sm font-black uppercase tracking-wider text-gray-900/65">{label}</p>
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
+                    <ArrowUpRight className="h-6 w-6" strokeWidth={2.75} />
+                  </span>
                 </div>
-                <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center">
-                  <BookOpen className="h-6 w-6 text-blue-600" />
-                </div>
-              </div>
-            </div>
-            <div className="rounded-2xl bg-white shadow-lg p-5 border border-gray-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Year 2</p>
-                  <p className="text-3xl font-black text-gray-900 mt-1">{lifecycleSummary.year2}</p>
-                </div>
-                <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center">
-                  <BookOpen className="h-6 w-6 text-emerald-600" />
-                </div>
-              </div>
-            </div>
-            <div className="rounded-2xl bg-white shadow-lg p-5 border border-gray-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Year 3</p>
-                  <p className="text-3xl font-black text-gray-900 mt-1">{lifecycleSummary.year3}</p>
-                </div>
-                <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center">
-                  <BookOpen className="h-6 w-6 text-amber-600" />
+
+                <p className="text-5xl font-black leading-none tracking-tight">{value}</p>
+
+                <div className="flex items-center gap-3 text-sm font-bold text-gray-900/70">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-950/10 text-gray-950">
+                    <Icon className="h-4 w-4" strokeWidth={2.5} />
+                  </span>
+                  <span>{detail}</span>
                 </div>
               </div>
             </div>
-            <div className="rounded-2xl bg-white shadow-lg p-5 border border-gray-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Graduated</p>
-                  <p className="text-3xl font-black text-indigo-700 mt-1">{lifecycleSummary.graduated}</p>
-                </div>
-                <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center">
-                  <GraduationCap className="h-6 w-6 text-indigo-600" />
-                </div>
-              </div>
-            </div>
-          </>
+          ))
         )}
       </div>
 

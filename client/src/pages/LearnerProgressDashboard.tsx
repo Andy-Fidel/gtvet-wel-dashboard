@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useAuth } from "@/context/AuthContext"
-import { Activity, AlertTriangle, TrendingUp, Users, Award, CheckCircle2, UserCircle2, UserCheck, UserX, Download, Search, X, ChevronLeft, ChevronRight } from "lucide-react"
+import { Activity, AlertTriangle, TrendingUp, Users, Award, CheckCircle2, UserCircle2, UserCheck, UserX, Download, Search, X, ChevronLeft, ChevronRight, ArrowUpRight } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -226,31 +226,25 @@ export default function LearnerProgressDashboard() {
       title: "Current Enrolled",
       value: stats?.academicSummary?.currentEnrolled ?? 0,
       icon: Users,
-      color: "text-indigo-600",
-      bgColor: "bg-indigo-50",
+      detail: "Active learner records",
     },
     {
       title: "Average Progress",
       value: `${stats?.averageProgress || 0}%`,
       icon: TrendingUp,
-      color: "text-emerald-600",
-      bgColor: "bg-emerald-50",
-      trend: stats && stats.averageProgress >= 60 ? "positive" : "neutral",
+      detail: stats && stats.averageProgress >= 60 ? "Progress is on track" : "Progress across learners",
     },
     {
       title: "At Risk",
       value: stats?.atRiskCount || 0,
       icon: AlertTriangle,
-      color: "text-red-600",
-      bgColor: "bg-red-50",
-      alert: Boolean(stats?.atRiskCount),
+      detail: stats?.atRiskCount ? "Require immediate attention" : "No learners need attention",
     },
     {
       title: "Graduated",
       value: stats?.academicSummary?.graduatedCount || 0,
       icon: Award,
-      color: "text-emerald-600",
-      bgColor: "bg-emerald-50",
+      detail: "Completed their programme",
     },
   ]
 
@@ -359,37 +353,35 @@ export default function LearnerProgressDashboard() {
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-32 rounded-2xl" />
+            <Skeleton key={i} className="h-[180px] rounded-[2rem]" />
           ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {statCards.map((stat) => (
-            <Card key={stat.title} className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <div className={`w-12 h-12 rounded-2xl ${stat.bgColor} flex items-center justify-center`}>
-                    <stat.icon className={`h-6 w-6 ${stat.color}`} />
-                  </div>
-                  {stat.alert && (
-                    <Badge className="bg-red-500 text-white animate-pulse">
-                      <AlertTriangle className="h-3 w-3 mr-1" />
-                      Attention
-                    </Badge>
-                  )}
-                  {stat.trend === "positive" && (
-                    <Badge className="bg-emerald-100 text-emerald-700">
-                      <TrendingUp className="h-3 w-3 mr-1" />
-                      On Track
-                    </Badge>
-                  )}
+            <div
+              key={stat.title}
+              className="relative isolate flex min-h-[180px] overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-5 text-gray-950 shadow-xl shadow-[#C98200]/20"
+            >
+              <div className="absolute -bottom-16 -right-10 -z-10 h-40 w-40 rounded-full bg-[#C77700]/25 blur-2xl" />
+              <div className="flex w-full flex-col justify-between">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="pt-1 text-sm font-black uppercase tracking-wider text-gray-900/65">{stat.title}</p>
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
+                    <ArrowUpRight className="h-6 w-6" strokeWidth={2.75} />
+                  </span>
                 </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm font-medium text-gray-500 mt-2">{stat.title}</p>
-                <p className="text-3xl font-black text-gray-900 mt-1">{stat.value}</p>
-              </CardContent>
-            </Card>
+
+                <p className="text-5xl font-black leading-none tracking-tight">{stat.value}</p>
+
+                <div className="flex items-center gap-3 text-sm font-bold text-gray-900/70">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-950/10 text-gray-950">
+                    <stat.icon className="h-4 w-4" strokeWidth={2.5} />
+                  </span>
+                  <span>{stat.detail}</span>
+                </div>
+              </div>
+            </div>
           ))}
         </div>
       )}

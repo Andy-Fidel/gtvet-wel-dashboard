@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Link } from "react-router-dom"
-import { GraduationCap, Archive, Search, CalendarRange, BookOpen, Download } from "lucide-react"
+import { GraduationCap, Archive, Search, CalendarRange, BookOpen, Download, ArrowUpRight } from "lucide-react"
 import { useSearchParams } from "react-router-dom"
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
@@ -180,6 +180,13 @@ export default function GraduatedLearners() {
     completedWEL: filteredData.filter((learner) => learner.status === "Completed").length,
   }), [filteredData])
 
+  const graduateStats = [
+    { label: "Graduated Records", value: summary.total, Icon: GraduationCap, detail: "Matching archive records" },
+    { label: "Programs", value: summary.programs, Icon: BookOpen, detail: "Programs represented" },
+    { label: "Graduation Years", value: summary.graduationYears, Icon: CalendarRange, detail: "Years represented" },
+    { label: "Completed WEL", value: summary.completedWEL, Icon: Archive, detail: "WEL completed successfully" },
+  ]
+
   const graduationYearTrend = useMemo(() => {
     const counts = filteredData.reduce<Record<string, number>>((acc, learner) => {
       const key = learner.graduationAcademicYear || "Unspecified"
@@ -311,30 +318,31 @@ export default function GraduatedLearners() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 sm:px-0">
-        <Card className="rounded-[2rem] border-gray-100 bg-white shadow-lg">
-          <CardContent className="p-5">
-            <p className="text-sm text-gray-500">Graduated Records</p>
-            <p className="text-3xl font-black text-gray-900 mt-1">{summary.total}</p>
-          </CardContent>
-        </Card>
-        <Card className="rounded-[2rem] border-gray-100 bg-white shadow-lg">
-          <CardContent className="p-5">
-            <p className="text-sm text-gray-500">Programs</p>
-            <p className="text-3xl font-black text-indigo-700 mt-1">{summary.programs}</p>
-          </CardContent>
-        </Card>
-        <Card className="rounded-[2rem] border-gray-100 bg-white shadow-lg">
-          <CardContent className="p-5">
-            <p className="text-sm text-gray-500">Graduation Years</p>
-            <p className="text-3xl font-black text-emerald-700 mt-1">{summary.graduationYears}</p>
-          </CardContent>
-        </Card>
-        <Card className="rounded-[2rem] border-gray-100 bg-white shadow-lg">
-          <CardContent className="p-5">
-            <p className="text-sm text-gray-500">Completed WEL</p>
-            <p className="text-3xl font-black text-amber-700 mt-1">{summary.completedWEL}</p>
-          </CardContent>
-        </Card>
+        {graduateStats.map(({ label, value, Icon, detail }) => (
+          <div
+            key={label}
+            className="relative isolate flex min-h-[180px] overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-5 text-gray-950 shadow-xl shadow-[#C98200]/20"
+          >
+            <div className="absolute -bottom-16 -right-10 -z-10 h-40 w-40 rounded-full bg-[#C77700]/25 blur-2xl" />
+            <div className="flex w-full flex-col justify-between">
+              <div className="flex items-start justify-between gap-3">
+                <p className="pt-1 text-sm font-black uppercase tracking-wider text-gray-900/65">{label}</p>
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
+                  <ArrowUpRight className="h-6 w-6" strokeWidth={2.75} />
+                </span>
+              </div>
+
+              <p className="text-5xl font-black leading-none tracking-tight">{loading ? "—" : value}</p>
+
+              <div className="flex items-center gap-3 text-sm font-bold text-gray-900/70">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-950/10 text-gray-950">
+                  <Icon className="h-4 w-4" strokeWidth={2.5} />
+                </span>
+                <span>{detail}</span>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 sm:px-0">
