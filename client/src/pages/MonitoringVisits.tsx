@@ -43,7 +43,7 @@ const VISIT_TYPE_COLORS = ['#2563eb', '#f59e0b', '#ef4444', '#8b5cf6']
 const GPS_STATUS_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#3b82f6', '#64748b']
 const ATTENDANCE_COLORS = ['#10b981', '#ef4444', '#3b82f6', '#f59e0b']
 const RATING_COLORS = ['#10b981', '#f59e0b', '#ef4444']
-type HeadquartersSection = 'overview' | 'exceptions' | 'records'
+type OversightSection = 'overview' | 'exceptions' | 'records'
 
 export type MonitoringVisit = {
     _id: string
@@ -256,7 +256,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
         role?: string 
       }
 
-      const isSuperAdmin = meta?.role === 'SuperAdmin'
+      const isOversightUser = meta?.role === 'SuperAdmin' || meta?.role === 'RegionalAdmin'
  
       return (
         <DropdownMenu>
@@ -275,7 +275,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
             <DropdownMenuItem onClick={() => navigator.clipboard.writeText(visit._id)}>
               Copy ID
             </DropdownMenuItem>
-            {!isSuperAdmin && (
+            {!isOversightUser && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => meta?.onManageGps?.(visit)}>GPS Review / Evidence</DropdownMenuItem>
@@ -324,6 +324,10 @@ export default function MonitoringVisits() {
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
     const isHeadquarters = user?.role === 'SuperAdmin'
+    const isRegionalOversight = user?.role === 'RegionalAdmin'
+    const isOversightPortal = isHeadquarters || isRegionalOversight
+    const oversightScopeLabel = isHeadquarters ? 'National' : 'Regional'
+    const oversightPortalLabel = isHeadquarters ? 'Headquarters' : 'Regional'
 
     // Search & filters
     const [searchInput, setSearchInput] = useState(searchParams.get('search') || '')
@@ -332,7 +336,7 @@ export default function MonitoringVisits() {
     const filterAttendance = searchParams.get('attendanceStatus') || ''
     const filterGpsReview = searchParams.get('gpsReviewStatus') || ''
     const viewMode = searchParams.get('view') || 'visits'
-    const hqSection: HeadquartersSection = viewMode === 'exceptions' || viewMode === 'records' ? viewMode : 'overview'
+    const hqSection: OversightSection = viewMode === 'exceptions' || viewMode === 'records' ? viewMode : 'overview'
 
     const setFilter = useCallback((key: string, value: string) => {
         const next = new URLSearchParams(searchParams)
@@ -352,11 +356,11 @@ export default function MonitoringVisits() {
 
     const clearAllFilters = () => {
         setSearchInput('')
-        setSearchParams(isHeadquarters ? { view: hqSection } : {}, { replace: true })
+        setSearchParams(isOversightPortal ? { view: hqSection } : {}, { replace: true })
         setPage(1)
     }
 
-    const setHeadquartersSection = (section: HeadquartersSection) => {
+    const setHeadquartersSection = (section: OversightSection) => {
         const next = new URLSearchParams(searchParams)
         next.set('view', section)
         next.delete('page')
@@ -379,8 +383,8 @@ export default function MonitoringVisits() {
     }
     const [anomalies, setAnomalies] = useState<Anomaly[]>([])
     const [showAnomalies, setShowAnomalies] = useState(false)
-    const isAdmin = isHeadquarters || user?.role === 'RegionalAdmin'
-    const canReviewGps = !isHeadquarters && (isAdmin || user?.role === 'Admin')
+    const isAdmin = isOversightPortal
+    const canReviewGps = !isOversightPortal && user?.role === 'Admin'
 
     useEffect(() => {
         const fetchData = async () => {
@@ -416,7 +420,7 @@ export default function MonitoringVisits() {
     }, [refreshKey, authFetch, isAdmin, page, pageSize, searchParams, filterVisitType, filterAttendance, filterGpsReview])
 
     useEffect(() => {
-        if (viewMode !== 'due' && !(isHeadquarters && hqSection === 'exceptions')) return
+        if (viewMode !== 'due' && !(isOversightPortal && hqSection === 'exceptions')) return
         setDueLoading(true)
         authFetch('/api/monitoring-visits/due')
             .then(async (res) => {
@@ -430,7 +434,7 @@ export default function MonitoringVisits() {
                 setDueVisits([])
             })
             .finally(() => setDueLoading(false))
-    }, [authFetch, hqSection, isHeadquarters, refreshKey, viewMode])
+    }, [authFetch, hqSection, isOversightPortal, refreshKey, viewMode])
 
     // Fetch anomalies separately for admins
     useEffect(() => {
@@ -455,13 +459,13 @@ export default function MonitoringVisits() {
     }, [authFetch, isAdmin, refreshKey])
 
     useEffect(() => {
-        if (isHeadquarters) return
+        if (isOversightPortal) return
         if (searchParams.get("offlineReview") !== "1") return
         const bridge = getOfflineConflictBridge()
         if (!bridge || bridge.type !== "monitoring-visit") return
         setEditingVisit(bridge.payload as unknown as MonitoringVisit)
         setOpen(true)
-    }, [isHeadquarters, searchParams])
+    }, [isOversightPortal, searchParams])
 
     const handleSuccess = (result?: { offlineQueued?: boolean }) => {
         setOpen(false)
@@ -668,19 +672,19 @@ export default function MonitoringVisits() {
                     Monitoring Visits
                 </h2>
                 <p className="text-muted-foreground">
-                    {isHeadquarters
-                        ? 'National monitoring coverage, field evidence, attendance, and learner-performance oversight.'
+                    {isOversightPortal
+                        ? `${oversightScopeLabel} monitoring coverage, field evidence, attendance, and learner-performance oversight.`
                         : 'Track and review monitoring visits and learner performance.'}
                 </p>
                 </div>
                 <div className="flex items-center space-x-3">
-                    {isHeadquarters ? (
-                        <Badge className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">Headquarters · Read only</Badge>
+                    {isOversightPortal ? (
+                        <Badge className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">{oversightPortalLabel} · Read only</Badge>
                     ) : null}
                     <Button data-help-id="monitoring-visits-export" onClick={handleExport} variant="outline" className="rounded-xl border-gray-200 bg-white hover:bg-gray-50 text-gray-700 shadow-sm font-semibold">
                         <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
-                    {!isHeadquarters ? (
+                    {!isOversightPortal ? (
                         <Button onClick={() => { setEditingVisit(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 shadow-sm font-bold">
                             <Plus className="mr-2 h-4 w-4" /> Log Visit
                         </Button>
@@ -688,10 +692,10 @@ export default function MonitoringVisits() {
                 </div>
             </div>
 
-            {isHeadquarters ? (
-                <nav className="grid gap-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm sm:grid-cols-3" aria-label="Headquarters monitoring views">
+            {isOversightPortal ? (
+                <nav className="grid gap-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm sm:grid-cols-3" aria-label={`${oversightPortalLabel} monitoring views`}>
                     {([
-                        { value: 'overview', label: 'Overview', description: 'National patterns and distributions' },
+                        { value: 'overview', label: 'Overview', description: `${oversightScopeLabel} patterns and distributions` },
                         { value: 'exceptions', label: 'Exceptions', description: `${dueVisits.length + anomalies.length} items requiring attention` },
                         { value: 'records', label: 'All Records', description: 'Search and inspect detailed records' },
                     ] as const).map((item) => (
@@ -743,10 +747,10 @@ export default function MonitoringVisits() {
             </div>
             )}
 
-            {isHeadquarters && hasActiveFilters ? (
+            {isOversightPortal && hasActiveFilters ? (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-blue-800">
-                        <span>Active national filters:</span>
+                        <span>Active {oversightScopeLabel.toLowerCase()} filters:</span>
                         {searchParams.get('search') ? <Badge className="border-blue-200 bg-white text-blue-700">Search: {searchParams.get('search')}</Badge> : null}
                         {filterVisitType ? <Badge className="border-blue-200 bg-white text-blue-700">Type: {filterVisitType}</Badge> : null}
                         {filterAttendance ? <Badge className="border-blue-200 bg-white text-blue-700">Attendance: {filterAttendance}</Badge> : null}
@@ -791,8 +795,8 @@ export default function MonitoringVisits() {
                 </div>
             ) : null}
 
-            {isHeadquarters && hqSection === 'overview' && stats ? (
-                <section className="grid grid-cols-1 gap-6 px-4 sm:px-0 lg:grid-cols-2" aria-label="National monitoring visit analytics">
+            {isOversightPortal && hqSection === 'overview' && stats ? (
+                <section className="grid grid-cols-1 gap-6 px-4 sm:px-0 lg:grid-cols-2" aria-label={`${oversightScopeLabel} monitoring visit analytics`}>
                     {[
                         {
                             title: 'Visit Type Distribution',
@@ -902,7 +906,7 @@ export default function MonitoringVisits() {
             ) : null}
 
             {/* Search & Filters */}
-            {(!isHeadquarters || hqSection === 'records') ? (
+            {(!isOversightPortal || hqSection === 'records') ? (
             <div className="flex flex-col md:flex-row gap-3 px-4 sm:px-0">
                 <div className="relative flex-1 max-w-md">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -947,7 +951,7 @@ export default function MonitoringVisits() {
             </div>
             ) : null}
 
-            {(!isHeadquarters && viewMode === 'due') || (isHeadquarters && hqSection === 'exceptions') ? (
+            {(!isOversightPortal && viewMode === 'due') || (isOversightPortal && hqSection === 'exceptions') ? (
                 <div className="rounded-none sm:rounded-2xl border-y sm:border border-amber-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-4 sm:p-6">
                     {dueLoading ? (
                         <div className="space-y-3">
@@ -967,14 +971,14 @@ export default function MonitoringVisits() {
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <Badge className="bg-amber-100 text-amber-700 border-amber-200">{dueVisits.length} due</Badge>
-                                    {isHeadquarters && dueVisits.length > 5 ? (
+                                    {isOversightPortal && dueVisits.length > 5 ? (
                                         <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setShowAllMonitoringExceptions((current) => !current)}>
                                             {showAllMonitoringExceptions ? 'Show top 5' : `View all ${dueVisits.length}`}
                                         </Button>
                                     ) : null}
                                 </div>
                             </div>
-                            {(isHeadquarters && !showAllMonitoringExceptions ? dueVisits.slice(0, 5) : dueVisits).map((item) => (
+                            {(isOversightPortal && !showAllMonitoringExceptions ? dueVisits.slice(0, 5) : dueVisits).map((item) => (
                                 <div key={item.placementId} className="flex flex-col gap-4 rounded-2xl border border-amber-100 bg-amber-50/60 p-4 md:flex-row md:items-center md:justify-between">
                                     <div className="min-w-0">
                                         <div className="flex flex-wrap items-center gap-2">
@@ -988,7 +992,7 @@ export default function MonitoringVisits() {
                                             {item.lastVisitAt ? ` · Last ${item.lastVisitType || 'visit'} ${format(new Date(item.lastVisitAt), 'PP')}` : ' · No visit logged yet'}
                                         </p>
                                     </div>
-                                    {!isHeadquarters ? (
+                                    {!isOversightPortal ? (
                                         <Button onClick={() => { setEditingVisit(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] font-bold text-gray-900 hover:bg-[#e5a600]">
                                             <Plus className="mr-2 h-4 w-4" />
                                             Log Visit
@@ -998,7 +1002,7 @@ export default function MonitoringVisits() {
                             ))}
                         </div>
                     )}
-                    {isHeadquarters ? (
+                    {isOversightPortal ? (
                         <div className="mt-6 border-t border-gray-100 pt-6">
                             <div className="flex items-center justify-between gap-3">
                                 <div>
@@ -1033,7 +1037,7 @@ export default function MonitoringVisits() {
                         </div>
                     ) : null}
                 </div>
-            ) : isHeadquarters && hqSection === 'overview' ? null : (
+            ) : isOversightPortal && hqSection === 'overview' ? null : (
             <div data-help-id="monitoring-visits-table" className="rounded-none sm:rounded-2xl border-y sm:border border-gray-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-0 sm:p-2">
                 {loading ? (
                     <div className="p-4 space-y-3">
@@ -1045,8 +1049,8 @@ export default function MonitoringVisits() {
                         <p className="text-sm font-bold text-gray-400">No monitoring visits found</p>
                         {hasActiveFilters ? (
                             <Button variant="ghost" size="sm" onClick={clearAllFilters} className="text-blue-600 hover:text-blue-700 font-bold">Clear filters →</Button>
-                        ) : isHeadquarters ? (
-                            <p className="text-xs font-semibold text-gray-400">No national monitoring records are available yet.</p>
+                        ) : isOversightPortal ? (
+                            <p className="text-xs font-semibold text-gray-400">No {oversightScopeLabel.toLowerCase()} monitoring records are available yet.</p>
                         ) : (
                             <Button variant="ghost" size="sm" onClick={() => { setEditingVisit(null); setOpen(true) }} className="text-blue-600 hover:text-blue-700 font-bold">Log your first visit →</Button>
                         )}
@@ -1117,7 +1121,7 @@ export default function MonitoringVisits() {
             )}
 
             {/* Anomalies Section (Admin Only) */}
-            {isAdmin && !isHeadquarters && anomalies.length > 0 && (
+            {isAdmin && !isOversightPortal && anomalies.length > 0 && (
                 <div className="mt-6 rounded-none sm:rounded-2xl border-y sm:border border-red-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-4 sm:p-6">
                     <button
                         onClick={() => setShowAnomalies(!showAnomalies)}

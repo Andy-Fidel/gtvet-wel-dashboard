@@ -330,7 +330,7 @@ export default function LearnerProgressDashboard() {
   }
 
   return (
-    <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
+    <div className="flex-1 space-y-8 p-8 w-full">
       {/* Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
         <div>

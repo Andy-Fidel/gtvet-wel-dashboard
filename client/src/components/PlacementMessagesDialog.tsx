@@ -49,6 +49,7 @@ interface PlacementMessagesDialogProps {
   placementId: string | null
   authFetch: (url: string, options?: RequestInit) => Promise<Response>
   currentUserId?: string
+  readOnly?: boolean
   onMessageCreated?: (placementId: string, createdAt: string) => void
   onConversationRead?: (placementId: string) => void
 }
@@ -59,6 +60,7 @@ export function PlacementMessagesDialog({
   placementId,
   authFetch,
   currentUserId,
+  readOnly = false,
   onMessageCreated,
   onConversationRead,
 }: PlacementMessagesDialogProps) {
@@ -259,7 +261,7 @@ export function PlacementMessagesDialog({
 
                         <p className="mt-3 whitespace-pre-wrap text-sm leading-6">{message.message}</p>
 
-                        <div className="mt-3 flex justify-end">
+                        {!readOnly ? <div className="mt-3 flex justify-end">
                           <Button
                             type="button"
                             variant="ghost"
@@ -270,7 +272,7 @@ export function PlacementMessagesDialog({
                             <Reply className="mr-2 h-4 w-4" />
                             Reply
                           </Button>
-                        </div>
+                        </div> : null}
                       </div>
 
                       {isOwnMessage ? (
@@ -286,7 +288,7 @@ export function PlacementMessagesDialog({
             )}
           </div>
 
-          <div className="border-t border-slate-200 bg-white px-6 py-5">
+          {!readOnly ? <div className="border-t border-slate-200 bg-white px-6 py-5">
             {replyTo ? (
               <div className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
                 <div className="min-w-0">
@@ -318,7 +320,9 @@ export function PlacementMessagesDialog({
                 </Button>
               </div>
             </div>
-          </div>
+          </div> : (
+            <div className="border-t border-slate-200 bg-indigo-50 px-6 py-4 text-sm font-bold text-indigo-700">Oversight access is read-only for placement conversations.</div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

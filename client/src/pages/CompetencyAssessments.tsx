@@ -39,7 +39,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 
 const ASSESSMENT_TYPE_COLORS = ['#f59e0b', '#4f46e5', '#10b981', '#8b5cf6']
 const ASSESSMENT_SCORE_COLORS = ['#10b981', '#f59e0b', '#ef4444']
-type HeadquartersSection = 'overview' | 'exceptions' | 'records'
+type OversightSection = 'overview' | 'exceptions' | 'records'
 
 export type CompetencyAssessment = {
     _id: string
@@ -118,7 +118,7 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
         role?: string
       }
 
-      const isSuperAdmin = meta?.role === 'SuperAdmin'
+      const isOversightUser = meta?.role === 'SuperAdmin' || meta?.role === 'RegionalAdmin'
 
       return (
         <DropdownMenu>
@@ -137,7 +137,7 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
             <DropdownMenuItem onClick={() => navigator.clipboard.writeText(assessment._id)}>
               Copy ID
             </DropdownMenuItem>
-            {!isSuperAdmin && (
+            {!isOversightUser && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => meta?.onEdit(assessment)}>Edit Assessment</DropdownMenuItem>
@@ -188,15 +188,19 @@ export default function CompetencyAssessments() {
     const [searchParams, setSearchParams] = useSearchParams()
     const isEditingExistingAssessment = Boolean(editingAssessment?._id)
     const isHeadquarters = user?.role === 'SuperAdmin'
+    const isRegionalOversight = user?.role === 'RegionalAdmin'
+    const isOversightPortal = isHeadquarters || isRegionalOversight
+    const oversightScopeLabel = isHeadquarters ? 'National' : 'Regional'
+    const oversightPortalLabel = isHeadquarters ? 'Headquarters' : 'Regional'
 
     // Search & filters
     const [searchInput, setSearchInput] = useState(searchParams.get('search') || '')
     const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const filterType = searchParams.get('assessmentType') || ''
     const requestedView = searchParams.get('view')
-    const hqSection: HeadquartersSection = requestedView === 'exceptions' || requestedView === 'records' ? requestedView : 'overview'
+    const hqSection: OversightSection = requestedView === 'exceptions' || requestedView === 'records' ? requestedView : 'overview'
     const scoreBand = searchParams.get('scoreBand') || ''
-    const effectivePageSize = isHeadquarters && hqSection === 'exceptions' ? 10 : pageSize
+    const effectivePageSize = isOversightPortal && hqSection === 'exceptions' ? 10 : pageSize
 
     const setFilter = useCallback((key: string, value: string) => {
         const next = new URLSearchParams(searchParams)
@@ -214,12 +218,12 @@ export default function CompetencyAssessments() {
 
     const clearAllFilters = () => {
         setSearchInput('')
-        setSearchParams(isHeadquarters ? { view: hqSection } : {}, { replace: true })
+        setSearchParams(isOversightPortal ? { view: hqSection } : {}, { replace: true })
         setPage(1)
     }
     const hasActiveFilters = !!(searchParams.get('search') || filterType || scoreBand)
 
-    const setHeadquartersSection = (section: HeadquartersSection) => {
+    const setHeadquartersSection = (section: OversightSection) => {
         const next = new URLSearchParams(searchParams)
         next.set('view', section)
         if (section === 'exceptions') next.set('scoreBand', 'low')
@@ -244,7 +248,7 @@ export default function CompetencyAssessments() {
                 const params = new URLSearchParams({ page: String(page), pageSize: String(effectivePageSize) })
                 if (searchParams.get('search')) params.set('search', searchParams.get('search')!)
                 if (filterType) params.set('assessmentType', filterType)
-                if (isHeadquarters && hqSection === 'exceptions') params.set('scoreBand', 'low')
+                if (isOversightPortal && hqSection === 'exceptions') params.set('scoreBand', 'low')
                 else if (scoreBand) params.set('scoreBand', scoreBand)
                 const res = await authFetch(`/api/assessments?${params.toString()}`)
                 if (!res.ok) {
@@ -267,10 +271,10 @@ export default function CompetencyAssessments() {
             }
         }
         fetchData()
-    }, [refreshKey, authFetch, effectivePageSize, hqSection, isHeadquarters, page, searchParams, filterType, scoreBand])
+    }, [refreshKey, authFetch, effectivePageSize, hqSection, isOversightPortal, page, searchParams, filterType, scoreBand])
 
     useEffect(() => {
-        if (isHeadquarters) return
+        if (isOversightPortal) return
         const learnerId = searchParams.get("learnerId")
         if (!learnerId || open || editingAssessment) return
         setEditingAssessment({
@@ -288,7 +292,7 @@ export default function CompetencyAssessments() {
                 : "",
         } as CompetencyAssessment)
         setOpen(true)
-    }, [editingAssessment, isHeadquarters, open, searchParams])
+    }, [editingAssessment, isOversightPortal, open, searchParams])
 
     const handleSuccess = () => {
         setOpen(false)
@@ -383,20 +387,20 @@ export default function CompetencyAssessments() {
                     <div>
                         <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Competency Assessments</h2>
                         <p className="text-muted-foreground">
-                            {isHeadquarters
-                                ? 'National competency outcomes, assessment mix, and learner-performance oversight.'
+                            {isOversightPortal
+                                ? `${oversightScopeLabel} competency outcomes, assessment mix, and learner-performance oversight.`
                                 : 'Evaluation of learner technical and soft skills.'}
                         </p>
                     </div>
                 </div>
                 <div className="flex items-center space-x-3">
-                    {isHeadquarters ? (
-                        <Badge className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">Headquarters · Read only</Badge>
+                    {isOversightPortal ? (
+                        <Badge className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">{oversightPortalLabel} · Read only</Badge>
                     ) : null}
                     <Button onClick={handleExport} variant="outline" className="rounded-xl border-gray-200 bg-white hover:bg-gray-50 text-gray-700 shadow-sm font-semibold">
                         <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
-                    {!isHeadquarters ? (
+                    {!isOversightPortal ? (
                         <Button onClick={() => { setEditingAssessment(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 shadow-sm font-bold">
                             <Plus className="mr-2 h-4 w-4" /> New Assessment
                         </Button>
@@ -404,10 +408,10 @@ export default function CompetencyAssessments() {
                 </div>
             </div>
 
-            {isHeadquarters ? (
-                <nav className="grid gap-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm sm:grid-cols-3" aria-label="Headquarters assessment views">
+            {isOversightPortal ? (
+                <nav className="grid gap-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm sm:grid-cols-3" aria-label={`${oversightPortalLabel} assessment views`}>
                     {([
-                        { value: 'overview', label: 'Overview', description: 'National outcomes and assessment mix' },
+                        { value: 'overview', label: 'Overview', description: `${oversightScopeLabel} outcomes and assessment mix` },
                         { value: 'exceptions', label: 'Exceptions', description: 'Low-score cases requiring follow-up' },
                         { value: 'records', label: 'All Records', description: 'Search and inspect detailed records' },
                     ] as const).map((item) => (
@@ -425,10 +429,10 @@ export default function CompetencyAssessments() {
                 </nav>
             ) : null}
 
-            {isHeadquarters && hasActiveFilters ? (
+            {isOversightPortal && hasActiveFilters ? (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-amber-900">
-                        <span>Active national filters:</span>
+                        <span>Active {oversightScopeLabel.toLowerCase()} filters:</span>
                         {searchParams.get('search') ? <Badge className="border-amber-200 bg-white text-amber-800">Search: {searchParams.get('search')}</Badge> : null}
                         {filterType ? <Badge className="border-amber-200 bg-white text-amber-800">Type: {filterType}</Badge> : null}
                         {scoreBand ? <Badge className="border-amber-200 bg-white text-amber-800">Score: {scoreBand}</Badge> : null}
@@ -438,7 +442,7 @@ export default function CompetencyAssessments() {
             ) : null}
 
             {/* Auto-graduation warning */}
-            {!isHeadquarters ? (
+            {!isOversightPortal ? (
                 <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 rounded-2xl border border-amber-200 mx-4 sm:mx-0">
                     <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
                     <div>
@@ -449,7 +453,7 @@ export default function CompetencyAssessments() {
             ) : null}
 
             {/* Stat Cards */}
-            {isHeadquarters && hqSection !== 'overview' ? null : loading ? (
+            {isOversightPortal && hqSection !== 'overview' ? null : loading ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 px-4 sm:px-0">
                     {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[180px] rounded-[2rem]" />)}
                 </div>
@@ -483,12 +487,12 @@ export default function CompetencyAssessments() {
                 </div>
             ) : null}
 
-            {isHeadquarters && hqSection === 'overview' && stats ? (
-                <section className="grid grid-cols-1 gap-6 px-4 sm:px-0 lg:grid-cols-2" aria-label="National competency assessment analytics">
+            {isOversightPortal && hqSection === 'overview' && stats ? (
+                <section className="grid grid-cols-1 gap-6 px-4 sm:px-0 lg:grid-cols-2" aria-label={`${oversightScopeLabel} competency assessment analytics`}>
                     <Card className="overflow-hidden rounded-[2rem] border-gray-100 bg-white shadow-xl">
                         <CardHeader className="p-5 pb-0 md:p-7 md:pb-0">
                             <CardTitle className="text-xl font-black">Assessment Type Distribution</CardTitle>
-                            <p className="mt-1 text-sm font-semibold text-gray-500">National mix of practical, theoretical, combined, and on-the-job assessments.</p>
+                            <p className="mt-1 text-sm font-semibold text-gray-500">{oversightScopeLabel} mix of practical, theoretical, combined, and on-the-job assessments.</p>
                         </CardHeader>
                         <CardContent className="p-5 md:p-7">
                             {Object.values(stats.byType).some((value) => value > 0) ? (
@@ -609,7 +613,7 @@ export default function CompetencyAssessments() {
                             <div className="flex items-start justify-between gap-3">
                                 <div>
                                     <CardTitle className="text-xl font-black">Institutions Requiring Support</CardTitle>
-                                    <p className="mt-1 text-sm font-semibold text-gray-500">Lowest average competency outcomes, ordered for headquarters attention.</p>
+                                    <p className="mt-1 text-sm font-semibold text-gray-500">Lowest average competency outcomes, ordered for {oversightPortalLabel.toLowerCase()} attention.</p>
                                 </div>
                                 <Button variant="outline" size="sm" className="shrink-0 rounded-xl" onClick={() => setHeadquartersSection('exceptions')}>Open exceptions</Button>
                             </div>
@@ -636,7 +640,7 @@ export default function CompetencyAssessments() {
             ) : null}
 
             {/* Search & Filter */}
-            {(!isHeadquarters || hqSection !== 'overview') ? (
+            {(!isOversightPortal || hqSection !== 'overview') ? (
             <div className="flex flex-col md:flex-row gap-3 px-4 sm:px-0">
                 <div className="relative flex-1 max-w-md">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -655,7 +659,7 @@ export default function CompetencyAssessments() {
                         <SelectItem value="On-the-job">On-the-job</SelectItem>
                     </SelectContent>
                 </Select>
-                {isHeadquarters && hqSection === 'records' ? (
+                {isOversightPortal && hqSection === 'records' ? (
                     <Select value={scoreBand} onValueChange={(value) => setFilter('scoreBand', value === 'all' ? '' : value)}>
                         <SelectTrigger className="h-10 w-[160px] rounded-xl border-gray-200 bg-white"><SelectValue placeholder="Score Band" /></SelectTrigger>
                         <SelectContent>
@@ -672,7 +676,7 @@ export default function CompetencyAssessments() {
             </div>
             ) : null}
 
-            {isHeadquarters && hqSection === 'exceptions' ? (
+            {isOversightPortal && hqSection === 'exceptions' ? (
                 <div className="mx-4 flex flex-col gap-3 rounded-2xl border border-red-100 bg-red-50 p-5 sm:mx-0 md:flex-row md:items-center md:justify-between">
                     <div>
                         <p className="font-black text-red-900">Low competency outcomes</p>
@@ -688,7 +692,7 @@ export default function CompetencyAssessments() {
             ) : null}
 
             {/* Table */}
-            {(!isHeadquarters || hqSection !== 'overview') ? (
+            {(!isOversightPortal || hqSection !== 'overview') ? (
             <div className="rounded-none sm:rounded-2xl border-y sm:border border-gray-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-0 sm:p-2">
                 {loading ? (
                     <div className="p-4 space-y-3">
@@ -700,8 +704,8 @@ export default function CompetencyAssessments() {
                         <p className="text-sm font-bold text-gray-400">No assessments found</p>
                         {hasActiveFilters ? (
                             <Button variant="ghost" size="sm" onClick={clearAllFilters} className="text-blue-600 hover:text-blue-700 font-bold">Clear filters →</Button>
-                        ) : isHeadquarters ? (
-                            <p className="text-xs font-semibold text-gray-400">No national assessment records are available yet.</p>
+                        ) : isOversightPortal ? (
+                            <p className="text-xs font-semibold text-gray-400">No {oversightScopeLabel.toLowerCase()} assessment records are available yet.</p>
                         ) : (
                             <Button variant="ghost" size="sm" onClick={() => { setEditingAssessment(null); setOpen(true) }} className="text-blue-600 hover:text-blue-700 font-bold">Create your first assessment →</Button>
                         )}

@@ -779,7 +779,7 @@ const canManageSupportTicketStatus = (user, ticket) => {
 };
 
 const canManageSupportAssignments = (user) => ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(user.role);
-const canManageOperationalOwnership = (user) => ['Admin', 'Manager', 'SuperAdmin', 'RegionalAdmin'].includes(user.role);
+const canManageOperationalOwnership = (user) => ['Admin', 'Manager'].includes(user.role);
 
 const getPartnerPortalRole = (user) => {
   if (user?.role !== 'IndustryPartner') return null;
@@ -4212,8 +4212,8 @@ const determineMonitoringVisitVerification = async ({ learnerId, submittedLocati
 
 router.post('/monitoring-visits', async (req, res) => {
     try {
-        if (req.user.role === 'SuperAdmin') {
-            return res.status(403).json({ message: 'Headquarters access is read-only for monitoring visits.' });
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for monitoring visits.' });
         }
         const { submittedLocation, ...visitData } = req.body;
         const learnerRecord = await Learner.findById(visitData.learner).select('institution');
@@ -4409,6 +4409,9 @@ router.get('/monitoring-visits/anomalies', async (req, res) => {
 
 router.put('/monitoring-visits/:id', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for monitoring visits.' });
+        }
         const filter = await getFilter(req.user);
         const existingVisit = await MonitoringVisit.findOne({ _id: req.params.id, ...filter });
         if (!existingVisit) {
@@ -4480,7 +4483,7 @@ router.put('/monitoring-visits/:id', async (req, res) => {
     }
 });
 
-router.put('/monitoring-visits/:id/gps-review', requireRole('Admin', 'RegionalAdmin'), async (req, res) => {
+router.put('/monitoring-visits/:id/gps-review', requireRole('Admin'), async (req, res) => {
     try {
         const filter = await getFilter(req.user);
         const visit = await MonitoringVisit.findOne({ _id: req.params.id, ...filter });
@@ -4536,7 +4539,7 @@ router.put('/monitoring-visits/:id/gps-review', requireRole('Admin', 'RegionalAd
     }
 });
 
-router.post('/monitoring-visits/gps-review/bulk', requireRole('Admin', 'RegionalAdmin'), async (req, res) => {
+router.post('/monitoring-visits/gps-review/bulk', requireRole('Admin'), async (req, res) => {
     try {
         const filter = await getFilter(req.user);
         const { visitIds = [], decision, comment = '' } = req.body;
@@ -4607,6 +4610,9 @@ router.post('/monitoring-visits/gps-review/bulk', requireRole('Admin', 'Regional
 
 router.delete('/monitoring-visits/:id', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for monitoring visits.' });
+        }
         const filter = await getFilter(req.user);
         const visit = await MonitoringVisit.findOne({ _id: req.params.id, ...filter });
         if (!visit) {
@@ -6592,8 +6598,8 @@ router.get('/assessments', async (req, res) => {
 
 router.post('/assessments', async (req, res) => {
     try {
-        if (req.user.role === 'SuperAdmin') {
-            return res.status(403).json({ message: 'Headquarters access is read-only for competency assessments.' });
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for competency assessments.' });
         }
         // Auto-populate trackingId from learner if not provided
         let trackingId = req.body.trackingId;
@@ -6644,8 +6650,8 @@ router.post('/assessments', async (req, res) => {
 
 router.put('/assessments/:id', async (req, res) => {
     try {
-        if (req.user.role === 'SuperAdmin') {
-            return res.status(403).json({ message: 'Headquarters access is read-only for competency assessments.' });
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for competency assessments.' });
         }
         const filter = await getFilter(req.user);
         const existingAssessment = await CompetencyAssessment.findOne({ _id: req.params.id, ...filter });
@@ -6674,8 +6680,8 @@ router.put('/assessments/:id', async (req, res) => {
 
 router.delete('/assessments/:id', async (req, res) => {
     try {
-        if (req.user.role === 'SuperAdmin') {
-            return res.status(403).json({ message: 'Headquarters access is read-only for competency assessments.' });
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for competency assessments.' });
         }
         const filter = await getFilter(req.user);
         const deletedAssessment = await CompetencyAssessment.findOneAndDelete({ _id: req.params.id, ...filter });
@@ -6717,6 +6723,7 @@ router.get('/learners', async (req, res) => {
       program,
       intakeAcademicYear,
       availableForPlacement,
+      institution,
       page: requestedPage,
       pageSize: requestedPageSize,
       search,
@@ -6727,6 +6734,13 @@ router.get('/learners', async (req, res) => {
     else if (academicStatus) query.academicStatus = academicStatus;
     if (year) query.year = year;
     if (program) query.program = program;
+    if (institution && (req.user.role === 'SuperAdmin' || req.user.role === 'RegionalAdmin')) {
+      const allowedInstitutions = filter.institution?.$in;
+      if (Array.isArray(allowedInstitutions) && !allowedInstitutions.includes(institution)) {
+        return res.status(403).json({ message: 'Institution is outside your assigned region' });
+      }
+      query.institution = institution;
+    }
     if (intakeAcademicYear) query.intakeAcademicYear = intakeAcademicYear;
     if (search) {
       const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -6753,7 +6767,7 @@ router.get('/learners', async (req, res) => {
 
     const learnersQuery = Learner.find(query)
       .select('trackingId indexNumber name lastName firstName middleName gender dateOfBirth phone guardianContact program region year intakeAcademicYear graduationAcademicYear graduatedAt academicStatus status institution placement owner')
-      .sort({ createdAt: -1 });
+      .sort(status === 'Pending' ? { createdAt: 1 } : { createdAt: -1 });
 
     if (usePagination) {
       learnersQuery.skip((page - 1) * pageSize).limit(pageSize);
@@ -6813,7 +6827,7 @@ router.get('/learners', async (req, res) => {
     }));
 
     if (usePagination) {
-      const [total, summaryCounts, intakeYearValues, programValues] = await Promise.all([
+      const [total, summaryCounts, analyticsResults, intakeYearValues, programValues, institutionValues] = await Promise.all([
         Learner.countDocuments(query),
         Learner.aggregate([
           { $match: query },
@@ -6874,6 +6888,35 @@ router.get('/learners', async (req, res) => {
             },
           },
         ]),
+        Learner.aggregate([
+          { $match: query },
+          {
+            $facet: {
+              gender: [
+                { $group: { _id: { $ifNull: ['$gender', 'Unspecified'] }, count: { $sum: 1 } } },
+                { $sort: { count: -1, _id: 1 } },
+                { $project: { _id: 0, name: '$_id', value: '$count' } },
+              ],
+              welStatus: [
+                { $group: { _id: { $ifNull: ['$status', 'Unspecified'] }, count: { $sum: 1 } } },
+                { $sort: { count: -1, _id: 1 } },
+                { $project: { _id: 0, name: '$_id', value: '$count' } },
+              ],
+              programs: [
+                { $group: { _id: { $ifNull: ['$program', 'Unspecified'] }, count: { $sum: 1 } } },
+                { $sort: { count: -1, _id: 1 } },
+                { $limit: 8 },
+                { $project: { _id: 0, name: '$_id', value: '$count' } },
+              ],
+              institutions: [
+                { $group: { _id: { $ifNull: ['$institution', 'Unspecified'] }, count: { $sum: 1 } } },
+                { $sort: { count: -1, _id: 1 } },
+                { $limit: 8 },
+                { $project: { _id: 0, name: '$_id', value: '$count' } },
+              ],
+            },
+          },
+        ]),
         Learner.distinct('intakeAcademicYear', {
           ...filter,
           ...(search ? { $or: query.$or } : {}),
@@ -6887,11 +6930,14 @@ router.get('/learners', async (req, res) => {
           ...(program ? { program } : {}),
         }),
         Learner.distinct('program', filter),
+        Learner.distinct('institution', filter),
       ]);
 
       const summary = summaryCounts[0] || { year1: 0, year2: 0, year3: 0, graduated: 0 };
       const availableIntakeYears = intakeYearValues.filter(Boolean).sort((a, b) => b.localeCompare(a));
       const programOptions = programValues.filter(Boolean).sort((a, b) => a.localeCompare(b));
+      const institutionOptions = institutionValues.filter(Boolean).sort((a, b) => a.localeCompare(b));
+      const analytics = analyticsResults[0] || { gender: [], welStatus: [], programs: [], institutions: [] };
 
       return res.json({
         items,
@@ -6900,8 +6946,10 @@ router.get('/learners', async (req, res) => {
         pageSize,
         totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
         summary,
+        analytics,
         availableIntakeYears,
         programOptions,
+        institutionOptions,
       });
     }
 
@@ -7040,6 +7088,9 @@ router.get('/learners/placement-options', async (req, res) => {
 
 router.post('/learners', async (req, res) => {
   try {
+    if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
+    }
     const inst = await Institution.findOne({ name: req.user.institution });
     const region = inst ? inst.region : 'Unknown';
     const academicYear = req.body.intakeAcademicYear || await resolveCurrentAcademicYear();
@@ -7078,6 +7129,9 @@ router.post('/learners', async (req, res) => {
 // Bulk CSV upload
 router.post('/learners/bulk', async (req, res) => {
   try {
+    if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
+    }
     const { learners } = req.body;
     if (!Array.isArray(learners) || learners.length === 0) {
       return res.status(400).json({ message: 'No learner data provided' });
@@ -7169,7 +7223,11 @@ router.get('/learners/:id', async (req, res) => {
 
 router.put('/learners/:id', async (req, res) => {
     try {
-        const existingLearner = await Learner.findById(req.params.id);
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
+        }
+        const filter = await getFilter(req.user);
+        const existingLearner = await Learner.findOne({ _id: req.params.id, ...filter });
         if (!existingLearner) {
             return res.status(404).json({ message: 'Learner not found' });
         }
@@ -7189,7 +7247,7 @@ router.put('/learners/:id', async (req, res) => {
             payload.graduatedAt = payload.graduatedAt || new Date();
         }
 
-        const updatedLearner = await Learner.findByIdAndUpdate(req.params.id, payload, { returnDocument: 'after' });
+        const updatedLearner = await Learner.findOneAndUpdate({ _id: req.params.id, ...filter }, payload, { returnDocument: 'after' });
         if (updatedLearner && existingLearner) {
             await logAuditEvent({
                 req,
@@ -7209,6 +7267,9 @@ router.put('/learners/:id', async (req, res) => {
 
 router.post('/learners/promote-year', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for learner progression.' });
+        }
         const filter = await getFilter(req.user);
         const { fromYear, learnerIds } = req.body;
         const toYear = nextStudyYear(fromYear);
@@ -7264,6 +7325,9 @@ router.post('/learners/promote-year', async (req, res) => {
 
 router.post('/learners/graduate', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for learner progression.' });
+        }
         const filter = await getFilter(req.user);
         const { learnerIds } = req.body;
         const academicYear = await resolveCurrentAcademicYear();
@@ -7360,7 +7424,11 @@ router.put('/learners/:id/owner', async (req, res) => {
 
 router.delete('/learners/:id', async (req, res) => {
     try {
-        const deletedLearner = await Learner.findByIdAndDelete(req.params.id);
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
+        }
+        const filter = await getFilter(req.user);
+        const deletedLearner = await Learner.findOneAndDelete({ _id: req.params.id, ...filter });
         if (deletedLearner) {
             await logAuditEvent({
                 req,
@@ -9012,6 +9080,9 @@ router.get('/placements/:id/messages', async (req, res) => {
 
 router.post('/placements/:id/learner-agreement-sign', async (req, res) => {
   try {
+    if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Oversight portal access is read-only for placement agreements.' });
+    }
     const placement = await findPlacementForUser(req.user, req.params.id);
 
     if (!placement) {
@@ -9073,6 +9144,9 @@ router.post('/placements/:id/learner-agreement-sign', async (req, res) => {
 
 router.post('/placements/:id/messages', async (req, res) => {
   try {
+    if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Oversight portal access is read-only for placement conversations.' });
+    }
     const placement = await findPlacementForUser(req.user, req.params.id);
 
     if (!placement) {
@@ -9148,6 +9222,9 @@ router.post('/placements/:id/messages', async (req, res) => {
 
 router.post('/placements', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
+        }
         const { learner, learners, ...placementData } = req.body;
         const learnerIds = learners || (learner ? [learner] : []);
         const placementAcademicYear = placementData.academicYear || await resolveCurrentAcademicYear();
@@ -9275,6 +9352,9 @@ function applyPlacementClosureMetadata(existingPlacement, payload, user) {
 
 router.put('/placements/:id', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
+        }
         const existingPlacement = await Placement.findById(req.params.id);
         if (!existingPlacement) {
             return res.status(404).json({ message: 'Placement not found' });
@@ -9405,6 +9485,9 @@ router.put('/placements/:id/partner-supervisor', requireRole('SuperAdmin'), asyn
 // Assign or remove a delegate on a placement
 router.put('/placements/:id/delegate', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for placement delegation.' });
+        }
         const filter = await getPlacementScope(req.user);
         const placement = await Placement.findOne({ _id: req.params.id, ...filter })
             .populate('learner', 'name trackingId')
@@ -9547,7 +9630,11 @@ router.get('/users/by-region/:region', async (req, res) => {
 
 router.delete('/placements/:id', async (req, res) => {
     try {
-        const deletedPlacement = await Placement.findByIdAndDelete(req.params.id);
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
+        }
+        const filter = await getPlacementScope(req.user);
+        const deletedPlacement = await Placement.findOneAndDelete({ _id: req.params.id, ...filter });
         if (deletedPlacement) {
             await logAuditEvent({
                 req,
@@ -9593,6 +9680,9 @@ router.get('/attendance-logs', async (req, res) => {
 
 router.post('/attendance-logs', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for attendance logs.' });
+        }
         const {
             learner: learnerId,
             entryType,
@@ -9743,6 +9833,9 @@ router.post('/attendance-logs', async (req, res) => {
 
 router.put('/attendance-logs/:id', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for attendance logs.' });
+        }
         const scope = await buildAttendanceScope(req.user);
         const attendanceLog = await AttendanceLog.findOne({ _id: req.params.id, ...scope });
         if (!attendanceLog) {
@@ -9929,6 +10022,9 @@ router.put('/attendance-logs/:id', async (req, res) => {
 
 router.delete('/attendance-logs/:id', async (req, res) => {
     try {
+        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Oversight portal access is read-only for attendance logs.' });
+        }
         const scope = await buildAttendanceScope(req.user);
         const attendanceLog = await AttendanceLog.findOne({ _id: req.params.id, ...scope });
         if (!attendanceLog) {

@@ -116,6 +116,7 @@ export default function Placements() {
     const [evidencePlacement, setEvidencePlacement] = useState<Placement | null>(null)
     const [evidenceDocuments, setEvidenceDocuments] = useState<EvidenceDocument[]>([])
     const { authFetch, user, isLoading: authLoading } = useAuth()
+    const isOversightReadOnly = user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin'
 
     // Search & filter state
     const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") || "")
@@ -553,7 +554,7 @@ export default function Placements() {
             </div>
 
             {/* Edit Dialog */}
-            <Dialog open={editOpen} onOpenChange={setEditOpen}>
+            <Dialog open={editOpen && !isOversightReadOnly} onOpenChange={setEditOpen}>
                 <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[600px] overflow-y-auto max-h-[90vh]">
                     <DialogHeader>
                     <DialogTitle>Edit Placement</DialogTitle>
@@ -564,7 +565,7 @@ export default function Placements() {
             </Dialog>
 
             {/* New Unified Placement Dialog */}
-            <Dialog open={newOpen} onOpenChange={setNewOpen}>
+            <Dialog open={newOpen && !isOversightReadOnly} onOpenChange={setNewOpen}>
                 <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[700px] bg-white border-none rounded-[2rem] shadow-2xl overflow-hidden p-0 max-h-[90vh] overflow-y-auto">
                     <div className="p-8">
                         <DialogHeader className="mb-6">
@@ -584,6 +585,7 @@ export default function Placements() {
                 placementId={activePlacementId}
                 authFetch={authFetch}
                 currentUserId={user?._id}
+                readOnly={isOversightReadOnly}
                 onMessageCreated={handleMessageCreated}
                 onConversationRead={handleConversationRead}
             />
@@ -600,7 +602,7 @@ export default function Placements() {
                             </DialogDescription>
                         </DialogHeader>
                         <div className="rounded-[2rem] border border-violet-100 bg-violet-50/40 p-6">
-                            <DocumentList documents={evidenceDocuments} onDelete={() => evidencePlacement && handleOpenEvidence(evidencePlacement)} loading={evidenceLoading} />
+                            <DocumentList documents={evidenceDocuments} onDelete={isOversightReadOnly ? undefined : () => evidencePlacement && handleOpenEvidence(evidencePlacement)} loading={evidenceLoading} />
                         </div>
                     </div>
                 </DialogContent>
@@ -1061,7 +1063,7 @@ export default function Placements() {
 
             {/* Delete Confirmation Dialog */}
             <ConfirmationDialog
-                open={deleteConfirmOpen}
+                open={deleteConfirmOpen && !isOversightReadOnly}
                 onOpenChange={setDeleteConfirmOpen}
                 title="Delete Placement"
                 description={`Are you sure you want to permanently delete the placement for ${deletingPlacementLabel}? This action cannot be undone.`}

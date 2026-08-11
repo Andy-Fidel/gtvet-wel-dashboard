@@ -49,6 +49,12 @@ const HQ_NAV_GROUPS = [
   },
 ] as const;
 
+const REGIONAL_OVERSIGHT_ITEMS = [
+  { to: '/monitoring-visits', label: 'Monitoring Visits', icon: ClipboardList },
+  { to: '/assessments', label: 'Competency Assessments', icon: GraduationCap },
+  { to: '/semester-reports', label: 'Term Closure', icon: FileText },
+] as const;
+
 export default function Layout() {
   usePushNotificationEvents();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -65,6 +71,18 @@ export default function Layout() {
   const isIndustryPartner = user?.role === 'IndustryPartner';
   const isGuardian = user?.role === 'Guardian';
   const returnToActionCentre = new URLSearchParams(location.search).get('from') === 'hq-action-centre';
+  const regionalPageHasOwnBackButton = /^\/learners\/[^/]+$/.test(location.pathname)
+    || /^\/semester-reports\/[^/]+$/.test(location.pathname);
+  const showRegionalBackButton = isRegionalAdmin
+    && location.pathname !== '/'
+    && !regionalPageHasOwnBackButton;
+  const handleRegionalBack = () => {
+    if (location.key === 'default') {
+      navigate('/');
+      return;
+    }
+    navigate(-1);
+  };
   const showSidebarTooltip = (label: string, element: HTMLElement) => {
     if (!isSidebarCollapsed) return;
 
@@ -470,23 +488,36 @@ export default function Layout() {
             </>
           )}
 
-          {/* RegionalAdmin-specific links */}
-          {isRegionalAdmin && (
-            <NavLink 
-              to="/semester-reports" 
-              className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
-              onClick={() => setIsMobileMenuOpen(false)}
-              {...collapsedNavTooltip('Term Closure')}
-            >
-              {({ isActive }) => (
-                <>
-                  <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
-                  <FileText size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                  {!isSidebarCollapsed && <span className="text-base">Term Closure</span>}
-                </>
-              )}
-            </NavLink>
-          )}
+          {/* RegionalAdmin-specific oversight links */}
+          {isRegionalAdmin ? (
+            <div className="pt-2">
+              <p className={`px-6 pb-2 text-[10px] font-black uppercase tracking-[0.16em] text-gray-400 ${isSidebarCollapsed ? 'text-center' : ''}`}>
+                {isSidebarCollapsed ? '•' : 'Regional Oversight'}
+              </p>
+              <div className="space-y-1">
+                {REGIONAL_OVERSIGHT_ITEMS.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-3 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-gray-950 font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/70'}`}
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      {...collapsedNavTooltip(item.label)}
+                    >
+                      {({ isActive }) => (
+                        <>
+                          <div className={`absolute right-0 top-1/2 h-8 w-1.5 -translate-y-1/2 rounded-l-full bg-[#FFB800] transition-opacity ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                          <Icon size={20} className={`transition-transform group-hover:scale-110 ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                          {!isSidebarCollapsed ? <span className="text-sm">{item.label}</span> : null}
+                        </>
+                      )}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           {isRegionalAdmin && (
             <>
@@ -630,6 +661,18 @@ export default function Layout() {
       <main className={`flex-1 flex flex-col min-w-0 min-h-screen md:min-h-0 relative z-20 transition-[margin] duration-200 ease-in-out ml-0 ${isSidebarCollapsed ? 'md:ml-32' : 'md:ml-80'}`}>
         <Navbar />
         <div className="flex-1 overflow-auto glass-panel rounded-[1.5rem] md:rounded-[2.5rem] mt-4 p-2 sm:p-4 md:p-8 w-full">
+          {showRegionalBackButton ? (
+            <div className="mx-2 mb-3 sm:mx-4">
+              <button
+                type="button"
+                onClick={handleRegionalBack}
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 text-sm font-black text-gray-700 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                aria-label="Go back to the previous Regional portal page"
+              >
+                <ArrowLeft className="h-4 w-4" /> Back
+              </button>
+            </div>
+          ) : null}
           {returnToActionCentre ? (
             <div className="mx-2 mb-3 flex flex-col gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-indigo-900 sm:mx-4 sm:flex-row sm:items-center sm:justify-between">
               <div>

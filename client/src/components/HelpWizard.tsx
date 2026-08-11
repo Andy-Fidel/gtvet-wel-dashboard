@@ -57,9 +57,16 @@ const guideDefinitions: GuideDefinition[] = [
     steps: (role) => [
       {
         title: role === "SuperAdmin" ? "HQ Dashboard" : role === "RegionalAdmin" ? "Regional Dashboard" : "Operational Dashboard",
-        description: "This page gives you the fastest read on current performance, bottlenecks, and work that needs attention.",
-        targetId: "dashboard-overview",
-        bullets: [
+        description: role === "RegionalAdmin"
+          ? "Start with the prioritized regional queue so the oldest and highest-risk work is handled first."
+          : "This page gives you the fastest read on current performance, bottlenecks, and work that needs attention.",
+        targetId: role === "RegionalAdmin" ? "regional-work-today" : "dashboard-overview",
+        activateTargetId: role === "RegionalAdmin" ? "regional-workspace-operations" : undefined,
+        bullets: role === "RegionalAdmin" ? [
+          "Each item identifies its priority, owner, timing, and required next action.",
+          "Open a queue item to go directly to the report, ticket, or record that needs attention.",
+          "Clear critical work before moving into institutional, learner, or insight reviews.",
+        ] : [
           "Use summary cards to spot volume, completion, and placement trends quickly.",
           "Open linked sections to move from insight to action without searching the sidebar.",
           "Refresh your understanding here before drilling into learners, reports, or governance workflows.",
@@ -67,9 +74,15 @@ const guideDefinitions: GuideDefinition[] = [
       },
       {
         title: "How To Use It",
-        description: "Treat the dashboard as your control panel for daily prioritization.",
-        targetId: "dashboard-audit-link",
-        bullets: [
+        description: role === "RegionalAdmin"
+          ? "Use the four workspaces to keep daily operations separate from deeper performance analysis."
+          : "Treat the dashboard as your control panel for daily prioritization.",
+        targetId: role === "RegionalAdmin" ? "regional-workspace-tabs" : "dashboard-audit-link",
+        bullets: role === "RegionalAdmin" ? [
+          "Operations contains reports, escalations, deadlines, audit activity, and data quality.",
+          "Institutions shows geographic coverage, center performance, and detailed breakdowns.",
+          "Learners and Insights separate intervention work from trend analysis.",
+        ] : [
           "Review league tables and exception cards to identify weak regions, schools, or workflows.",
           "Use export buttons where available when you need to brief other stakeholders.",
           "Check notifications and support queues from the top bar to catch urgent issues.",

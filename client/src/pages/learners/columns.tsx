@@ -25,6 +25,7 @@ export type Learner = {
   dateOfBirth?: string
   phone?: string
   guardianContact?: string
+  institution?: string
   program: string
   region: string
   year: string
@@ -121,10 +122,12 @@ export const columns: ColumnDef<Learner>[] = [
       const meta = table.options.meta as { 
         onEdit: (learner: Learner) => void, 
         onDelete: (id: string) => void,
+        onView?: (learner: Learner) => void,
         role?: string
       }
 
-      const isSuperAdmin = meta?.role === 'SuperAdmin'
+      const isRegionalOversight = meta?.role === 'RegionalAdmin'
+      const isOversightUser = meta?.role === 'SuperAdmin' || isRegionalOversight
  
       return (
         <DropdownMenu>
@@ -136,13 +139,19 @@ export const columns: ColumnDef<Learner>[] = [
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="bg-[#1E1E1E]/95 backdrop-blur-xl border-white/10 text-white rounded-2xl p-2 min-w-[160px] shadow-2xl">
             <DropdownMenuLabel className="font-bold text-white/60 uppercase tracking-wider text-xs">Actions</DropdownMenuLabel>
-             <DropdownMenuItem asChild className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">
+            {isRegionalOversight ? (
+              <DropdownMenuItem onClick={() => meta?.onView?.(learner)} className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">
+                View Details
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem asChild className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">
                 <Link to={`/learners/${learner._id}`}>View Profile</Link>
-            </DropdownMenuItem>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={() => navigator.clipboard.writeText(learner._id)} className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">
               Copy ID
             </DropdownMenuItem>
-            {!isSuperAdmin && (
+            {!isOversightUser && (
               <>
                 <DropdownMenuSeparator className="bg-white/10" />
                 <DropdownMenuItem onClick={() => meta?.onEdit(learner)} className="cursor-pointer rounded-xl focus:bg-white/10 focus:text-white transition-colors">Edit Details</DropdownMenuItem>

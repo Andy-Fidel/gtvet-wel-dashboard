@@ -297,6 +297,7 @@ export default function LearnerProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { authFetch, user } = useAuth()
+  const isOversightReadOnly = user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin'
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [data, setData] = useState<ProfileData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -335,7 +336,7 @@ export default function LearnerProfile() {
 
   const handleProfilePicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (!file || !id) return
+    if (!file || !id || isOversightReadOnly) return
     setProfilePicUploading(true)
     try {
       const formData = new FormData()
@@ -394,6 +395,7 @@ export default function LearnerProfile() {
   }, [fetchProfile, fetchProgress, refreshKey])
 
   useEffect(() => {
+    if (isOversightReadOnly) return
     authFetch('/api/ownership/users')
       .then(async (res) => {
         if (!res.ok) throw new Error('Failed to fetch ownership candidates')
@@ -404,7 +406,7 @@ export default function LearnerProfile() {
         console.error('Error fetching ownership candidates:', error)
         toast.error('Failed to load ownership candidates')
       })
-  }, [authFetch])
+  }, [authFetch, isOversightReadOnly])
 
   useEffect(() => {
     if (!data?.learner) return
@@ -440,22 +442,7 @@ export default function LearnerProfile() {
       academicStatus: learner.academicStatus || 'Active',
       status: learner.status || 'Pending',
     }
-  }, [
-    data?.learner?._id,
-    data?.learner?.lastName,
-    data?.learner?.firstName,
-    data?.learner?.middleName,
-    data?.learner?.gender,
-    data?.learner?.dateOfBirth,
-    data?.learner?.phone,
-    data?.learner?.guardianContact,
-    data?.learner?.indexNumber,
-    data?.learner?.program,
-    data?.learner?.year,
-    data?.learner?.intakeAcademicYear,
-    data?.learner?.academicStatus,
-    data?.learner?.status,
-  ])
+  }, [data?.learner])
 
   if (loading) {
     return (
@@ -483,11 +470,12 @@ export default function LearnerProfile() {
   const readiness = data.readiness
   const placementEligibility = data.placementEligibility
   const isGraduatedArchive = learner.academicStatus === 'Graduated'
-  const canManageOwnership = ['Admin', 'Manager', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && !isGraduatedArchive
-  const canManageGuardians = ['Admin', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && !isGraduatedArchive
+  const canManageOwnership = ['Admin', 'Manager'].includes(user?.role || '') && !isGraduatedArchive
+  const canManageGuardians = user?.role === 'Admin' && !isGraduatedArchive
   const canReviewGuardianConsent = ['Admin', 'Manager'].includes(user?.role || '') && !isGraduatedArchive
   const activePlacement = placements.find((placement) => placement.status === 'Active') || null
   const canInitiatePlacement = !isGraduatedArchive
+    && !isOversightReadOnly
     && !activePlacement
     && ['Active', 'Graduating'].includes(learner.academicStatus || 'Active')
     && placementEligibility?.isEligible !== false
@@ -690,8 +678,8 @@ export default function LearnerProfile() {
           {/* Profile Avatar */}
           <button
             onClick={() => avatarInputRef.current?.click()}
-            disabled={profilePicUploading || isGraduatedArchive}
-            className="relative h-16 w-16 md:h-20 md:w-20 rounded-2xl overflow-hidden shadow-lg border-2 border-white shrink-0 group cursor-pointer"
+            disabled={profilePicUploading || isGraduatedArchive || isOversightReadOnly}
+            className={`relative h-16 w-16 md:h-20 md:w-20 rounded-2xl overflow-hidden shadow-lg border-2 border-white shrink-0 group ${isOversightReadOnly ? 'cursor-default' : 'cursor-pointer'}`}
           >
             <input
               ref={avatarInputRef}
@@ -713,7 +701,7 @@ export default function LearnerProfile() {
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               {profilePicUploading ? (
                 <Loader2 className="h-6 w-6 text-white animate-spin" />
-              ) : !isGraduatedArchive ? (
+              ) : !isGraduatedArchive && !isOversightReadOnly ? (
                 <Camera className="h-6 w-6 text-white" />
               ) : null}
               {isGraduatedArchive ? (
@@ -746,7 +734,7 @@ export default function LearnerProfile() {
         
         {/* Quick Actions */}
         <div data-help-id="learner-profile-actions" className="flex flex-wrap items-center gap-2 mt-4 md:mt-0">
-            {!isGraduatedArchive ? (
+            {!isGraduatedArchive && !isOversightReadOnly ? (
               <Button onClick={() => setEditOpen(true)} variant="outline" className="rounded-xl border-gray-200 text-gray-700 bg-white hover:bg-gray-50">
                   <Edit2 className="mr-2 h-4 w-4" /> Edit Profile
               </Button>
@@ -760,7 +748,7 @@ export default function LearnerProfile() {
                     <Plus className="mr-2 h-4 w-4" /> Initiate Placement
                 </Button>
             )}
-            {(currentStage === 'Placed' || currentStage === 'Monitored') && (
+            {!isOversightReadOnly && (currentStage === 'Placed' || currentStage === 'Monitored') && (
                 <>
                     <Button onClick={() => navigate(`/attendance-logs?learnerId=${learner._id}`)} variant="outline" className="rounded-xl border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100">
                         <ClipboardCheck className="mr-2 h-4 w-4" /> Log Hours
@@ -790,6 +778,13 @@ export default function LearnerProfile() {
           <p className="text-sm text-emerald-800 mt-1">
             This profile is in read-only archive mode. Historical placements, visits, assessments, evaluations, and supporting records remain available, but live operational actions are disabled.
           </p>
+        </div>
+      ) : null}
+
+      {isOversightReadOnly && !isGraduatedArchive ? (
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5">
+          <h3 className="font-black text-indigo-900">{user?.role === 'RegionalAdmin' ? 'Regional' : 'Headquarters'} oversight profile</h3>
+          <p className="mt-1 text-sm text-indigo-800">This learner record is read-only. Operational updates remain with the learner&apos;s institution team.</p>
         </div>
       ) : null}
 
@@ -912,10 +907,10 @@ export default function LearnerProfile() {
               <h3 className="font-black text-lg text-gray-900">Active Placement Management</h3>
               <p className="text-sm text-gray-500">Track due dates, cadence, completion, and active blockers for this learner.</p>
             </div>
-            <Button data-help-id="learner-profile-open-blocker" onClick={() => setSupportOpen(true)} variant="outline" className="rounded-xl border-red-200 text-red-700 bg-red-50 hover:bg-red-100">
+            {!isOversightReadOnly ? <Button data-help-id="learner-profile-open-blocker" onClick={() => setSupportOpen(true)} variant="outline" className="rounded-xl border-red-200 text-red-700 bg-red-50 hover:bg-red-100">
               <AlertTriangle className="mr-2 h-4 w-4" />
               Report Blocker
-            </Button>
+            </Button> : null}
           </div>
 
           <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
@@ -934,10 +929,10 @@ export default function LearnerProfile() {
                   <FileText className="mr-2 h-4 w-4" />
                   Export Agreement PDF
                 </Button>
-                <Button className="rounded-xl bg-amber-500 hover:bg-amber-600 text-white" onClick={openLearnerAgreement}>
+                {!isOversightReadOnly ? <Button className="rounded-xl bg-amber-500 hover:bg-amber-600 text-white" onClick={openLearnerAgreement}>
                   <FileSignature className="mr-2 h-4 w-4" />
                   {activeAgreementSummary?.learnerSigned ? 'Update Learner Signature' : 'Sign Learner Agreement'}
-                </Button>
+                </Button> : null}
               </div>
             </div>
           </div>
@@ -1390,7 +1385,7 @@ export default function LearnerProfile() {
             <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="font-bold text-lg flex items-center gap-2"><Award className="h-5 w-5 text-emerald-500"/> Competency Assessments</h3>
-                    {(currentStage === 'Placed' || currentStage === 'Monitored') && (
+                    {!isOversightReadOnly && (currentStage === 'Placed' || currentStage === 'Monitored') && (
                         <Button size="sm" onClick={() => setAssessmentOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded-xl h-8 px-3">
                             <Plus className="mr-1 h-3 w-3" /> Add
                         </Button>
@@ -1400,7 +1395,7 @@ export default function LearnerProfile() {
                     <div className="text-center py-6">
                         <Award className="h-10 w-10 text-gray-200 mx-auto mb-2" />
                         <p className="text-sm text-gray-400 font-medium">No assessments yet</p>
-                        {(currentStage === 'Placed' || currentStage === 'Monitored') && (
+                        {!isOversightReadOnly && (currentStage === 'Placed' || currentStage === 'Monitored') && (
                             <Button variant="ghost" size="sm" onClick={() => setAssessmentOpen(true)} className="mt-2 text-emerald-600 hover:text-emerald-700 text-xs font-bold">
                                 Record first assessment →
                             </Button>
@@ -1491,7 +1486,7 @@ export default function LearnerProfile() {
                 <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                     <div className="flex items-center justify-between mb-4">
                         <h3 className="font-bold text-lg flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-blue-500"/> Monitoring Visits</h3>
-                        {(currentStage === 'Placed' || currentStage === 'Monitored') && (
+                        {!isOversightReadOnly && (currentStage === 'Placed' || currentStage === 'Monitored') && (
                             <Button size="sm" onClick={() => setVisitOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-xl h-8 px-3">
                                 <Plus className="mr-1 h-3 w-3" /> Add
                             </Button>
@@ -1501,7 +1496,7 @@ export default function LearnerProfile() {
                         <div className="text-center py-6">
                             <CheckCircle2 className="h-10 w-10 text-gray-200 mx-auto mb-2" />
                             <p className="text-sm text-gray-400 font-medium">No visits yet</p>
-                            {(currentStage === 'Placed' || currentStage === 'Monitored') && (
+                            {!isOversightReadOnly && (currentStage === 'Placed' || currentStage === 'Monitored') && (
                                 <Button variant="ghost" size="sm" onClick={() => setVisitOpen(true)} className="mt-2 text-blue-600 hover:text-blue-700 text-xs font-bold">
                                     Log first visit →
                                 </Button>
@@ -1553,7 +1548,7 @@ export default function LearnerProfile() {
       </div>
 
       {/* Inline Dialogs */}
-      <Dialog open={placementOpen} onOpenChange={setPlacementOpen}>
+      <Dialog open={placementOpen && !isOversightReadOnly} onOpenChange={setPlacementOpen}>
         <DialogContent className="sm:max-w-[600px] overflow-y-auto max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>Add Placement for {learner.name}</DialogTitle>
@@ -1563,7 +1558,7 @@ export default function LearnerProfile() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={visitOpen} onOpenChange={setVisitOpen}>
+      <Dialog open={visitOpen && !isOversightReadOnly} onOpenChange={setVisitOpen}>
         <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 bg-white text-gray-900 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
@@ -1575,7 +1570,7 @@ export default function LearnerProfile() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={assessmentOpen} onOpenChange={setAssessmentOpen}>
+      <Dialog open={assessmentOpen && !isOversightReadOnly} onOpenChange={setAssessmentOpen}>
         <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
@@ -1728,7 +1723,7 @@ export default function LearnerProfile() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editOpen && !isGraduatedArchive} onOpenChange={setEditOpen}>
+      <Dialog open={editOpen && !isGraduatedArchive && !isOversightReadOnly} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-[700px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
@@ -1760,7 +1755,7 @@ export default function LearnerProfile() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={supportOpen} onOpenChange={setSupportOpen}>
+      <Dialog open={supportOpen && !isOversightReadOnly} onOpenChange={setSupportOpen}>
         <DialogContent className="sm:max-w-[700px] overflow-y-auto max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>Report Placement Blocker</DialogTitle>
@@ -1811,7 +1806,7 @@ export default function LearnerProfile() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={learnerAgreementOpen} onOpenChange={setLearnerAgreementOpen}>
+      <Dialog open={learnerAgreementOpen && !isOversightReadOnly} onOpenChange={setLearnerAgreementOpen}>
         <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">

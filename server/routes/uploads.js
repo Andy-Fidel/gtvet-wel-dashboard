@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { Document } from '../models/Document.js';
 import { Learner } from '../models/Learner.js';
+import { Institution } from '../models/Institution.js';
 import { User } from '../models/User.js';
 import { Placement } from '../models/Placement.js';
 import { SupportTicket } from '../models/SupportTicket.js';
@@ -185,6 +186,9 @@ router.use(auth);
 // ==================== PROFILE PICTURE ====================
 router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (req, res) => {
   try {
+    if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Oversight portal access is read-only for learner profiles' });
+    }
     if (!req.file) {
       return res.status(400).json({ message: 'No image uploaded' });
     }
@@ -351,6 +355,10 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     }
 
     const { category, learnerId, placementId, monitoringVisitId, supportTicketId, employerEvaluationId } = req.body;
+    if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)
+      && (learnerId || placementId || monitoringVisitId || employerEvaluationId)) {
+      return res.status(403).json({ message: 'Oversight portal access is read-only for learner and placement evidence' });
+    }
     let institution = req.user.institution || 'N/A';
     let partnerId = req.user.partnerId?._id || req.user.partnerId || undefined;
 
@@ -497,7 +505,10 @@ router.get('/', async (req, res) => {
     // Non-super admins can only see their institution's documents
     if (req.user.role === 'IndustryPartner') {
       filter.partnerId = req.user.partnerId?._id || req.user.partnerId;
-    } else if (req.user.role !== 'SuperAdmin' && req.user.role !== 'RegionalAdmin') {
+    } else if (req.user.role === 'RegionalAdmin') {
+      const institutions = await Institution.find({ region: req.user.region }).distinct('name');
+      filter.institution = { $in: institutions };
+    } else if (req.user.role !== 'SuperAdmin') {
       filter.institution = req.user.institution;
     }
 
@@ -520,10 +531,9 @@ router.delete('/:id', async (req, res) => {
     // Only the uploader, Admin, or SuperAdmin can delete
     const isOwner = doc.uploadedBy.toString() === req.user._id.toString();
     const isSuperAdmin = req.user.role === 'SuperAdmin';
-    const isRegionalAdmin = req.user.role === 'RegionalAdmin';
     const isInstitutionAdmin = req.user.role === 'Admin' && canManageInstitutionRecord(req.user, doc.institution);
     const isPartnerScoped = req.user.role === 'IndustryPartner' && doc.partnerId?.toString?.() === getUserPartnerId(req.user);
-    if (!isOwner && !isSuperAdmin && !isRegionalAdmin && !isInstitutionAdmin && !isPartnerScoped) {
+    if (!isOwner && !isSuperAdmin && !isInstitutionAdmin && !isPartnerScoped) {
       return res.status(403).json({ message: 'Not authorized to delete this document' });
     }
 

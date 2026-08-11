@@ -1,4 +1,4 @@
-
+/* eslint-disable react-refresh/only-export-components */
 import type { ColumnDef } from "@tanstack/react-table"
 import { Button } from "@/components/ui/button"
 import { MoreHorizontal, ArrowUpDown, MessageSquare, HeartPulse, Paperclip, Handshake, Archive, CalendarClock } from "lucide-react"
@@ -428,7 +428,7 @@ export const columns: ColumnDef<Placement>[] = [
         role?: string
       }
 
-      const isSuperAdmin = meta?.role === 'SuperAdmin'
+      const isOversightUser = meta?.role === 'SuperAdmin' || meta?.role === 'RegionalAdmin'
  
       return (
         <DropdownMenu>
@@ -449,7 +449,7 @@ export const columns: ColumnDef<Placement>[] = [
             <DropdownMenuItem onClick={() => meta?.onOpenEvidence(placement)}>
               View Evidence
             </DropdownMenuItem>
-            {!isSuperAdmin && (
+            {!isOversightUser && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => meta?.onEdit(placement)}>Edit Details</DropdownMenuItem>

@@ -93,6 +93,7 @@ export default function AttendanceLogs() {
 
   const learnerId = useMemo(() => new URLSearchParams(location.search).get("learnerId") || "", [location.search])
   const isIndustryPartner = user?.role === "IndustryPartner"
+  const isOversightReadOnly = user?.role === "SuperAdmin" || user?.role === "RegionalAdmin"
 
   useEffect(() => {
     const fetchLogs = async () => {
@@ -119,12 +120,13 @@ export default function AttendanceLogs() {
   }, [authFetch, learnerId, refreshKey, statusFilter, typeFilter])
 
   useEffect(() => {
+    if (isOversightReadOnly) return
     if (searchParams.get("offlineReview") !== "1") return
     const bridge = getOfflineConflictBridge()
     if (!bridge || bridge.type !== "attendance-log") return
     setEditingLog(bridge.payload as unknown as AttendanceLog)
     setOpen(true)
-  }, [searchParams])
+  }, [isOversightReadOnly, searchParams])
 
   const filteredLogs = useMemo(() => {
     const query = searchQuery.toLowerCase()
@@ -316,7 +318,7 @@ export default function AttendanceLogs() {
 
   return (
     <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
-      <Dialog open={open} onOpenChange={(next) => {
+      <Dialog open={open && !isOversightReadOnly} onOpenChange={(next) => {
         setOpen(next)
         if (!next && searchParams.get("offlineReview")) {
           clearOfflineConflictBridge()
@@ -408,7 +410,9 @@ export default function AttendanceLogs() {
           <p className="text-muted-foreground mt-1 font-medium">
             {learnerId && activeLearnerName
               ? `Viewing placement hours for ${activeLearnerName}.`
-              : "Track daily or weekly hours, see who recorded them, and manage supervisor sign-off."}
+              : isOversightReadOnly
+                ? "Review region-scoped attendance coverage and submitted placement hours."
+                : "Track daily or weekly hours, see who recorded them, and manage supervisor sign-off."}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -417,11 +421,13 @@ export default function AttendanceLogs() {
               View All Logs
             </Button>
           )}
-          <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold" onClick={() => { setEditingLog(null); setOpen(true) }}>
+          {!isOversightReadOnly ? <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold" onClick={() => { setEditingLog(null); setOpen(true) }}>
             <Plus className="mr-2 h-4 w-4" />
             {isIndustryPartner ? "Record Hours" : "Add Hours"}
-          </Button>
-          {!isIndustryPartner ? (
+          </Button> : null}
+          {isOversightReadOnly ? (
+            <Badge className="border-indigo-200 bg-indigo-50 text-indigo-700">{user?.role === "RegionalAdmin" ? "Regional" : "Headquarters"} · Read only</Badge>
+          ) : !isIndustryPartner ? (
             <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200">Institution entry still enabled during transition</Badge>
           ) : (
             <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Partner-originated hours supported</Badge>
@@ -577,7 +583,7 @@ export default function AttendanceLogs() {
               </TableHeader>
               <TableBody>
                 {filteredLogs.map((log) => {
-                  const canEdit = (!isIndustryPartner && log.submittedSource === "Partner") || (log.status !== "SignedOff" && (!isIndustryPartner || log.submittedBy?._id === user?._id));
+                  const canEdit = !isOversightReadOnly && ((!isIndustryPartner && log.submittedSource === "Partner") || (log.status !== "SignedOff" && (!isIndustryPartner || log.submittedBy?._id === user?._id)));
                   const canSignOff = isIndustryPartner && log.status === "Pending" && log.submittedSource !== "Partner"
                   const isReview = log.status === "SignedOff" && !isIndustryPartner && log.submittedSource === "Partner";
                   return (

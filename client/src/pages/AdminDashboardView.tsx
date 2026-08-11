@@ -1,13 +1,15 @@
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useMemo } from "react"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { formatDistanceToNow } from "date-fns"
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Cell, PieChart, Pie, Line, LineChart } from "recharts"
-import { Users, Briefcase, Clock, ArrowUpRight, Download, Building2, ClipboardList, FileText, TrendingUp, GraduationCap, CheckCircle2, LifeBuoy, ShieldCheck, AlertTriangle, ArrowRight, TrendingDown, Minus } from "lucide-react"
+import { Users, Briefcase, Clock, ArrowUpRight, Download, Building2, ClipboardList, FileText, TrendingUp, GraduationCap, CheckCircle2, LifeBuoy, ShieldCheck, AlertTriangle, ArrowRight } from "lucide-react"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { GeolocatedMonitoringMap } from "@/components/dashboard/GeolocatedMonitoringMap"
+import { RegionalDashboardNav, type RegionalDashboardWorkspace } from "@/components/dashboard/RegionalDashboardNav"
+import { RegionalWorkToday, type RegionalWorkItem, type RegionalWorkPriority } from "@/components/dashboard/RegionalWorkToday"
 import type { AdminOverviewStats } from "@/types/dashboard"
 
 interface AdminDashboardViewProps {
@@ -26,64 +28,171 @@ export function AdminDashboardView({
   openInterventionQueue,
 }: AdminDashboardViewProps) {
   const navigate = useNavigate();
-  const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "semesterOverSemesterPercent">("placementRate");
+  const [searchParams, setSearchParams] = useSearchParams();
   const isRegionalAdmin = user?.role === 'RegionalAdmin';
+  const requestedWorkspace = searchParams.get("workspace");
+  const dashboardWorkspace: RegionalDashboardWorkspace = requestedWorkspace === "institutions" || requestedWorkspace === "learners" || requestedWorkspace === "insights"
+    ? requestedWorkspace
+    : "operations";
   const adminDashboardTitle = isRegionalAdmin ? "Regional Performance Dashboard" : "National System Performance Dashboard";
   const adminScopeLabel = isRegionalAdmin ? `${user?.region || "Assigned Region"} Regional View` : "National Oversight View";
   const monitoringVisitsLabel = isRegionalAdmin ? "Regional Visits" : "Monitoring Visits";
   const placementRateLabel = isRegionalAdmin ? "Regional Placement Rate" : "Placement Rate";
   const canExportInstitutionCohorts = !isRegionalAdmin;
 
-  const qualityAlertItems = [
+  const qualityAlertItems = useMemo(() => [
     {
       label: "Pending learners older than 14 days",
       count: adminData.dataQualityAlerts?.stalePendingLearners || 0,
       tone: "text-amber-700 bg-amber-50",
       target: "/learners",
+      owner: "Institution learner teams",
+      nextAction: "Review pending learner records",
     },
     {
       label: "Active placements missing supervisor details",
       count: adminData.dataQualityAlerts?.placementsMissingSupervisor || 0,
       tone: "text-red-700 bg-red-50",
       target: "/placements",
+      owner: "Institution placement teams",
+      nextAction: "Assign missing supervisors",
     },
     {
       label: "Attendance logs pending sign-off for 3+ days",
       count: adminData.dataQualityAlerts?.pendingAttendanceSignOff || 0,
       tone: "text-indigo-700 bg-indigo-50",
-      target: "/attendance-logs",
+      target: "/attendance-logs?status=Pending",
+      owner: "Institution attendance teams",
+      nextAction: "Complete pending sign-offs",
     },
     {
       label: "Active placements without monitoring visits",
       count: adminData.dataQualityAlerts?.activePlacementsWithoutVisits || 0,
       tone: "text-orange-700 bg-orange-50",
       target: "/monitoring-visits",
+      owner: "Regional monitoring team",
+      nextAction: "Schedule monitoring visits",
     },
-  ];
+  ], [adminData.dataQualityAlerts?.activePlacementsWithoutVisits, adminData.dataQualityAlerts?.pendingAttendanceSignOff, adminData.dataQualityAlerts?.placementsMissingSupervisor, adminData.dataQualityAlerts?.stalePendingLearners]);
 
-  const sortedRegionalStats = [...(adminData.regionalStats || [])].sort((a, b) => {
-    if (regionalSortBy === "completionRate") {
-      if (b.completionRate !== a.completionRate) return b.completionRate - a.completionRate;
-      return b.placementRate - a.placementRate;
-    }
+  const currentCycleQuery = `semester=${encodeURIComponent(adminData.deadlineRisk?.currentCycle?.semester || "")}&academicYear=${encodeURIComponent(adminData.deadlineRisk?.currentCycle?.academicYear || "")}`;
+  const regionalWorkItems = useMemo<RegionalWorkItem[]>(() => {
+    const items: RegionalWorkItem[] = [
+      ...(adminData.approvalInbox?.queue || []).map((report) => ({
+        id: `report:${report._id}`,
+        category: "Reports" as const,
+        priority: (report.ageDays >= 7 ? "Critical" : "High") as RegionalWorkPriority,
+        title: `${report.title} awaiting regional review`,
+        context: report.institution,
+        owner: "Regional reporting team",
+        timing: `${report.ageDays} day${report.ageDays === 1 ? "" : "s"} waiting`,
+        nextAction: "Review, approve, or return",
+        target: `/semester-reports/${report._id}?from=regional-work-today`,
+        score: report.ageDays >= 7 ? 110 + report.ageDays : 90 + report.ageDays,
+      })),
+      ...(adminData.supportSummary?.queue || []).map((ticket) => ({
+        id: `support:${ticket._id}`,
+        category: "Support" as const,
+        priority: (ticket.priority === "Urgent" ? "Critical" : ticket.priority === "High" ? "High" : "Medium") as RegionalWorkPriority,
+        title: ticket.subject,
+        context: ticket.institution || ticket.region || "Regional support",
+        owner: "Regional support team",
+        timing: `Updated ${formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })}`,
+        nextAction: "Resolve or update the escalation",
+        target: `/support-center?ticket=${ticket._id}&from=regional-work-today`,
+        score: ticket.priority === "Urgent" ? 105 : ticket.priority === "High" ? 80 : 55,
+      })),
+      ...(adminData.deadlineRisk?.overdueInstitutionSubmissions || []).map((item) => ({
+        id: `deadline-overdue:${item._id}`,
+        category: "Deadlines" as const,
+        priority: "Critical" as const,
+        title: "Reporting submission overdue",
+        context: item.institution,
+        owner: "Regional reporting team",
+        timing: `Current state: ${item.status}`,
+        nextAction: "Open the report and follow up",
+        target: `/semester-reports?deadlineView=overdue&institution=${encodeURIComponent(item.institution)}&${currentCycleQuery}&from=regional-work-today`,
+        score: 115,
+      })),
+      ...(adminData.deadlineRisk?.atRiskInstitutions || []).map((item) => ({
+        id: `deadline-risk:${item._id}`,
+        category: "Deadlines" as const,
+        priority: "High" as const,
+        title: "Institution at risk of missing deadline",
+        context: item.institution,
+        owner: "Regional reporting team",
+        timing: `${item.daysRemaining} day${item.daysRemaining === 1 ? "" : "s"} remaining`,
+        nextAction: "Review progress and notify institution",
+        target: `/semester-reports?deadlineView=at-risk&institution=${encodeURIComponent(item.institution)}&${currentCycleQuery}&from=regional-work-today`,
+        score: 92 - item.daysRemaining,
+      })),
+      ...qualityAlertItems.filter((alert) => alert.count > 0).map((alert) => ({
+        id: `quality:${alert.label}`,
+        category: "Data quality" as const,
+        priority: (alert.count >= 10 ? "High" : "Medium") as RegionalWorkPriority,
+        title: alert.label,
+        context: `${alert.count} record${alert.count === 1 ? "" : "s"} in ${user?.region || "your region"}`,
+        owner: alert.owner,
+        timing: "Needs follow-up",
+        nextAction: alert.nextAction,
+        target: `${alert.target}${alert.target.includes("?") ? "&" : "?"}from=regional-work-today`,
+        score: alert.count >= 10 ? 76 + Math.min(alert.count, 20) : 50 + alert.count,
+      })),
+      ...(adminData.userGovernance?.institutionsWithoutActiveAdmins || []).map((institution) => ({
+        id: `governance:${institution._id}`,
+        category: "Governance" as const,
+        priority: "High" as const,
+        title: "No active institution administrator",
+        context: institution.name,
+        owner: "Regional user governance",
+        timing: `${institution.code} · ${institution.region}`,
+        nextAction: "Assign an active administrator",
+        target: `/users?governance=orphaned-institutions&institution=${encodeURIComponent(institution.name)}&role=Admin&status=Active&from=regional-work-today`,
+        score: 88,
+      })),
+    ];
 
-    if (regionalSortBy === "semesterOverSemesterPercent") {
-      if (b.semesterOverSemesterPercent !== a.semesterOverSemesterPercent) return b.semesterOverSemesterPercent - a.semesterOverSemesterPercent;
-      return b.placementRate - a.placementRate;
-    }
+    return items.sort((a, b) => b.score - a.score).slice(0, 8);
+  }, [adminData.approvalInbox?.queue, adminData.deadlineRisk?.atRiskInstitutions, adminData.deadlineRisk?.overdueInstitutionSubmissions, adminData.supportSummary?.queue, adminData.userGovernance?.institutionsWithoutActiveAdmins, currentCycleQuery, qualityAlertItems, user?.region]);
 
-    if (b.placementRate !== a.placementRate) return b.placementRate - a.placementRate;
-    return b.completionRate - a.completionRate;
-  });
+  const regionalWorkSummary = {
+    reports: adminData.approvalInbox?.pendingCount || 0,
+    urgentSupport: adminData.supportSummary?.urgentOpen || 0,
+    deadlineRisk: (adminData.deadlineRisk?.overdueInstitutionSubmissions?.length || 0) + (adminData.deadlineRisk?.atRiskInstitutions?.length || 0),
+    dataIssues: qualityAlertItems.reduce((total, alert) => total + alert.count, 0),
+  };
+  const rankedInstitutionStats = useMemo(() => [...(adminData.institutionStats || [])].sort((a, b) => {
+    const aRate = a.totalLearners > 0 ? a.placed / a.totalLearners : 0;
+    const bRate = b.totalLearners > 0 ? b.placed / b.totalLearners : 0;
+    return bRate - aRate || b.placed - a.placed;
+  }), [adminData.institutionStats]);
+
+  const showWorkspace = (workspace: RegionalDashboardWorkspace) => !isRegionalAdmin || dashboardWorkspace === workspace;
+  const selectWorkspace = (workspace: RegionalDashboardWorkspace) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("workspace", workspace);
+    setSearchParams(nextParams, { replace: true });
+  };
 
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-2 px-4 sm:px-0">
-        <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
-          {adminDashboardTitle}
-        </h2>
+      <div className="flex flex-col gap-3 px-4 sm:px-0 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
+            {adminDashboardTitle}
+          </h2>
+          <p className="mt-1 text-sm font-semibold text-gray-500">Prioritize regional follow-up, then review performance and trends.</p>
+        </div>
+        <Badge variant="outline" className="w-fit rounded-full border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-black text-indigo-700">
+          {adminScopeLabel}
+        </Badge>
       </div>
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+
+      {isRegionalAdmin ? <RegionalDashboardNav value={dashboardWorkspace} onChange={selectWorkspace} /> : null}
+
+      {isRegionalAdmin && dashboardWorkspace === "operations" ? <RegionalWorkToday items={regionalWorkItems} summary={regionalWorkSummary} onOpen={navigate} /> : null}
+      {showWorkspace("insights") ? <>
+      <div id="regional-workspace-insights-panel" role={isRegionalAdmin ? "tabpanel" : undefined} className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300 relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-32 h-32 bg-purple-50 rounded-full translate-x-8 -translate-y-8 group-hover:scale-110 transition-transform duration-500 ease-out"></div>
           <CardContent className="p-4 md:p-6 relative z-10">
@@ -211,15 +320,14 @@ export function AdminDashboardView({
           </CardContent>
         </Card>
       </div>
+      </> : null}
 
-      {isRegionalAdmin && (
+      {isRegionalAdmin && dashboardWorkspace === "operations" && (
         <>
-          <GeolocatedMonitoringMap />
-
           <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
             <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
               <CardHeader className="p-4 md:p-8 pb-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <CardTitle className="text-2xl font-black flex items-center gap-3">
                       <CheckCircle2 className="h-6 w-6 text-green-600" />
@@ -229,7 +337,7 @@ export function AdminDashboardView({
                       Reports in your region waiting for review or follow-up.
                     </CardDescription>
                   </div>
-                  <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/semester-reports')}>
+                  <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/semester-reports')}>
                     Open Reports
                   </Button>
                 </div>
@@ -253,7 +361,13 @@ export function AdminDashboardView({
                 <div className="space-y-3">
                   {adminData.approvalInbox?.queue?.length ? (
                     adminData.approvalInbox.queue.map((item) => (
-                      <div key={item._id} className="rounded-2xl border border-gray-100 p-4 bg-gray-50">
+                      <button
+                        key={item._id}
+                        type="button"
+                        onClick={() => navigate(`/semester-reports/${item._id}?from=regional-approval-inbox`)}
+                        className="group w-full rounded-2xl border border-gray-100 bg-gray-50 p-4 text-left transition hover:border-indigo-200 hover:bg-indigo-50/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                        aria-label={`Review ${item.title} from ${item.institution}`}
+                      >
                         <div className="flex items-start justify-between gap-4">
                           <div>
                             <p className="font-black text-gray-900">{item.institution}</p>
@@ -261,10 +375,11 @@ export function AdminDashboardView({
                           </div>
                           <Badge className="bg-amber-100 text-amber-700 border-0">{item.ageDays}d waiting</Badge>
                         </div>
-                        <p className="text-xs font-bold text-gray-400 mt-2">
-                          Submitted {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}
+                        <p className="mt-2 flex items-center justify-between gap-3 text-xs font-bold text-gray-400">
+                          <span>Submitted {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}</span>
+                          <span className="flex items-center gap-1 text-indigo-600">Review report <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" /></span>
                         </p>
-                      </div>
+                      </button>
                     ))
                   ) : (
                     <p className="text-sm font-medium text-gray-500">No reports are currently waiting for regional review.</p>
@@ -275,7 +390,7 @@ export function AdminDashboardView({
 
             <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
               <CardHeader className="p-4 md:p-8 pb-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <CardTitle className="text-2xl font-black flex items-center gap-3">
                       <LifeBuoy className="h-6 w-6 text-[#FFB800]" />
@@ -285,7 +400,7 @@ export function AdminDashboardView({
                       Regional support workload and unresolved escalations.
                     </CardDescription>
                   </div>
-                  <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/support-center')}>
+                  <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/support-center')}>
                     Open Support
                   </Button>
                 </div>
@@ -325,7 +440,13 @@ export function AdminDashboardView({
 
                 <div className="space-y-3">
                   {adminData.supportSummary?.queue?.length ? adminData.supportSummary.queue.slice(0, 4).map((ticket) => (
-                    <div key={ticket._id} className="rounded-2xl border border-gray-100 p-4 bg-gray-50">
+                    <button
+                      key={ticket._id}
+                      type="button"
+                      onClick={() => navigate(`/support-center?ticket=${ticket._id}&from=regional-escalation-queue`)}
+                      className="group w-full rounded-2xl border border-gray-100 bg-gray-50 p-4 text-left transition hover:border-indigo-200 hover:bg-indigo-50/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                      aria-label={`Open support ticket ${ticket.subject}`}
+                    >
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <p className="font-black text-gray-900">{ticket.subject}</p>
@@ -335,10 +456,11 @@ export function AdminDashboardView({
                           {ticket.priority}
                         </Badge>
                       </div>
-                      <p className="text-xs font-bold text-gray-400 mt-2">
-                        Updated {formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })} · {ticket.replyCount} repl{ticket.replyCount === 1 ? 'y' : 'ies'}
+                      <p className="mt-2 flex items-center justify-between gap-3 text-xs font-bold text-gray-400">
+                        <span>Updated {formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })} · {ticket.replyCount} repl{ticket.replyCount === 1 ? 'y' : 'ies'}</span>
+                        <span className="flex items-center gap-1 text-indigo-600">Open ticket <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" /></span>
                       </p>
-                    </div>
+                    </button>
                   )) : <p className="text-sm font-medium text-gray-500">No open support escalations.</p>}
                 </div>
               </CardContent>
@@ -347,7 +469,13 @@ export function AdminDashboardView({
         </>
       )}
 
-      {adminData.academicSummary && (
+      {isRegionalAdmin && dashboardWorkspace === "institutions" ? (
+        <div id="regional-workspace-institutions-panel" role="tabpanel">
+          <GeolocatedMonitoringMap />
+        </div>
+      ) : null}
+
+      {showWorkspace("learners") && adminData.academicSummary && (
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
           <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
             <CardTitle className="text-2xl font-black">Academic Lifecycle</CardTitle>
@@ -402,7 +530,7 @@ export function AdminDashboardView({
         </Card>
       )}
 
-      {adminData.intakeCohorts && adminData.intakeCohorts.length > 0 && (
+      {showWorkspace("learners") && adminData.intakeCohorts && adminData.intakeCohorts.length > 0 && (
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
           <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
             <div className="flex items-center justify-between gap-4">
@@ -498,7 +626,7 @@ export function AdminDashboardView({
         </Card>
       )}
 
-      {adminData.learnerProgressSummary && (
+      {showWorkspace("learners") && adminData.learnerProgressSummary && (
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
           <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
             <div className="flex items-center justify-between gap-4">
@@ -597,7 +725,7 @@ export function AdminDashboardView({
         </Card>
       )}
 
-      {adminData.learnerQualitySummary && (
+      {showWorkspace("learners") && adminData.learnerQualitySummary && (
         <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
           <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
             <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
@@ -772,7 +900,7 @@ export function AdminDashboardView({
       )}
 
       {/* Report Approval Pipeline — RegionalAdmin only */}
-      {isRegionalAdmin && adminData.reportPipeline && (
+      {showWorkspace("insights") && isRegionalAdmin && adminData.reportPipeline && (
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
           <CardHeader className="p-4 md:p-8 pb-0">
             <CardTitle className="text-2xl font-black">Report Approval Pipeline</CardTitle>
@@ -811,6 +939,7 @@ export function AdminDashboardView({
         </Card>
       )}
 
+      {showWorkspace("insights") ? <>
       {/* Placement Trend Chart */}
       <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
         <CardHeader className="p-4 md:p-8 pb-0">
@@ -958,201 +1087,12 @@ export function AdminDashboardView({
         </Card>
 
       </div>
-
-      {isRegionalAdmin && (
-        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
-          <CardHeader className="p-4 md:p-8 pb-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <CardTitle className="text-2xl font-black">Regional Performance League Table</CardTitle>
-                <CardDescription className="text-base font-bold text-gray-400 mt-2">
-                  Placement rate, completion rate, intervention risk, and semester-on-semester movement across the country.
-                </CardDescription>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => downloadCSV(sortedRegionalStats, 'regional-performance-league')}
-                className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
-              >
-                <Download className="mr-2 h-4 w-4" /> CSV
-              </Button>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 mt-4">
-              <span className="text-xs font-black uppercase tracking-widest text-gray-400">Rank By</span>
-              <button
-                onClick={() => setRegionalSortBy("placementRate")}
-                className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "placementRate" ? "bg-[#FFB800] text-gray-900" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-              >
-                Placement Rate
-              </button>
-              <button
-                onClick={() => setRegionalSortBy("completionRate")}
-                className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "completionRate" ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-              >
-                Completion Rate
-              </button>
-              <button
-                onClick={() => setRegionalSortBy("semesterOverSemesterPercent")}
-                className={`px-3 py-2 rounded-xl text-sm font-bold transition-colors ${regionalSortBy === "semesterOverSemesterPercent" ? "bg-green-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-              >
-                SoS Movement
-              </button>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4 md:p-8 pt-2">
-            {(sortedRegionalStats.length || 0) === 0 ? (
-              <p className="text-center text-gray-400 py-8">No regional data available yet.</p>
-            ) : (
-              <div className="space-y-4">
-                {sortedRegionalStats.map((region, index) => {
-                  const MovementIcon = region.movementDirection === "up"
-                    ? TrendingUp
-                    : region.movementDirection === "down"
-                      ? TrendingDown
-                      : Minus;
-
-                  const movementTone = region.movementDirection === "up"
-                    ? "text-green-700 bg-green-50"
-                    : region.movementDirection === "down"
-                      ? "text-red-700 bg-red-50"
-                      : "text-slate-700 bg-slate-50";
-
-                  return (
-                    <div key={region.region} className="rounded-[1.75rem] border border-gray-100 p-6 bg-gray-50 hover:bg-gray-100 transition-colors">
-                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
-                        <div className="flex items-center gap-4">
-                          <div className={`h-12 w-12 rounded-2xl flex items-center justify-center font-black text-lg ${index < 3 ? 'bg-[#FFB800] text-gray-900' : 'bg-white text-gray-700 border border-gray-200'}`}>
-                            #{index + 1}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-3 flex-wrap">
-                              <h3 className="text-xl font-black text-gray-900">{region.region || 'Unknown'}</h3>
-                              {region.needsIntervention && (
-                                <Badge className="bg-red-100 text-red-700 border-0">Needs intervention</Badge>
-                              )}
-                            </div>
-                            <p className="text-sm font-medium text-gray-500 mt-1">
-                              {region.institutionCount} institutions • {region.totalLearners} learners
-                            </p>
-                          </div>
-                        </div>
-                        <div className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl font-black ${movementTone}`}>
-                          <MovementIcon className="h-4 w-4" />
-                          <span>{region.movementDirection === "up" ? "+" : region.movementDirection === "down" ? "" : ""}{region.semesterOverSemesterPercent}%</span>
-                          <span className="text-xs font-bold opacity-70">SoS</span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
-                        <div className="bg-white p-4 rounded-2xl border border-gray-100">
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Placement Rate</span>
-                          <span className={`text-2xl font-black ${region.placementRate >= 70 ? 'text-green-600' : region.placementRate >= 45 ? 'text-amber-600' : 'text-red-600'}`}>
-                            {Math.round(region.placementRate)}%
-                          </span>
-                        </div>
-                        <div className="bg-white p-4 rounded-2xl border border-gray-100">
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Completion Rate</span>
-                          <span className={`text-2xl font-black ${region.completionRate >= 35 ? 'text-green-600' : region.completionRate >= 20 ? 'text-amber-600' : 'text-red-600'}`}>
-                            {Math.round(region.completionRate)}%
-                          </span>
-                        </div>
-                        <div className="bg-white p-4 rounded-2xl border border-gray-100">
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Current Semester</span>
-                          <span className="text-2xl font-black text-gray-900">{region.currentSemesterPlacements}</span>
-                        </div>
-                        <div className="bg-white p-4 rounded-2xl border border-gray-100">
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Previous Semester</span>
-                          <span className="text-2xl font-black text-gray-900">{region.previousSemesterPlacements}</span>
-                        </div>
-                        <div className="bg-white p-4 rounded-2xl border border-gray-100">
-                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Completed</span>
-                          <span className="text-2xl font-black text-indigo-600">{region.completed}</span>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
-                        <div>
-                          <div className="flex items-center justify-between text-xs font-black text-gray-400 uppercase tracking-widest mb-2">
-                            <span>Placement Progress</span>
-                            <span>{Math.round(region.placementRate)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2.5">
-                            <div className="bg-[#FFB800] h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(region.placementRate, 100)}%` }} />
-                          </div>
-                        </div>
-                        <div>
-                          <div className="flex items-center justify-between text-xs font-black text-gray-400 uppercase tracking-widest mb-2">
-                            <span>Completion Progress</span>
-                            <span>{Math.round(region.completionRate)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2.5">
-                            <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(region.completionRate, 100)}%` }} />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 rounded-2xl bg-white border border-gray-100 p-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <p className="text-xs font-black uppercase tracking-widest text-gray-400">4-Semester Placement Trend</p>
-                          <p className="text-xs font-bold text-gray-500">
-                            {region.sparkline?.[0]?.period} to {region.sparkline?.[(region.sparkline?.length || 1) - 1]?.period}
-                          </p>
-                        </div>
-                        <div className="h-20">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={region.sparkline}>
-                              <Tooltip
-                                cursor={false}
-                                contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)' }}
-                                labelStyle={{ color: '#6b7280', fontWeight: 700 }}
-                              />
-                              <Line
-                                type="monotone"
-                                dataKey="count"
-                                stroke={region.needsIntervention ? "#ef4444" : "#f59e0b"}
-                                strokeWidth={3}
-                                dot={false}
-                                activeDot={{ r: 4, fill: region.needsIntervention ? "#ef4444" : "#f59e0b" }}
-                              />
-                            </LineChart>
-                          </ResponsiveContainer>
-                        </div>
-                        <div className="mt-2 grid grid-cols-4 gap-2">
-                          {region.sparkline?.map((point) => (
-                            <div key={`${region.region}-${point.period}`} className="text-center">
-                              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{point.period}</p>
-                              <p className="text-xs font-bold text-gray-700 mt-1">{point.count}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {region.needsIntervention && region.interventionReasons.length > 0 && (
-                        <div className="mt-4 rounded-2xl bg-red-50 border border-red-100 px-4 py-3">
-                          <p className="text-xs font-black uppercase tracking-widest text-red-500 mb-2">Intervention Reasons</p>
-                          <div className="flex flex-wrap gap-2">
-                            {region.interventionReasons.map((reason) => (
-                              <Badge key={reason} className="bg-white text-red-700 border border-red-200">
-                                {reason}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      </> : null}
 
       {/* Regional / Institutional breakdown */}
-      <div className="grid gap-6 grid-cols-1 lg:grid-cols-2 mt-4">
+      <div className={`${showWorkspace("institutions") ? "grid" : "hidden"} gap-6 grid-cols-1 ${isRegionalAdmin ? "" : "lg:grid-cols-2"} mt-4`}>
          {/* Regional Stats */}
-         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden min-h-[500px]">
+         {!isRegionalAdmin ? <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden min-h-[500px]">
             <CardHeader className="p-4 md:p-8 pb-0">
               <div className="flex items-center justify-between">
                 <div>
@@ -1194,7 +1134,7 @@ export function AdminDashboardView({
                 ))}
               </div>
             </CardContent>
-         </Card>
+         </Card> : null}
 
          <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden min-h-[500px]">
             <CardHeader className="p-4 md:p-8 pb-0">
@@ -1207,10 +1147,16 @@ export function AdminDashboardView({
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="p-8">
+            <CardContent className="p-4 md:p-8">
               <div className="space-y-4 max-h-[350px] overflow-y-auto custom-scrollbar pr-2">
-                {adminData.institutionStats?.map((stat, i: number) => (
-                  <div key={i} className="flex justify-between items-center p-4 bg-gray-50 rounded-2xl">
+                {rankedInstitutionStats.map((stat) => (
+                  <button
+                    key={stat._id}
+                    type="button"
+                    onClick={() => openLearnerRegister({ institution: stat._id })}
+                    className="group flex w-full items-center justify-between rounded-2xl bg-gray-50 p-4 text-left transition hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    aria-label={`Open learners from ${stat._id}`}
+                  >
                     <span className="text-lg font-black text-gray-900 truncate pr-4">{stat._id}</span>
                     <div className="flex items-center gap-6 min-w-fit">
                         <div className="text-right">
@@ -1221,26 +1167,27 @@ export function AdminDashboardView({
                             <span className="text-xl font-black text-green-600 block">{stat.placed}</span>
                             <span className="text-[10px] uppercase tracking-widest text-green-400 font-bold">Placed</span>
                         </div>
+                      <ArrowRight className="h-4 w-4 text-indigo-500 transition-transform group-hover:translate-x-1" />
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </CardContent>
          </Card>
       </div>
 
-      {isRegionalAdmin && (
+      {isRegionalAdmin && dashboardWorkspace === "operations" && (
         <>
           <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
             <CardHeader className="p-4 md:p-8 pb-4">
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <CardTitle className="text-2xl font-black">Calendar & Deadline Risk</CardTitle>
                   <CardDescription className="text-base font-bold text-gray-400 mt-2">
                     Upcoming deadlines, overdue submissions, and institutions at risk in your region.
                   </CardDescription>
                 </div>
-                <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/semester-reports')}>
+                <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/semester-reports')}>
                   Open Reports
                 </Button>
               </div>
@@ -1339,14 +1286,14 @@ export function AdminDashboardView({
 
           <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
             <CardHeader className="p-4 md:p-8 pb-4">
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <CardTitle className="text-2xl font-black">Regional User Governance</CardTitle>
                   <CardDescription className="text-base font-bold text-gray-400 mt-2">
                     Role distribution, inactive accounts, orphaned institutions, and privileged-access anomalies in your region.
                   </CardDescription>
                 </div>
-                <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/users')}>
+                <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/users')}>
                   Open Users
                 </Button>
               </div>
@@ -1428,7 +1375,7 @@ export function AdminDashboardView({
           <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
             <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
               <CardHeader className="p-4 md:p-8 pb-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <CardTitle className="text-2xl font-black flex items-center gap-3">
                       <ShieldCheck className="h-6 w-6 text-indigo-600" />
@@ -1438,7 +1385,7 @@ export function AdminDashboardView({
                       Sensitive regional activity from the last 7 days.
                     </CardDescription>
                   </div>
-                  <Button data-help-id="dashboard-audit-link" variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/activity-log')}>
+                  <Button data-help-id="dashboard-audit-link" variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/activity-log')}>
                     Open Audit Log
                   </Button>
                 </div>
@@ -1481,7 +1428,7 @@ export function AdminDashboardView({
               </CardContent>
             </Card>
 
-            <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
+            <Card id="regional-data-quality" className="scroll-mt-4 bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
               <CardHeader className="p-4 md:p-8 pb-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -1523,9 +1470,9 @@ export function AdminDashboardView({
       )}
 
     {/* Institution Breakdown */}
-    <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden mt-6">
+    <Card className={`${showWorkspace("institutions") ? "block" : "hidden"} bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden mt-6`}>
       <CardHeader className="p-4 md:p-8 pb-0">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle className="text-2xl font-black">Institution Breakdown</CardTitle>
             <CardDescription className="text-base font-bold text-gray-400 mt-2">
@@ -1536,7 +1483,7 @@ export function AdminDashboardView({
             variant="outline" 
             size="sm"
             onClick={() => downloadCSV(adminData.institutionStats, 'institutional-breakdown')}
-            className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
+            className="w-full rounded-xl border-gray-200 hover:bg-gray-50 font-bold sm:w-auto"
           >
             <Download className="mr-2 h-4 w-4" /> Export
           </Button>
@@ -1553,8 +1500,14 @@ export function AdminDashboardView({
                 : 0;
 
               return (
-                <div key={inst._id} className="bg-gray-50 rounded-2xl p-6 hover:bg-gray-100 transition-colors">
-                  <div className="flex items-center justify-between mb-4">
+                <button
+                  key={inst._id}
+                  type="button"
+                  onClick={() => openLearnerRegister({ institution: inst._id })}
+                  className="group w-full rounded-2xl bg-gray-50 p-4 text-left transition-colors hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 md:p-6"
+                  aria-label={`Open learner records for ${inst._id}`}
+                >
+                  <div className="mb-4 flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <div className="p-2 bg-[#FFB800]/10 rounded-xl">
                         <Building2 className="h-5 w-5 text-[#FFB800]" />
@@ -1569,6 +1522,7 @@ export function AdminDashboardView({
                         </p>
                       </div>
                     </div>
+                    <ArrowRight className="mt-2 h-5 w-5 shrink-0 text-indigo-500 transition-transform group-hover:translate-x-1" />
                   </div>
                   
                   <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -1593,7 +1547,7 @@ export function AdminDashboardView({
                       <span className="text-lg font-black text-red-600">{inst.dropped}</span>
                     </div>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>

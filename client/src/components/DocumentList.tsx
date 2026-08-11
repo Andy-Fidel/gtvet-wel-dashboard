@@ -17,7 +17,7 @@ interface DocumentItem {
 
 interface DocumentListProps {
   documents: DocumentItem[];
-  onDelete: () => void;
+  onDelete?: () => void;
   loading?: boolean;
 }
 
@@ -40,7 +40,7 @@ export function DocumentList({ documents, onDelete, loading }: DocumentListProps
       const res = await authFetch(`/api/documents/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Delete failed')
       toast.success("Document deleted")
-      onDelete()
+      onDelete?.()
     } catch {
       toast.error("Failed to delete document")
     }
@@ -69,7 +69,7 @@ export function DocumentList({ documents, onDelete, loading }: DocumentListProps
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       {documents.map(doc => {
         const isImage = doc.fileType.startsWith('image/')
-        const canDelete = user?._id === doc.uploadedBy?._id || user?.role === 'Admin' || user?.role === 'SuperAdmin'
+        const canDelete = Boolean(onDelete) && (user?._id === doc.uploadedBy?._id || user?.role === 'Admin' || user?.role === 'SuperAdmin')
 
         return (
           <div

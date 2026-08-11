@@ -215,7 +215,7 @@ export default function Dashboard() {
                <Users className="w-10 h-10 text-white transform -rotate-3" />
             </div>
             <h3 className="text-2xl font-black text-gray-900 mb-2">Welcome to your Workspace!</h3>
-            <p className="text-gray-500 max-w-md mx-auto mb-8 font-medium">Your institution's dashboard is currently empty. Start by registering your first VTET learner to unlock analytics, placement tracking, and more.</p>
+            <p className="text-gray-500 max-w-md mx-auto mb-8 font-medium">Your institution's dashboard is currently empty. Start by registering your first TVET learner to unlock analytics, placement tracking, and more.</p>
             <Button onClick={() => navigate('/learners')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl shadow-xl shadow-indigo-600/20 font-black h-12 px-8 text-base">
                 <Plus className="mr-2 h-5 w-5" /> Register First Learner
             </Button>
