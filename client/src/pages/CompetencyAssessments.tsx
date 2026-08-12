@@ -905,7 +905,7 @@ export default function CompetencyAssessments() {
 
             {/* Form Dialog */}
             <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
+                <DialogContent className="max-h-[90vh] overflow-y-auto rounded-2xl border border-gray-200 bg-white p-0 text-gray-900 shadow-2xl sm:max-w-[800px] [&>button]:bg-gray-100 [&>button]:text-gray-600 [&>button:hover]:bg-gray-200 [&>button:hover]:text-gray-900">
                     <div className="p-8">
                         <DialogHeader className="mb-6">
                         <DialogTitle className="text-2xl font-black text-gray-900">{isEditingExistingAssessment ? 'Edit Assessment' : 'New Competency Assessment'}</DialogTitle>
@@ -913,7 +913,7 @@ export default function CompetencyAssessments() {
                             {isEditingExistingAssessment ? 'Update evaluation details.' : 'Register a new skills evaluation.'}
                         </DialogDescription>
                         </DialogHeader>
-                        <div className="bg-gray-900 p-8 rounded-2xl shadow-inner">
+                        <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
                             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                             <CompetencyAssessmentForm onSuccess={handleSuccess} initialData={editingAssessment as any} />
                         </div>
