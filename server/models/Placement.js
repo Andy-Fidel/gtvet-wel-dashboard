@@ -31,7 +31,7 @@ const placementSchema = new mongoose.Schema({
   },
 
   // Cross-region monitoring delegation
-  placementRegion: { type: String },
+  placementRegion: { type: String, trim: true },
   delegate: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   delegatedAt: { type: Date },
   delegatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -49,5 +49,6 @@ placementSchema.index({ endDate: 1, status: 1 });
 placementSchema.index({ trackingId: 1 }, { unique: true, sparse: true });
 placementSchema.index({ createdAt: 1 });
 placementSchema.index({ delegate: 1 });
+placementSchema.index({ placementRegion: 1 });
 
 export const Placement = mongoose.model('Placement', placementSchema);

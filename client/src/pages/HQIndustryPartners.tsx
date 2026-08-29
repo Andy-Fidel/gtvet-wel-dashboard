@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
-import { Building2, CheckCircle2, Clock3, Mail, MapPin, Search, UserPlus, XCircle } from "lucide-react"
+import { Building2, CheckCircle2, Clock3, Mail, MapPin, Plus, Search, UserPlus, XCircle } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import type { IndustryPartner } from "@/types/models"
 import { Button } from "@/components/ui/button"
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
+import { IndustryPartnerForm } from "./IndustryPartnerForm"
 
 type HQIndustryPartner = IndustryPartner & {
   district?: string
@@ -57,8 +58,9 @@ export default function HQIndustryPartners() {
   const [decisionType, setDecisionType] = useState<"approve" | "reject">("approve")
   const [decisionComment, setDecisionComment] = useState("")
   const [submittingDecision, setSubmittingDecision] = useState(false)
+  const [registrationOpen, setRegistrationOpen] = useState(false)
 
-  const fetchPartners = async () => {
+  const fetchPartners = useCallback(async () => {
     try {
       const params = new URLSearchParams()
       params.set("includeAll", "1")
@@ -84,11 +86,11 @@ export default function HQIndustryPartners() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [authFetch, page, pageSize, query, statusFilter])
 
   useEffect(() => {
     fetchPartners()
-  }, [authFetch, query, statusFilter, page, pageSize])
+  }, [fetchPartners])
 
   useEffect(() => {
     setPage(1)
@@ -144,13 +146,30 @@ export default function HQIndustryPartners() {
 
   const isApprovedPartner = (partner: HQIndustryPartner) => !partner.approvalStatus || partner.approvalStatus === "Approved"
 
+  const handleRegistrationSuccess = async () => {
+    setRegistrationOpen(false)
+    setStatusFilter("All")
+    setPage(1)
+    toast.success("Partner registered and approved", {
+      description: "The partner is now visible to regional and institution portals in its region.",
+    })
+    await fetchPartners()
+  }
+
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div>
           <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">HQ Industry Partner Registry</h2>
           <p className="text-muted-foreground mt-1">Review every registered partner and approve new submissions before they enter the placement network.</p>
         </div>
+        <Button
+          type="button"
+          onClick={() => setRegistrationOpen(true)}
+          className="h-12 rounded-2xl bg-[#FFB800] px-6 font-black text-gray-900 shadow-lg shadow-[#FFB800]/20 hover:bg-[#FFD700]"
+        >
+          <Plus className="mr-2 h-5 w-5" /> Register Partner
+        </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -312,6 +331,20 @@ export default function HQIndustryPartners() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={registrationOpen} onOpenChange={setRegistrationOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto rounded-[2rem] border-none bg-white p-0 sm:max-w-[640px]">
+          <div className="p-8">
+            <DialogHeader className="mb-6">
+              <DialogTitle className="text-2xl font-black">Register Industry Partner</DialogTitle>
+              <DialogDescription>
+                HQ registrations are approved immediately and become visible to regional and institution portals in the selected region.
+              </DialogDescription>
+            </DialogHeader>
+            <IndustryPartnerForm onSuccess={handleRegistrationSuccess} />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(decisionPartner)} onOpenChange={(open) => !open && setDecisionPartner(null)}>
         <DialogContent className="rounded-[2rem] border-none bg-white">

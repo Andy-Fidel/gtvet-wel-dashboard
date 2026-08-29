@@ -20,6 +20,12 @@ import { Loader2, Search, Building2, Terminal, ShieldAlert } from "lucide-react"
 import type { IndustryPartner, Learner } from '@/types/models'
 import { INDUSTRY_SECTORS } from "@/lib/constants"
 
+const GHANA_REGIONS = [
+  "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern",
+  "Greater Accra", "North East", "Northern", "Oti", "Savannah",
+  "Upper East", "Upper West", "Volta", "Western", "Western North"
+].sort()
+
 const formSchema = z.object({
   placementType: z.enum(["registered", "custom", "learner_sourced"]),
   partner: z.string().optional(),
@@ -37,6 +43,7 @@ const formSchema = z.object({
   sourceNotes: z.string().optional(),
   
   // Shared fields
+  placementRegion: z.string().min(1, "Placement region is required"),
   learners: z.array(z.string()).min(1, "At least one learner is required"),
   startDate: z.string().min(1, "Start date is required"),
   endDate: z.string().min(1, "End date is required"),
@@ -82,6 +89,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
     defaultValues: { 
         placementType: "registered",
         partner: "", 
+        placementRegion: "",
         learners: preSelectedLearnerId ? [preSelectedLearnerId] : [], 
         startDate: "", 
         endDate: "",
@@ -192,6 +200,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 learners: data.learners,
                 program: selectedLearnerInfo?.program || 'Unassigned',
                 requestedSlots: data.learners.length,
+                placementRegion: data.placementRegion,
                 startDate: data.startDate,
                 endDate: data.endDate
             }),
@@ -208,6 +217,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 companyName: data.companyName,
                 sector: data.sector,
                 location: data.location,
+                placementRegion: data.placementRegion,
                 supervisorName: data.supervisorName,
                 supervisorPhone: data.supervisorPhone,
                 supervisorEmail: data.supervisorEmail,
@@ -225,6 +235,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 learners: data.learners,
                 program: selectedLearnerInfo?.program || 'Unassigned',
                 requestedSlots: data.learners.length,
+                placementRegion: data.placementRegion,
                 startDate: data.startDate,
                 endDate: data.endDate,
                 sourceType: 'LearnerFound',
@@ -360,7 +371,16 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 <FormField control={form.control} name="partner" render={({ field }) => (
                     <FormItem>
                     <FormLabel className="text-sm font-semibold text-gray-900">Select Industry Partner *</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select
+                      onValueChange={(value) => {
+                        field.onChange(value)
+                        const selectedPartner = partners.find((partner) => partner._id === value)
+                        if (selectedPartner?.region) {
+                          form.setValue("placementRegion", selectedPartner.region, { shouldValidate: true })
+                        }
+                      }}
+                      defaultValue={field.value}
+                    >
                         <FormControl><SelectTrigger className="bg-white"><SelectValue placeholder="Select an available partner" /></SelectTrigger></FormControl>
                         <SelectContent className="max-h-60">
                             {partners.length === 0 && <div className="p-4 text-sm text-gray-500 text-center">No partners have available slots.</div>}
@@ -468,6 +488,28 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 ) : null}
             </div>
         )}
+
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-5">
+          <FormField control={form.control} name="placementRegion" render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-sm font-semibold text-gray-900">Placement Region *</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value}>
+                <FormControl>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="Select the region where the learner will be placed" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent className="max-h-60">
+                  {GHANA_REGIONS.map((region) => (
+                    <SelectItem key={region} value={region}>{region}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500">Choose the region of the actual workplace or placement site.</p>
+              <FormMessage />
+            </FormItem>
+          )} />
+        </div>
 
         <div className="bg-gray-50 border border-gray-100 p-5 p-0 rounded-2xl">
             <FormField control={form.control} name="learners" render={({ field }) => (

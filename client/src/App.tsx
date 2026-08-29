@@ -11,6 +11,7 @@ import { PageSkeleton } from '@/components/PageSkeleton';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { ADMIN_ROLES } from '@/lib/rbac';
 
 // Lazy-loaded page components (code-split by route)
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -39,6 +40,10 @@ const SupportCenter = lazy(() => import('@/pages/SupportCenter'));
 const ActivityLog = lazy(() => import('@/pages/ActivityLog'));
 const SettingsPage = lazy(() => import('@/pages/Settings'));
 const OfflineSync = lazy(() => import('@/pages/OfflineSync'));
+const Vacancies = lazy(() => import('@/pages/Vacancies'));
+const PartnerVacancies = lazy(() => import('@/pages/PartnerVacancies'));
+
+const VACANCY_VIEW_ROLES = ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'] as const;
 
 function HomeRoute() {
   const { user } = useAuth();
@@ -178,6 +183,15 @@ function App() {
                   </Suspense>
                 </ErrorBoundary>
               } />
+              <Route path="vacancies" element={
+                <ProtectedRoute requiredRoles={VACANCY_VIEW_ROLES}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <Vacancies />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              } />
               <Route path="calendar" element={
                 <ErrorBoundary>
                   <Suspense fallback={<PageSkeleton />}>
@@ -195,7 +209,7 @@ function App() {
                 </ProtectedRoute>
               } />
               <Route path="users" element={
-                <ProtectedRoute requiredRoles={['Admin', 'SuperAdmin', 'RegionalAdmin']}>
+                <ProtectedRoute requiredRoles={ADMIN_ROLES}>
                   <ErrorBoundary>
                     <Suspense fallback={<PageSkeleton />}>
                       <Users />
@@ -239,6 +253,15 @@ function App() {
                   </ErrorBoundary>
                 </ProtectedRoute>
               } />
+              <Route path="partner-vacancies" element={
+                <ProtectedRoute requiredRoles={['IndustryPartner']}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <PartnerVacancies />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              } />
               <Route path="guardian-dashboard" element={
                 <ProtectedRoute requiredRoles={['Guardian']}>
                   <ErrorBoundary>
@@ -263,11 +286,13 @@ function App() {
                 </ErrorBoundary>
               } />
               <Route path="settings" element={
-                <ErrorBoundary>
-                  <Suspense fallback={<PageSkeleton />}>
-                    <SettingsPage />
-                  </Suspense>
-                </ErrorBoundary>
+                <ProtectedRoute requiredRoles={ADMIN_ROLES}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <SettingsPage />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
               } />
               <Route path="offline-sync" element={
                 <ErrorBoundary>
@@ -284,7 +309,7 @@ function App() {
                 </ErrorBoundary>
               } />
               <Route path="activity-log" element={
-                <ProtectedRoute requiredRoles={['Admin', 'SuperAdmin', 'RegionalAdmin']}>
+                <ProtectedRoute requiredRoles={ADMIN_ROLES}>
                   <ErrorBoundary>
                     <Suspense fallback={<PageSkeleton />}>
                       <ActivityLog />

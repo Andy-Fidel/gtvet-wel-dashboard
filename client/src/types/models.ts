@@ -64,6 +64,32 @@ export interface IndustryPartner {
   programs: string[];
 }
 
+/** Student placement vacancy advertised by an industry partner */
+export interface Vacancy {
+  _id: string;
+  partner: IndustryPartner;
+  title: string;
+  program: string;
+  tradeArea?: string;
+  description: string;
+  requirements?: string;
+  region: string;
+  district?: string;
+  location?: string;
+  slots: number;
+  filledSlots: number;
+  applicationDeadline?: string;
+  placementStartDate?: string;
+  placementEndDate?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  status: 'Draft' | 'Published' | 'Closed';
+  publishedAt?: string;
+  closedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Institution entity */
 export interface Institution {
   _id: string;

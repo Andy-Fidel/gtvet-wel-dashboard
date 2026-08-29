@@ -22,6 +22,7 @@ import { Document } from '../models/Document.js';
 import { AccessApproval } from '../models/AccessApproval.js';
 import { GuardianConsent } from '../models/GuardianConsent.js';
 import { PlacementAgreement } from '../models/PlacementAgreement.js';
+import { Vacancy } from '../models/Vacancy.js';
 import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
@@ -36,6 +37,7 @@ import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
 
 const router = express.Router();
+const ADMIN_ROLES = ['Admin', 'RegionalAdmin', 'SuperAdmin'];
 
 // All routes below require authentication
 router.use(auth);
@@ -2151,7 +2153,7 @@ router.get('/ownership/users', async (req, res) => {
 
 // ==================== SETTINGS ====================
 
-router.get('/settings/notifications', async (req, res) => {
+router.get('/settings/notifications', requireRole(...ADMIN_ROLES), async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('notificationPreferences');
         res.json(user?.notificationPreferences || {});
@@ -2161,7 +2163,7 @@ router.get('/settings/notifications', async (req, res) => {
     }
 });
 
-router.get('/settings/notifications/whatsapp-status', async (req, res) => {
+router.get('/settings/notifications/whatsapp-status', requireRole(...ADMIN_ROLES), async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('phone notificationPreferences');
         res.json({
@@ -2176,7 +2178,7 @@ router.get('/settings/notifications/whatsapp-status', async (req, res) => {
     }
 });
 
-router.put('/settings/notifications', async (req, res) => {
+router.put('/settings/notifications', requireRole(...ADMIN_ROLES), async (req, res) => {
     try {
         const allowedKeys = [
             'inApp',
@@ -2222,7 +2224,7 @@ router.put('/settings/notifications', async (req, res) => {
     }
 });
 
-router.post('/settings/notifications/test-whatsapp', async (req, res) => {
+router.post('/settings/notifications/test-whatsapp', requireRole(...ADMIN_ROLES), async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('name phone notificationPreferences');
         if (!user) {
@@ -5416,11 +5418,20 @@ router.get('/institutions/:id/summary', requireRole('SuperAdmin', 'RegionalAdmin
                 { $limit: 5 },
             ]),
             IndustryPartner.countDocuments({
-                linkedInstitutions: institutionName,
                 status: 'Active',
-                $or: [
-                    { approvalStatus: 'Approved' },
-                    { approvalStatus: { $exists: false } },
+                $and: [
+                    {
+                        $or: [
+                            { linkedInstitutions: institutionName },
+                            { region: institution.region },
+                        ],
+                    },
+                    {
+                        $or: [
+                            { approvalStatus: 'Approved' },
+                            { approvalStatus: { $exists: false } },
+                        ],
+                    },
                 ],
             }),
             Learner.countDocuments({
@@ -9229,6 +9240,11 @@ router.post('/placements', async (req, res) => {
         const learnerIds = learners || (learner ? [learner] : []);
         const placementAcademicYear = placementData.academicYear || await resolveCurrentAcademicYear();
 
+        if (!placementData.placementRegion?.trim()) {
+            return res.status(400).json({ message: 'Placement region is required' });
+        }
+        placementData.placementRegion = placementData.placementRegion.trim();
+
         if (learnerIds.length === 0) {
             return res.status(400).json({ message: 'At least one learner must be selected' });
         }
@@ -10295,8 +10311,36 @@ router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'
 
         if (role) filter.role = role;
         if (status) filter.status = status;
-        if (institution) filter.institution = institution;
-        if (region) filter.region = region;
+
+        // Optional filters may narrow the caller's scope, but must never replace it.
+        if (institution) {
+            if (req.user.role === 'SuperAdmin') {
+                filter.institution = institution;
+            } else if (req.user.role === 'Admin') {
+                if (institution !== req.user.institution) {
+                    return res.status(403).json({ message: 'Forbidden: Institution is outside your scope' });
+                }
+                filter.institution = req.user.institution;
+            } else {
+                const allowedInstitutions = filter.institution?.$in || [];
+                if (!allowedInstitutions.includes(institution)) {
+                    return res.status(403).json({ message: 'Forbidden: Institution is outside your region' });
+                }
+                filter.institution = institution;
+            }
+        }
+
+        if (region) {
+            if (req.user.role === 'SuperAdmin') {
+                filter.region = region;
+            } else if (req.user.role === 'RegionalAdmin') {
+                if (region !== req.user.region) {
+                    return res.status(403).json({ message: 'Forbidden: Region is outside your scope' });
+                }
+            } else {
+                return res.status(403).json({ message: 'Forbidden: Regional filtering is unavailable at institution scope' });
+            }
+        }
         if (q) {
             const escapedSearch = String(q).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             if (escapedSearch) {
@@ -12193,6 +12237,212 @@ router.post('/admin/deadline-risk/notify', requireRole('SuperAdmin', 'RegionalAd
     }
 });
 
+// ==================== STUDENT VACANCIES ====================
+
+const getVacancyScope = async (user) => {
+    if (user.role === 'SuperAdmin') return {};
+    if (user.role === 'IndustryPartner') return { partner: getPartnerId(user) };
+    if (user.role === 'RegionalAdmin') return { region: user.region };
+
+    const institution = await Institution.findOne({ name: user.institution }).select('region').lean();
+    return { region: institution?.region || user.region || '__unassigned__' };
+};
+
+const notifyVacancyPublished = async (vacancy, partner, senderId) => {
+    const institutionNames = await Institution.find({ region: vacancy.region }).distinct('name');
+    const recipients = await User.find({
+        status: 'Active',
+        $or: [
+            { role: 'RegionalAdmin', region: vacancy.region },
+            { role: { $in: ['Admin', 'Manager'] }, institution: { $in: institutionNames } },
+        ],
+    }).distinct('_id');
+
+    await notifyUsers({
+        recipientIds: recipients,
+        sender: senderId,
+        type: 'partner',
+        title: `New student vacancy: ${vacancy.title}`,
+        message: `${partner.name} declared ${vacancy.slots} student placement slot${vacancy.slots === 1 ? '' : 's'} in ${vacancy.region}.`,
+        link: '/vacancies',
+        dedupeKey: `vacancy-published:${vacancy._id}`,
+    });
+};
+
+const normalizeVacancyPayload = (body, partner) => {
+    const slots = Number(body.slots);
+    if (!body.title?.trim() || !body.program?.trim() || !body.description?.trim()) {
+        return { error: 'Title, programme/trade, and description are required' };
+    }
+    if (!Number.isInteger(slots) || slots < 1 || slots > 10000) {
+        return { error: 'Available slots must be a whole number between 1 and 10,000' };
+    }
+
+    const parseOptionalDate = (value) => {
+        if (!value) return undefined;
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+    const applicationDeadline = parseOptionalDate(body.applicationDeadline);
+    const placementStartDate = parseOptionalDate(body.placementStartDate);
+    const placementEndDate = parseOptionalDate(body.placementEndDate);
+    if (applicationDeadline === null || placementStartDate === null || placementEndDate === null) {
+        return { error: 'One or more vacancy dates are invalid' };
+    }
+    if (placementStartDate && placementEndDate && placementEndDate < placementStartDate) {
+        return { error: 'Placement end date must be after the start date' };
+    }
+
+    return {
+        payload: {
+            title: body.title.trim(),
+            program: body.program.trim(),
+            tradeArea: body.tradeArea?.trim() || '',
+            description: body.description.trim(),
+            requirements: body.requirements?.trim() || '',
+            region: partner.region,
+            district: body.district?.trim() || partner.district || '',
+            location: body.location?.trim() || partner.location || partner.region,
+            slots,
+            applicationDeadline,
+            placementStartDate,
+            placementEndDate,
+            contactEmail: body.contactEmail?.trim() || partner.contactEmail || '',
+            contactPhone: body.contactPhone?.trim() || partner.contactPhone || '',
+        },
+    };
+};
+
+router.get('/vacancies', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'), async (req, res) => {
+    try {
+        const scope = await getVacancyScope(req.user);
+        const includeAll = req.query.includeAll === '1' || req.query.includeAll === 'true';
+        const requestedStatus = typeof req.query.status === 'string' ? req.query.status : '';
+        const filter = { ...scope };
+
+        if (req.user.role === 'IndustryPartner') {
+            if (['Draft', 'Published', 'Closed'].includes(requestedStatus)) filter.status = requestedStatus;
+        } else if (includeAll && ['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+            if (['Draft', 'Published', 'Closed'].includes(requestedStatus)) filter.status = requestedStatus;
+        } else {
+            filter.status = 'Published';
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            filter.$and = [
+                ...(filter.$and || []),
+                {
+                    $or: [
+                        { applicationDeadline: { $gte: today } },
+                        { applicationDeadline: { $exists: false } },
+                        { applicationDeadline: null },
+                    ],
+                },
+            ];
+        }
+
+        const vacancies = await Vacancy.find(filter)
+            .populate('partner', 'name sector region district location contactEmail contactPhone status approvalStatus')
+            .populate('postedBy', 'name role')
+            .sort({ publishedAt: -1, createdAt: -1 })
+            .lean();
+        res.json(vacancies);
+    } catch (error) {
+        console.error('Error fetching vacancies:', error);
+        res.status(500).json({ message: 'Error fetching vacancies' });
+    }
+});
+
+router.post('/vacancies', requireRole('IndustryPartner'), async (req, res) => {
+    try {
+        if (!canManagePartnerAssignments(req.user)) {
+            return res.status(403).json({ message: 'Only partner coordinators can declare vacancies' });
+        }
+        const partner = await IndustryPartner.findOne({
+            _id: getPartnerId(req.user),
+            status: 'Active',
+            $or: [
+                { approvalStatus: 'Approved' },
+                { approvalStatus: { $exists: false } },
+            ],
+        });
+        if (!partner) return res.status(409).json({ message: 'Only approved active partners can declare vacancies' });
+
+        const normalized = normalizeVacancyPayload(req.body, partner);
+        if (normalized.error) return res.status(400).json({ message: normalized.error });
+        const status = req.body.status === 'Published' ? 'Published' : 'Draft';
+        const vacancy = await Vacancy.create({
+            ...normalized.payload,
+            partner: partner._id,
+            postedBy: req.user._id,
+            status,
+            publishedAt: status === 'Published' ? new Date() : undefined,
+        });
+
+        await logAuditEvent({
+            req,
+            action: 'CREATE',
+            entityType: 'Vacancy',
+            entityId: vacancy._id,
+            summary: `${status === 'Published' ? 'Published' : 'Drafted'} student vacancy ${vacancy.title}`,
+            after: vacancy,
+        });
+        if (status === 'Published') await notifyVacancyPublished(vacancy, partner, req.user._id);
+
+        const populated = await Vacancy.findById(vacancy._id).populate('partner', 'name sector region district location contactEmail contactPhone');
+        res.status(201).json(populated);
+    } catch (error) {
+        console.error('Error creating vacancy:', error);
+        res.status(500).json({ message: 'Error creating vacancy' });
+    }
+});
+
+router.put('/vacancies/:id', requireRole('IndustryPartner'), async (req, res) => {
+    try {
+        if (!canManagePartnerAssignments(req.user)) {
+            return res.status(403).json({ message: 'Only partner coordinators can manage vacancies' });
+        }
+        const vacancy = await Vacancy.findOne({ _id: req.params.id, partner: getPartnerId(req.user) });
+        if (!vacancy) return res.status(404).json({ message: 'Vacancy not found' });
+        const partner = await IndustryPartner.findById(getPartnerId(req.user));
+        if (!partner) return res.status(404).json({ message: 'Industry partner not found' });
+
+        const normalized = normalizeVacancyPayload(req.body, partner);
+        if (normalized.error) return res.status(400).json({ message: normalized.error });
+        if (normalized.payload.slots < vacancy.filledSlots) {
+            return res.status(400).json({ message: 'Available slots cannot be lower than already filled slots' });
+        }
+        const nextStatus = ['Draft', 'Published', 'Closed'].includes(req.body.status) ? req.body.status : vacancy.status;
+        const isApprovedPartner = !partner.approvalStatus || partner.approvalStatus === 'Approved';
+        if (nextStatus === 'Published' && (partner.status !== 'Active' || !isApprovedPartner)) {
+            return res.status(409).json({ message: 'Only approved active partners can publish vacancies' });
+        }
+        const wasPublished = vacancy.status === 'Published';
+        const before = vacancy.toObject();
+        Object.assign(vacancy, normalized.payload, { status: nextStatus });
+        if (!wasPublished && nextStatus === 'Published') vacancy.publishedAt = new Date();
+        if (nextStatus === 'Closed') vacancy.closedAt = vacancy.closedAt || new Date();
+        if (nextStatus !== 'Closed') vacancy.closedAt = undefined;
+        await vacancy.save();
+
+        await logAuditEvent({
+            req,
+            action: nextStatus !== before.status ? 'STATUS_CHANGE' : 'UPDATE',
+            entityType: 'Vacancy',
+            entityId: vacancy._id,
+            summary: `Updated student vacancy ${vacancy.title}`,
+            before,
+            after: vacancy,
+        });
+        if (!wasPublished && nextStatus === 'Published') await notifyVacancyPublished(vacancy, partner, req.user._id);
+
+        const populated = await Vacancy.findById(vacancy._id).populate('partner', 'name sector region district location contactEmail contactPhone');
+        res.json(populated);
+    } catch (error) {
+        console.error('Error updating vacancy:', error);
+        res.status(500).json({ message: 'Error updating vacancy' });
+    }
+});
+
 // ==================== INDUSTRY PARTNERS ====================
 
 router.get('/industry-partners', async (req, res) => {
@@ -12207,28 +12457,53 @@ router.get('/industry-partners', async (req, res) => {
         const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
             ? Math.min(parsedPageSize, 100)
             : 24;
-        let filter = {};
+        const scopeClauses = [];
         if (req.user.role === 'RegionalAdmin') {
-            filter.region = req.user.region;
-        } else if (req.user.role === 'Admin' || req.user.role === 'Manager') {
-            filter.linkedInstitutions = req.user.institution;
+            scopeClauses.push({ region: req.user.region });
+        } else if (['Admin', 'Manager', 'Staff'].includes(req.user.role)) {
+            const institution = await Institution.findOne({ name: req.user.institution }).select('region').lean();
+            const institutionRegion = institution?.region || req.user.region;
+            const institutionScope = [{ linkedInstitutions: req.user.institution }];
+
+            if (institutionRegion) {
+                institutionScope.push({
+                    region: institutionRegion,
+                    $or: [
+                        { approvalStatus: 'Approved' },
+                        { approvalStatus: { $exists: false } },
+                    ],
+                });
+            }
+
+            scopeClauses.push({ $or: institutionScope });
         }
 
-        const summaryFilter = { ...filter };
+        const filter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
+        const summaryFilter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
 
         if (!includeAll) {
-            filter.$or = [
-                { approvalStatus: 'Approved' },
-                { approvalStatus: { $exists: false } },
+            filter.$and = [
+                ...(filter.$and || []),
+                {
+                    $or: [
+                        { approvalStatus: 'Approved' },
+                        { approvalStatus: { $exists: false } },
+                    ],
+                },
             ];
             filter.status = 'Active';
         }
 
         if (approvalStatus && includeAll) {
             if (approvalStatus === 'Approved') {
-                filter.$or = [
-                    { approvalStatus: 'Approved' },
-                    { approvalStatus: { $exists: false } },
+                filter.$and = [
+                    ...(filter.$and || []),
+                    {
+                        $or: [
+                            { approvalStatus: 'Approved' },
+                            { approvalStatus: { $exists: false } },
+                        ],
+                    },
                 ];
             } else {
                 filter.approvalStatus = approvalStatus;
@@ -13427,11 +13702,15 @@ router.post('/placement-requests', async (req, res) => {
             learners,
             program,
             requestedSlots,
+            placementRegion,
             startDate,
             endDate,
             sourceType,
             selfSourcedHost,
         } = req.body;
+        if (!placementRegion?.trim()) {
+            return res.status(400).json({ message: 'Placement region is required' });
+        }
         const readinessCheck = await assertLearnersReadyForPlacement(learners, req.user.institution);
         if (!readinessCheck.ok) {
             return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
@@ -13449,6 +13728,7 @@ router.post('/placement-requests', async (req, res) => {
                 learners,
                 program,
                 requestedSlots,
+                placementRegion: placementRegion.trim(),
                 startDate,
                 endDate,
                 submittedBy: req.user._id,
@@ -13504,6 +13784,7 @@ router.post('/placement-requests', async (req, res) => {
                 learners,
                 program,
                 requestedSlots,
+                placementRegion: placementRegion.trim(),
                 startDate,
                 endDate,
                 submittedBy: req.user._id,
@@ -13535,6 +13816,7 @@ router.post('/placement-requests', async (req, res) => {
                 endDate,
                 sector: partnerDoc.sector,
                 location: partnerDoc.location || partnerDoc.region,
+                placementRegion: placementRegion.trim(),
                 institution: req.user.institution,
                 status: 'Active'
             }));
@@ -13671,6 +13953,7 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
                 endDate: request.endDate,
                 sector: request.selfSourcedHost?.sector || request.program,
                 location: request.selfSourcedHost?.location || request.selfSourcedHost?.town || 'Not specified',
+                placementRegion: request.placementRegion,
                 supervisorName: request.selfSourcedHost?.contactPerson || '',
                 supervisorPhone: request.selfSourcedHost?.contactPhone || '',
                 supervisorEmail: request.selfSourcedHost?.contactEmail || '',

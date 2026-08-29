@@ -6,6 +6,7 @@ const placementRequestSchema = new mongoose.Schema({
   learners: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Learner' }],
   program: { type: String, required: true },
   requestedSlots: { type: Number, required: true },
+  placementRegion: { type: String, trim: true },
   sourceType: {
     type: String,
     enum: ['InstitutionFound', 'LearnerFound'],

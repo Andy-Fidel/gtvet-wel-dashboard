@@ -760,7 +760,7 @@ const guideDefinitions: GuideDefinition[] = [
     label: "Settings",
     launchPath: "/settings",
     catalogSummary: "Adjust notifications, personal preferences, and admin controls.",
-    roles: ALL_ROLES,
+    roles: ADMIN_ROLES,
     match: (pathname) => pathname === "/settings",
     steps: (role) => [
       {

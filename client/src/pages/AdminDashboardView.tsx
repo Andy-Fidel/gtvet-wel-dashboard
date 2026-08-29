@@ -1,7 +1,7 @@
 import { useMemo } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { formatDistanceToNow } from "date-fns"
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, Cell, PieChart, Pie, Line, LineChart } from "recharts"
+import { ResponsiveContainer, XAxis, YAxis, Tooltip, Cell, PieChart, Pie, Line, LineChart } from "recharts"
 import { Users, Briefcase, Clock, ArrowUpRight, Download, Building2, ClipboardList, FileText, TrendingUp, GraduationCap, CheckCircle2, LifeBuoy, ShieldCheck, AlertTriangle, ArrowRight } from "lucide-react"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -950,7 +950,7 @@ export function AdminDashboardView({
         </CardHeader>
         <CardContent className="p-4 md:p-8">
           <ResponsiveContainer width="100%" height={350}>
-            <BarChart data={adminData.placementTrend || []}>
+            <LineChart data={adminData.placementTrend || []}>
               <XAxis
                 dataKey="name"
                 stroke="#888888"
@@ -966,16 +966,20 @@ export function AdminDashboardView({
                 allowDecimals={false}
               />
               <Tooltip
-                cursor={{ fill: 'transparent' }}
+                cursor={{ stroke: '#c7d2fe', strokeWidth: 1 }}
                 contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                 formatter={(value: number) => [value, 'Placements']}
               />
-              <Bar dataKey="count" radius={[8, 8, 0, 0]}>
-                {(adminData.placementTrend || []).map((_: unknown, index: number) => (
-                  <Cell key={`cell-${index}`} fill={index % 2 === 0 ? '#4f46e5' : '#8b5cf6'} />
-                ))}
-              </Bar>
-            </BarChart>
+              <Line
+                type="monotone"
+                dataKey="count"
+                name="Placements"
+                stroke="#4f46e5"
+                strokeWidth={3}
+                dot={{ r: 4, fill: '#ffffff', stroke: '#4f46e5', strokeWidth: 2 }}
+                activeDot={{ r: 6, fill: '#8b5cf6', stroke: '#ffffff', strokeWidth: 2 }}
+              />
+            </LineChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
