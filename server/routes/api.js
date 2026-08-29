@@ -8776,7 +8776,7 @@ router.get('/placements', async (req, res) => {
 
     const placementsQuery = Placement.find(filter)
       .select('learner trackingId academicYear companyName partner sector location supervisorName supervisorPhone supervisorEmail startDate endDate status closedAt closedBy closureReason closureNote owner institution coordinates placementRegion delegate delegatedAt delegatedBy delegateInstitution createdAt updatedAt')
-      .populate('learner', 'name trackingId')
+      .populate('learner', 'firstName middleName lastName trackingId')
       .populate('owner', 'name role institution')
       .populate('partner', 'name')
       .populate('delegate', 'name role institution')
@@ -8957,6 +8957,9 @@ router.get('/placements', async (req, res) => {
 
         return {
           ...placement,
+          learner: placement.learner
+            ? { ...placement.learner, name: buildLearnerDisplayName(placement.learner) }
+            : placement.learner,
           messageCount: stats?.messageCount || 0,
           lastMessageAt: stats?.lastMessageAt || null,
           unreadMessageCount: stats?.unreadCount || 0,

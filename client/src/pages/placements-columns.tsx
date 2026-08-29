@@ -40,6 +40,9 @@ export type Placement = {
     learner: {
         _id: string
         name: string
+        firstName?: string
+        middleName?: string
+        lastName?: string
         trackingId: string
     }
     companyName: string
@@ -89,6 +92,12 @@ export type Placement = {
     delegateInstitution?: string
     delegatedAt?: string
 }
+
+const getLearnerName = (learner: Placement['learner']) => (
+  learner?.name
+  || [learner?.lastName, learner?.middleName, learner?.firstName].filter(Boolean).join(' ')
+  || 'N/A'
+)
 
 const gradeColors: Record<string, string> = {
   A: 'bg-emerald-500 text-white hover:bg-emerald-600',
@@ -220,15 +229,12 @@ function ClosureSummary({ placement }: { placement: Placement }) {
 export const columns: ColumnDef<Placement>[] = [
   {
     id: "name",
-    accessorFn: (row) => row.learner?.name,
+    accessorFn: (row) => getLearnerName(row.learner),
     header: "Learner",
     cell: ({ row }) => {
         const data = row.original;
         return (
-            <div className="flex flex-col">
-                <span className="font-bold text-white">{data.learner?.name || "N/A"}</span>
-                <span className="text-xs font-mono text-[#FFB800]">{data.learner?.trackingId || "N/A"}</span>
-            </div>
+            <span className="font-bold text-black">{getLearnerName(data.learner)}</span>
         )
     }
   },
