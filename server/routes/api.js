@@ -693,6 +693,7 @@ const buildPlacementEligibility = ({
 
   const base = {
     isEligible: false,
+    windowOverrideAllowed: false,
     calendarType: null,
     yearGroup: normalizedYear || '',
     allowedWindowStatus: null,
@@ -727,6 +728,7 @@ const buildPlacementEligibility = ({
   if (!preferredWindow) {
     return {
       ...base,
+      windowOverrideAllowed: true,
       reason: `No WEL window is configured for ${normalizedYear} in the current academic calendar.`,
     };
   }
@@ -759,6 +761,7 @@ const buildPlacementEligibility = ({
   if (preferredWindow.status === 'upcoming') {
     return {
       ...base,
+      windowOverrideAllowed: true,
       calendarType: preferredWindow.institutionCalendarType || null,
       schedule,
       reason: `${normalizedYear} is scheduled for WEL from ${formatScheduleDate(preferredWindow.startDate)} to ${formatScheduleDate(preferredWindow.endDate)}. Placement initiation opens ${WEL_PREPARATION_WINDOW_DAYS} days before the window starts.`,
@@ -767,6 +770,7 @@ const buildPlacementEligibility = ({
 
   return {
     ...base,
+    windowOverrideAllowed: true,
     calendarType: preferredWindow.institutionCalendarType || null,
     schedule,
     reason: `${normalizedYear} WEL for this academic cycle closed on ${formatScheduleDate(preferredWindow.endDate)}.`,
@@ -7089,7 +7093,8 @@ router.get('/learners/placement-options', async (req, res) => {
           hasActivePlacement: activePlacementLearnerIds.has(learner._id.toString()),
         };
       })
-      .filter((learner) => learner.placementEligibility?.isEligible);
+      .filter((learner) => learner.placementEligibility?.isEligible
+        || (req.user.role === 'Admin' && learner.placementEligibility?.windowOverrideAllowed));
 
     res.json(items);
   } catch (error) {
@@ -9239,7 +9244,7 @@ router.post('/placements', async (req, res) => {
         if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
         }
-        const { learner, learners, ...placementData } = req.body;
+        const { learner, learners, overrideWelWindow = false, ...placementData } = req.body;
         const learnerIds = learners || (learner ? [learner] : []);
         const placementAcademicYear = placementData.academicYear || await resolveCurrentAcademicYear();
 
@@ -9285,9 +9290,14 @@ router.post('/placements', async (req, res) => {
             }))
             .filter((entry) => !entry.eligibility.isEligible);
 
-        if (blockedLearners.length > 0) {
+        const canUseWindowOverride = req.user.role === 'Admin' && overrideWelWindow === true;
+        const nonOverridableLearners = blockedLearners.filter((entry) =>
+            !canUseWindowOverride || !entry.eligibility.windowOverrideAllowed
+        );
+
+        if (nonOverridableLearners.length > 0) {
             return res.status(400).json({
-                message: blockedLearners.map((entry) => `${entry.learnerDoc.name}: ${entry.eligibility.reason}`).join(' | '),
+                message: nonOverridableLearners.map((entry) => `${entry.learnerDoc.name}: ${entry.eligibility.reason}`).join(' | '),
             });
         }
 
@@ -9332,7 +9342,12 @@ router.post('/placements', async (req, res) => {
             entityType: 'Placement',
             entityId: createdPlacements.map((placement) => placement._id).join(','),
             summary: `Created ${createdPlacements.length} placement record(s)`,
-            metadata: { placementIds: createdPlacements.map((placement) => placement._id), learnerIds },
+            metadata: {
+                placementIds: createdPlacements.map((placement) => placement._id),
+                learnerIds,
+                welWindowOverride: canUseWindowOverride && blockedLearners.length > 0,
+                overriddenLearnerIds: blockedLearners.map((entry) => entry.learnerDoc._id),
+            },
             after: createdPlacements,
         });
 
@@ -13710,6 +13725,7 @@ router.post('/placement-requests', async (req, res) => {
             endDate,
             sourceType,
             selfSourcedHost,
+            overrideWelWindow = false,
         } = req.body;
         if (!placementRegion?.trim()) {
             return res.status(400).json({ message: 'Placement region is required' });
@@ -13717,6 +13733,38 @@ router.post('/placement-requests', async (req, res) => {
         const readinessCheck = await assertLearnersReadyForPlacement(learners, req.user.institution);
         if (!readinessCheck.ok) {
             return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
+        }
+
+        const placementAcademicYear = startDate
+          ? resolveAcademicYearFromDate(startDate)
+          : await resolveCurrentAcademicYear();
+        const activePlacements = await Placement.find({ learner: { $in: learners }, status: 'Active' }).select('learner');
+        const activePlacementLearnerIds = new Set(activePlacements.map((placement) => placement.learner.toString()));
+        const welWindowsByInstitution = new Map();
+        await Promise.all([...new Set(readinessCheck.learners.map((item) => item.institution).filter(Boolean))].map(async (institutionName) => {
+            welWindowsByInstitution.set(
+                institutionName,
+                await getInstitutionWELWindows({ institutionName, academicYear: placementAcademicYear })
+            );
+        }));
+        const blockedLearners = readinessCheck.learners
+          .map((learnerDoc) => ({
+              learnerDoc,
+              eligibility: buildPlacementEligibility({
+                  learner: learnerDoc,
+                  hasActivePlacement: activePlacementLearnerIds.has(learnerDoc._id.toString()),
+                  welWindows: welWindowsByInstitution.get(learnerDoc.institution) || [],
+              }),
+          }))
+          .filter((entry) => !entry.eligibility.isEligible);
+        const canUseWindowOverride = req.user.role === 'Admin' && overrideWelWindow === true;
+        const nonOverridableLearners = blockedLearners.filter((entry) =>
+            !canUseWindowOverride || !entry.eligibility.windowOverrideAllowed
+        );
+        if (nonOverridableLearners.length > 0) {
+            return res.status(400).json({
+                message: nonOverridableLearners.map((entry) => `${entry.learnerDoc.name}: ${entry.eligibility.reason}`).join(' | '),
+            });
         }
 
         const normalizedSourceType = sourceType === 'LearnerFound' ? 'LearnerFound' : 'InstitutionFound';
@@ -13758,7 +13806,11 @@ router.post('/placement-requests', async (req, res) => {
                 entityId: newRequest._id,
                 summary: `Submitted learner-sourced placement lead for ${requestedSlots} learner(s)`,
                 after: newRequest,
-                metadata: { sourceType: 'LearnerFound' },
+                metadata: {
+                    sourceType: 'LearnerFound',
+                    welWindowOverride: canUseWindowOverride && blockedLearners.length > 0,
+                    overriddenLearnerIds: blockedLearners.map((entry) => entry.learnerDoc._id),
+                },
             });
 
             return res.status(201).json(newRequest);
@@ -13778,9 +13830,6 @@ router.post('/placement-requests', async (req, res) => {
         }
 
         try {
-            const placementAcademicYear = startDate
-              ? resolveAcademicYearFromDate(startDate)
-              : await resolveCurrentAcademicYear();
             const newRequest = new PlacementRequest({
                 institution: req.user.institution,
                 partner,
@@ -13802,6 +13851,10 @@ router.post('/placement-requests', async (req, res) => {
                 entityId: newRequest._id,
                 summary: `Processed placement request for ${requestedSlots} learner(s)`,
                 after: newRequest,
+                metadata: {
+                    welWindowOverride: canUseWindowOverride && blockedLearners.length > 0,
+                    overriddenLearnerIds: blockedLearners.map((entry) => entry.learnerDoc._id),
+                },
             });
 
             // Update partner slot capacity
@@ -13840,7 +13893,12 @@ router.post('/placement-requests', async (req, res) => {
                 entityType: 'Placement',
                 entityId: createdPlacements.map((placement) => placement._id).join(','),
                 summary: `Created ${createdPlacements.length} placement(s) from approved partner request`,
-                metadata: { placementRequestId: newRequest._id, learnerCount: createdPlacements.length },
+                metadata: {
+                    placementRequestId: newRequest._id,
+                    learnerCount: createdPlacements.length,
+                    welWindowOverride: canUseWindowOverride && blockedLearners.length > 0,
+                    overriddenLearnerIds: blockedLearners.map((entry) => entry.learnerDoc._id),
+                },
                 after: createdPlacements,
             });
 

@@ -724,7 +724,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context) {
-    authContextGlobal.__gtvetsAuthContextValue__ = context;
     return context;
   }
 

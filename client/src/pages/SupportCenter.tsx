@@ -16,7 +16,7 @@ import { DocumentList } from "@/components/DocumentList"
 import { DocumentUpload } from "@/components/DocumentUpload"
 import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
 import { clearOfflineConflictBridge, getOfflineConflictBridge } from "@/lib/offlineConflictBridge"
-import { getGuideCatalog } from "@/components/HelpWizard"
+import { GuideCatalog } from "@/components/HelpWizard"
 
 type RoleKey = "SuperAdmin" | "RegionalAdmin" | "Admin" | "Manager" | "Staff" | "IndustryPartner" | "Guardian"
 type TicketStatus = "Open" | "InProgress" | "Resolved" | "Closed"
@@ -352,19 +352,6 @@ export default function SupportCenter() {
   }, [tickets])
 
   const visibleGuides = ROLE_GUIDES[role] || ROLE_GUIDES.Staff
-  const guideCatalog = useMemo(() => getGuideCatalog(role), [role])
-  const visibleGuideCatalog = useMemo(() => {
-    const query = guideSearch.trim().toLowerCase()
-    return guideCatalog.filter((guide) => {
-      const matchesCategory = guideCategory === ALL_GUIDE_CATEGORIES || guide.category === guideCategory
-      const matchesQuery =
-        !query ||
-        guide.label.toLowerCase().includes(query) ||
-        guide.catalogSummary.toLowerCase().includes(query) ||
-        guide.category.toLowerCase().includes(query)
-      return matchesCategory && matchesQuery
-    })
-  }, [guideCatalog, guideCategory, guideSearch])
 
   const visibleTickets = useMemo(() => {
     if (!focusedTicket) return tickets
@@ -715,30 +702,49 @@ export default function SupportCenter() {
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {visibleGuideCatalog.map((guide) => (
-                  <div key={guide.key} className="rounded-2xl border border-amber-200 bg-white p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="font-black text-slate-900">{guide.label}</p>
-                      <Badge className="bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100">{guide.category}</Badge>
-                    </div>
-                    <p className="mt-2 min-h-[60px] text-sm text-slate-600">{guide.catalogSummary}</p>
-                    <Button
-                      variant="outline"
-                      className="mt-4 w-full rounded-xl border-amber-200 text-amber-700 hover:bg-amber-50"
-                      onClick={() => navigate(`${guide.launchPath}?help=1&guide=${guide.key}&restart=1`)}
-                    >
-                      <ArrowUpRight className="mr-2 h-4 w-4" />
-                      Open Walkthrough
-                    </Button>
-                  </div>
-                ))}
-                </div>
-                {visibleGuideCatalog.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-amber-200 bg-white p-8 text-center text-sm text-slate-500">
-                    No walkthroughs match that filter.
-                  </div>
-                ) : null}
+                <GuideCatalog role={role}>
+                  {(guideCatalog) => {
+                    const query = guideSearch.trim().toLowerCase()
+                    const visibleGuideCatalog = guideCatalog.filter((guide) => {
+                      const matchesCategory = guideCategory === ALL_GUIDE_CATEGORIES || guide.category === guideCategory
+                      const matchesQuery =
+                        !query ||
+                        guide.label.toLowerCase().includes(query) ||
+                        guide.catalogSummary.toLowerCase().includes(query) ||
+                        guide.category.toLowerCase().includes(query)
+                      return matchesCategory && matchesQuery
+                    })
+
+                    return (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                          {visibleGuideCatalog.map((guide) => (
+                            <div key={guide.key} className="rounded-2xl border border-amber-200 bg-white p-4 shadow-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="font-black text-slate-900">{guide.label}</p>
+                                <Badge className="bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100">{guide.category}</Badge>
+                              </div>
+                              <p className="mt-2 min-h-[60px] text-sm text-slate-600">{guide.catalogSummary}</p>
+                              <Button
+                                variant="outline"
+                                className="mt-4 w-full rounded-xl border-amber-200 text-amber-700 hover:bg-amber-50"
+                                onClick={() => navigate(`${guide.launchPath}?help=1&guide=${guide.key}&restart=1`)}
+                              >
+                                <ArrowUpRight className="mr-2 h-4 w-4" />
+                                Open Walkthrough
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        {visibleGuideCatalog.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed border-amber-200 bg-white p-8 text-center text-sm text-slate-500">
+                            No walkthroughs match that filter.
+                          </div>
+                        ) : null}
+                      </>
+                    )
+                  }}
+                </GuideCatalog>
               </CardContent>
             </Card>
 

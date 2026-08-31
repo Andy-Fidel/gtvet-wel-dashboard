@@ -268,6 +268,7 @@ interface ProfileData {
   }>;
   placementEligibility?: {
     isEligible: boolean
+    windowOverrideAllowed?: boolean
     reason: string
     allowedWindowStatus?: string | null
     calendarType?: string | null
@@ -478,7 +479,8 @@ export default function LearnerProfile() {
     && !isOversightReadOnly
     && !activePlacement
     && ['Active', 'Graduating'].includes(learner.academicStatus || 'Active')
-    && placementEligibility?.isEligible !== false
+    && (placementEligibility?.isEligible !== false
+      || (user?.role === 'Admin' && placementEligibility?.windowOverrideAllowed === true))
   const activeAgreementSummary = activePlacement?.agreementSummary || null
 
   const formatMissingField = (field: string) => {

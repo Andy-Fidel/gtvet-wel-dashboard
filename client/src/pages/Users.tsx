@@ -4,7 +4,7 @@ import {
 } from "@tanstack/react-table"
 
 import { Button } from "@/components/ui/button"
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, type ComponentProps } from "react"
 import { AlertTriangle, Plus, ShieldAlert, Users as UsersIcon, X } from "lucide-react"
 import {
   Dialog,
@@ -24,6 +24,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+
+type UserFormInitialData = NonNullable<ComponentProps<typeof UserForm>["initialData"]>
+
+const toUserFormInitialData = (user: User): UserFormInitialData => ({
+    ...user,
+    partnerId: user.partnerId?._id || "",
+    linkedLearners: user.linkedLearners?.map((learner) => learner._id) || [],
+})
 
 interface DeactivationImpact {
     message: string
@@ -185,7 +193,7 @@ export default function Users() {
         requestType: "Other",
         priority: "Medium",
     })
-    const [userFormPrefill, setUserFormPrefill] = useState<Record<string, unknown> | null>(null)
+    const [userFormPrefill, setUserFormPrefill] = useState<UserFormInitialData | null>(null)
     const [approvalDecisionOpen, setApprovalDecisionOpen] = useState(false)
     const [selectedApproval, setSelectedApproval] = useState<AccessApprovalQueueItem | null>(null)
     const [approvalDecision, setApprovalDecision] = useState<"Approved" | "Rejected">("Approved")
@@ -215,7 +223,7 @@ export default function Users() {
         })
     }
 
-    const openPrefilledUserForm = (prefill: Record<string, unknown>) => {
+    const openPrefilledUserForm = (prefill: UserFormInitialData) => {
         setEditingUser(null)
         setImplementationApprovalId(null)
         setUserFormPrefill(prefill)
@@ -360,6 +368,8 @@ export default function Users() {
         if (createMode !== "guardian" || !linkedLearnerId || open || editingUser) return
 
         openPrefilledUserForm({
+            name: "",
+            email: "",
             role: "Guardian",
             status: "Active",
             linkedLearners: [linkedLearnerId],
@@ -1654,7 +1664,7 @@ export default function Users() {
                                         : 'Enter the details of the new system user.'}
                             </DialogDescription>
                             </DialogHeader>
-                            <UserForm onSuccess={handleSuccess} initialData={(editingUser as any) || userFormPrefill || undefined} />
+                            <UserForm onSuccess={handleSuccess} initialData={editingUser ? toUserFormInitialData(editingUser) : userFormPrefill || undefined} />
                         </DialogContent>
                     </Dialog>
                 </div>

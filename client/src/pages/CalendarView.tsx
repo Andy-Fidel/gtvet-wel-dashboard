@@ -69,7 +69,6 @@ export default function CalendarView() {
       end: endDate.toISOString(),
     })
 
-    setLoading(true)
     authFetch(`/api/calendar/events?${params.toString()}`)
       .then(async (res) => {
         if (!res.ok) {
@@ -113,9 +112,18 @@ export default function CalendarView() {
     })
   }
 
-  const nextMonth = () => setCurrentMonth(addMonths(currentMonth, 1))
-  const prevMonth = () => setCurrentMonth(subMonths(currentMonth, 1))
-  const goToToday = () => setCurrentMonth(new Date())
+  const nextMonth = () => {
+    setLoading(true)
+    setCurrentMonth((month) => addMonths(month, 1))
+  }
+  const prevMonth = () => {
+    setLoading(true)
+    setCurrentMonth((month) => subMonths(month, 1))
+  }
+  const goToToday = () => {
+    setLoading(true)
+    setCurrentMonth(new Date())
+  }
 
   const isCurrentMonthToday = isSameMonth(currentMonth, new Date())
 

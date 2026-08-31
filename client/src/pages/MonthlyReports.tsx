@@ -51,7 +51,7 @@ export type MonthlyReport = {
     }
 }
 
-export const columns: ColumnDef<MonthlyReport>[] = [
+const columns: ColumnDef<MonthlyReport>[] = [
   {
       accessorKey: "weekEnding",
       header: "Week Ending",

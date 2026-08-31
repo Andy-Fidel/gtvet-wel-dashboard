@@ -206,7 +206,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         {selectedLearner && user?.institution && selectedLearner.region !== undefined && (
           (() => {
             // Check if learner belongs to a different institution (delegate scenario)
-            const learnerInst = (selectedLearner as any).institution;
+            const learnerInst = selectedLearner.institution;
             if (learnerInst && learnerInst !== user.institution) {
               return (
                 <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 rounded-xl border border-amber-200">

@@ -28,6 +28,7 @@ export interface Learner {
   };
   placementEligibility?: {
     isEligible: boolean;
+    windowOverrideAllowed?: boolean;
     reason: string;
     allowedWindowStatus?: string | null;
     calendarType?: string | null;

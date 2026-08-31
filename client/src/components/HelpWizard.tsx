@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useLocation } from "react-router-dom"
 import { ArrowLeft, ArrowRight, BookOpenText, CircleHelp, Sparkles } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
@@ -821,7 +821,7 @@ function resolveGuide(pathname: string, role?: AppRole) {
   return guideDefinitions.find((guide) => guide.match(pathname, role)) || null
 }
 
-export function getGuideCatalog(role?: AppRole): GuideCatalogItem[] {
+function getGuideCatalog(role?: AppRole): GuideCatalogItem[] {
   return guideDefinitions
     .filter((guide) => guide.launchPath && (!guide.roles || (role ? guide.roles.includes(role) : false)))
     .map((guide) => ({
@@ -842,6 +842,17 @@ export function getGuideCatalog(role?: AppRole): GuideCatalogItem[] {
                   ? "Personal"
                   : "Operations",
     }))
+}
+
+export function GuideCatalog({
+  role,
+  children,
+}: {
+  role?: AppRole
+  children: (guides: GuideCatalogItem[]) => ReactNode
+}) {
+  const guides = useMemo(() => getGuideCatalog(role), [role])
+  return <>{children(guides)}</>
 }
 
 export function HelpWizard() {
@@ -892,8 +903,8 @@ export function HelpWizard() {
 
   useEffect(() => {
     if (!open || !currentStep?.targetId) {
-      setTargetRect(null)
-      return
+      const rafId = window.requestAnimationFrame(() => setTargetRect(null))
+      return () => window.cancelAnimationFrame(rafId)
     }
 
     if (currentStep.activateTargetId) {
@@ -934,14 +945,12 @@ export function HelpWizard() {
   }, [open, currentStep?.targetId, currentStep?.activateTargetId, currentStep?.activateMode, currentStepIndex, guide?.key, location.pathname, activatedSteps])
 
   useEffect(() => {
-    if (!guide?.key || !user?.role) {
-      setCurrentStepIndex(0)
-      return
-    }
-
-    const storedIndex = Number(window.localStorage.getItem(buildProgressKey(user.role, guide.key)) || "0")
+    const storedIndex = guide?.key && user?.role
+      ? Number(window.localStorage.getItem(buildProgressKey(user.role, guide.key)) || "0")
+      : 0
     const nextIndex = Number.isFinite(storedIndex) ? Math.max(0, Math.min(storedIndex, Math.max(steps.length - 1, 0))) : 0
-    setCurrentStepIndex(nextIndex)
+    const rafId = window.requestAnimationFrame(() => setCurrentStepIndex(nextIndex))
+    return () => window.cancelAnimationFrame(rafId)
   }, [guide?.key, location.pathname, user?.role, steps.length])
 
   useEffect(() => {
@@ -963,11 +972,14 @@ export function HelpWizard() {
     const params = new URLSearchParams(location.search)
     if (params.get("help") !== "1" || params.get("guide") !== guide.key) return
 
-    if (params.get("restart") === "1") {
-      resetProgress()
+    const shouldRestart = params.get("restart") === "1"
+    if (shouldRestart && user?.role) {
+      window.localStorage.removeItem(buildProgressKey(user.role, guide.key))
     }
-
-    setOpen(true)
+    const rafId = window.requestAnimationFrame(() => {
+      if (shouldRestart) setCurrentStepIndex(0)
+      setOpen(true)
+    })
 
     params.delete("help")
     params.delete("guide")
@@ -976,7 +988,8 @@ export function HelpWizard() {
     const nextSearch = params.toString()
     const nextUrl = `${location.pathname}${nextSearch ? `?${nextSearch}` : ""}${location.hash || ""}`
     window.history.replaceState({}, "", nextUrl)
-  }, [guide?.key, location.pathname, location.search, location.hash])
+    return () => window.cancelAnimationFrame(rafId)
+  }, [guide, location.pathname, location.search, location.hash, user?.role])
 
   useEffect(() => {
     if (!open) return

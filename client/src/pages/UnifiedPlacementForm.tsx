@@ -80,7 +80,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const [partners, setPartners] = useState<IndustryPartner[]>([])
   const [learners, setLearners] = useState<Learner[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  const { authFetch } = useAuth()
+  const [overrideWelWindow, setOverrideWelWindow] = useState(false)
+  const { authFetch, user } = useAuth()
 
   const preSelectedLearnerId = initialData?.learner;
 
@@ -154,6 +155,12 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   }, [learners, searchQuery]);
 
   const selectedLearnerIds = form.watch("learners")
+  const selectedWindowBlockedLearners = useMemo(() => learners.filter((learner) =>
+      selectedLearnerIds.includes(learner._id) && learner.placementEligibility && !learner.placementEligibility.isEligible
+  ), [learners, selectedLearnerIds])
+  const canOverrideSelectedWindows = user?.role === 'Admin'
+      && selectedWindowBlockedLearners.length > 0
+      && selectedWindowBlockedLearners.every((learner) => learner.placementEligibility?.windowOverrideAllowed)
 
   const formatMissingField = (field: string) => {
       if (field === 'requiredDocuments') return 'required documents'
@@ -172,6 +179,15 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
     );
     if (blockedLearners.length > 0) {
         toast.error(`Complete intake readiness first: ${blockedLearners.map((learner) => learner.name).join(", ")}`);
+        return;
+    }
+
+    if (selectedWindowBlockedLearners.length > 0 && !canOverrideSelectedWindows) {
+        toast.error(`Placement is blocked by the WEL cohort calendar: ${selectedWindowBlockedLearners.map((learner) => learner.name).join(", ")}`);
+        return;
+    }
+    if (selectedWindowBlockedLearners.length > 0 && !overrideWelWindow) {
+        toast.error("Confirm the admin WEL window override before continuing.");
         return;
     }
 
@@ -202,7 +218,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 requestedSlots: data.learners.length,
                 placementRegion: data.placementRegion,
                 startDate: data.startDate,
-                endDate: data.endDate
+                endDate: data.endDate,
+                overrideWelWindow: selectedWindowBlockedLearners.length > 0 && overrideWelWindow
             }),
           })
           const resData = await res.json()
@@ -222,7 +239,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 supervisorPhone: data.supervisorPhone,
                 supervisorEmail: data.supervisorEmail,
                 startDate: data.startDate,
-                endDate: data.endDate
+                endDate: data.endDate,
+                overrideWelWindow: selectedWindowBlockedLearners.length > 0 && overrideWelWindow
             }),
           })
           const resData = await res.json()
@@ -249,7 +267,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                   contactPhone: data.supervisorPhone,
                   contactEmail: data.supervisorEmail,
                   notes: data.sourceNotes,
-                }
+                },
+                overrideWelWindow: selectedWindowBlockedLearners.length > 0 && overrideWelWindow
             }),
           })
           const resData = await res.json()
@@ -275,8 +294,10 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                  return currentSelected;
              }
          }
+         setOverrideWelWindow(false)
          return [...currentSelected, learnerId];
       }
+      setOverrideWelWindow(false)
       return currentSelected.filter(id => id !== learnerId);
   }
 
@@ -308,9 +329,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         })()}
 
         {selectedLearnerIds.length > 0 && (() => {
-            const blockedByCalendar = learners.filter((learner) =>
-                selectedLearnerIds.includes(learner._id) && learner.placementEligibility && !learner.placementEligibility.isEligible
-            )
+            const blockedByCalendar = selectedWindowBlockedLearners
 
             if (blockedByCalendar.length === 0) return null
 
@@ -318,7 +337,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
                     <div className="flex items-center gap-2 font-bold">
                         <ShieldAlert className="h-4 w-4" />
-                        Placement blocked by WEL cohort calendar
+                        {canOverrideSelectedWindows ? 'Admin WEL window override required' : 'Placement blocked by WEL cohort calendar'}
                     </div>
                     <div className="mt-2 space-y-1">
                         {blockedByCalendar.map((learner) => (
@@ -327,12 +346,25 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                             </p>
                         ))}
                     </div>
+                    {canOverrideSelectedWindows ? (
+                        <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-xl border border-blue-200 bg-white/70 p-3">
+                            <Checkbox
+                                checked={overrideWelWindow}
+                                onCheckedChange={(checked) => setOverrideWelWindow(checked === true)}
+                                className="mt-0.5"
+                            />
+                            <span>
+                                <span className="block font-bold">Open placement without a currently open WEL window</span>
+                                <span className="block text-xs text-blue-700">This Admin override will be recorded in the audit log.</span>
+                            </span>
+                        </label>
+                    ) : null}
                 </div>
             )
         })()}
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-          Eligible learners are current students without an active placement whose year group is within an active or preparation-stage WEL calendar window. Previous WEL cycles stay attached to the learner profile as placement history.
+          Eligible learners are current students without an active placement whose year group is within an active or preparation-stage WEL calendar window. Admins may explicitly override a window that is not currently open or configured. Previous WEL cycles stay attached to the learner profile as placement history.
         </div>
         
         {/* Placement Type Toggle */}
@@ -557,6 +589,9 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                                                 <div className="leading-tight">
                                                     <label htmlFor={learner._id} className="font-semibold cursor-pointer text-sm">{learner.firstName} {learner.lastName}</label>
                                                     <p className="text-xs opacity-70 mt-0.5 font-mono">{learner.trackingId}</p>
+                                                    {learner.placementEligibility && !learner.placementEligibility.isEligible && (
+                                                        <p className="text-xs text-blue-700 font-semibold mt-1">Admin window override available</p>
+                                                    )}
                                                     {!learner.readiness?.isReadyForPlacement && (
                                                         <p className="text-xs text-amber-700 font-semibold mt-1">
                                                             Missing: {(learner.readiness?.missingFields || []).map(formatMissingField).join(", ")}
