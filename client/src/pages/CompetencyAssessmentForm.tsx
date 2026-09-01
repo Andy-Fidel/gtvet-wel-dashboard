@@ -126,11 +126,11 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5 text-gray-900">
         
         <FormField control={form.control} name="learner" render={({ field }) => (
             <FormItem>
-              <FormLabel className="text-sm font-semibold text-white">Learner / Trainee</FormLabel>
+              <FormLabel className="text-sm font-semibold text-gray-700">Learner / Trainee</FormLabel>
               <Select onValueChange={field.onChange} defaultValue={field.value} disabled={!!initialData?.learner}>
                 <FormControl><SelectTrigger><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
                 <SelectContent>
@@ -153,7 +153,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
              <FormField control={form.control} name="assessmentDate" render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel className="text-sm font-semibold text-white">Assessment Date</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Assessment Date</FormLabel>
                   <Popover>
                     <PopoverTrigger asChild>
                       <FormControl>
@@ -172,7 +172,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
              )} />
             <FormField control={form.control} name="assessmentType" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Assessment Type</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Assessment Type</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
                     <SelectContent>
@@ -190,14 +190,14 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <FormField control={form.control} name="assessorName" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Assessor Name</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Assessor Name</FormLabel>
                   <FormControl><Input placeholder="Full Name" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
             <FormField control={form.control} name="overallScore" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Overall Score (0-100)</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Overall Score (0-100)</FormLabel>
                   <FormControl><Input type="number" min="0" max="100" className="font-bold" {...field} value={Number.isFinite(field.value) ? field.value : ""} onChange={e => field.onChange(normalizeNumberInput(e.target.value))} /></FormControl>
                   <FormMessage />
                 </FormItem>
@@ -207,14 +207,14 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <FormField control={form.control} name="technicalSkills" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Technical Skills</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Technical Skills</FormLabel>
                   <FormControl><Textarea placeholder="Describe technical competencies..." {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
             <FormField control={form.control} name="softSkills" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Soft Skills</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Soft Skills</FormLabel>
                   <FormControl><Textarea placeholder="Communication, teamwork..." {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
@@ -224,7 +224,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <FormField control={form.control} name="professionalism" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Professionalism (1-5)</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Professionalism (1-5)</FormLabel>
                   <FormControl>
                     <div className="flex items-center bg-[#F5F5FA] rounded-xl h-12 px-3">
                        <input type="range" min="1" max="5" step="1" value={Number.isFinite(field.value) ? field.value : 1} onChange={e => field.onChange(Number(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-indigo-500 mx-2" />
@@ -236,7 +236,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
             )} />
             <FormField control={form.control} name="problemSolving" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-white">Problem Solving (1-5)</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Problem Solving (1-5)</FormLabel>
                   <FormControl>
                     <div className="flex items-center bg-[#F5F5FA] rounded-xl h-12 px-3">
                        <input type="range" min="1" max="5" step="1" value={Number.isFinite(field.value) ? field.value : 1} onChange={e => field.onChange(Number(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-indigo-500 mx-2" />
@@ -250,7 +250,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
 
         <FormField control={form.control} name="recommendations" render={({ field }) => (
             <FormItem>
-              <FormLabel className="text-sm font-semibold text-white">Recommendations</FormLabel>
+              <FormLabel className="text-sm font-semibold text-gray-700">Recommendations</FormLabel>
               <FormControl><Textarea placeholder="What should the learner focus on improving?" {...field} /></FormControl>
               <FormMessage />
             </FormItem>

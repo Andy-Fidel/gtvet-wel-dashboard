@@ -1573,13 +1573,13 @@ export default function LearnerProfile() {
       </Dialog>
 
       <Dialog open={assessmentOpen && !isOversightReadOnly} onOpenChange={setAssessmentOpen}>
-        <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
+        <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border border-gray-200 bg-white text-gray-900 shadow-2xl p-0">
           <div className="p-8">
             <DialogHeader className="mb-6">
               <DialogTitle className="text-2xl font-black">Assessment for {learner.name}</DialogTitle>
               <DialogDescription className="font-bold text-gray-400">Record a competency evaluation for this learner.</DialogDescription>
             </DialogHeader>
-            <div className="bg-gray-900 p-8 rounded-2xl shadow-inner">
+            <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
               <CompetencyAssessmentForm onSuccess={() => { setAssessmentOpen(false); handleFormSuccess(); }} initialData={{ learner: learner._id }} />
             </div>
           </div>
