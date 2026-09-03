@@ -43,6 +43,7 @@ const buildAutoStartKey = (userId: string) => `gtvets-help-auto-started:${HELP_G
 
 const INSTITUTION_ROLES: AppRole[] = ["Admin", "Manager", "Staff"]
 const INSTITUTION_AND_REGION_ROLES: AppRole[] = ["RegionalAdmin", "Admin", "Manager", "Staff"]
+const MANAGEMENT_ROLES: AppRole[] = ["SuperAdmin", "RegionalAdmin", "Admin", "Manager"]
 const ADMIN_ROLES: AppRole[] = ["SuperAdmin", "RegionalAdmin", "Admin"]
 const ALL_ROLES: AppRole[] = ["SuperAdmin", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"]
 
@@ -174,7 +175,7 @@ const guideDefinitions: GuideDefinition[] = [
     label: "Progress Tracker",
     launchPath: "/learner-progress",
     catalogSummary: "Find at-risk learners and resolve missing milestone inputs.",
-    roles: INSTITUTION_ROLES,
+    roles: MANAGEMENT_ROLES,
     match: (pathname) => pathname === "/learner-progress",
     steps: () => [
       {
@@ -292,7 +293,7 @@ const guideDefinitions: GuideDefinition[] = [
     label: "Semester Reports",
     launchPath: "/semester-reports",
     catalogSummary: "Manage term closure reports, submissions, and approvals.",
-    roles: INSTITUTION_AND_REGION_ROLES,
+    roles: MANAGEMENT_ROLES,
     match: (pathname) => pathname === "/semester-reports",
     steps: (role) => [
       {
@@ -324,7 +325,7 @@ const guideDefinitions: GuideDefinition[] = [
   {
     key: "semester-report-detail",
     label: "Semester Report Detail",
-    roles: INSTITUTION_AND_REGION_ROLES,
+    roles: MANAGEMENT_ROLES,
     match: (pathname) => pathname.startsWith("/semester-reports/"),
     steps: (role) => [
       {

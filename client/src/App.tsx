@@ -11,7 +11,7 @@ import { PageSkeleton } from '@/components/PageSkeleton';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { ADMIN_ROLES } from '@/lib/rbac';
+import { ADMIN_ROLES, MANAGEMENT_ROLES } from '@/lib/rbac';
 
 // Lazy-loaded page components (code-split by route)
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -121,11 +121,13 @@ function App() {
                 </ErrorBoundary>
               } />
               <Route path="learner-progress" element={
-                <ErrorBoundary>
-                  <Suspense fallback={<PageSkeleton />}>
-                    <LearnerProgressDashboard />
-                  </Suspense>
-                </ErrorBoundary>
+                <ProtectedRoute requiredRoles={MANAGEMENT_ROLES}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <LearnerProgressDashboard />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
               } />
               <Route path="attendance-logs" element={
                 <ErrorBoundary>
@@ -156,18 +158,22 @@ function App() {
                 </ErrorBoundary>
               } />
               <Route path="semester-reports" element={
-                <ErrorBoundary>
-                  <Suspense fallback={<PageSkeleton />}>
-                    <SemesterReports />
-                  </Suspense>
-                </ErrorBoundary>
+                <ProtectedRoute requiredRoles={MANAGEMENT_ROLES}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <SemesterReports />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
               } />
               <Route path="semester-reports/:id" element={
-                <ErrorBoundary>
-                  <Suspense fallback={<PageSkeleton />}>
-                    <SemesterReportDetail />
-                  </Suspense>
-                </ErrorBoundary>
+                <ProtectedRoute requiredRoles={MANAGEMENT_ROLES}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <SemesterReportDetail />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
               } />
               <Route path="assessments" element={
                 <ErrorBoundary>

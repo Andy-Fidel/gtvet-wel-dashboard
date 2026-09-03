@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Toaster } from 'sonner';
 import { PlacementProgressWidget } from './PlacementProgressWidget';
 import { usePushNotificationEvents } from '@/hooks/usePushNotifications';
-import { isAdminRole } from '@/lib/rbac';
+import { isAdminRole, isManagementRole } from '@/lib/rbac';
 
 const HQ_NAV_GROUPS = [
   {
@@ -69,6 +69,7 @@ export default function Layout() {
   const navigate = useNavigate();
 
   const isAdmin = isAdminRole(user?.role);
+  const canAccessManagementPages = isManagementRole(user?.role);
   const isSuperAdmin = user?.role === 'SuperAdmin';
   const isRegionalAdmin = user?.role === 'RegionalAdmin';
   const isIndustryPartner = user?.role === 'IndustryPartner';
@@ -382,7 +383,7 @@ export default function Layout() {
                   </>
                 )}
               </NavLink>
-              <NavLink
+              {canAccessManagementPages ? <NavLink
                 to="/learner-progress"
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
@@ -395,7 +396,7 @@ export default function Layout() {
                     {!isSidebarCollapsed && <span className="text-base">Progress Tracker</span>}
                   </>
                 )}
-              </NavLink>
+              </NavLink> : null}
               <NavLink 
                 to="/placements" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
@@ -438,8 +439,8 @@ export default function Layout() {
                   </>
                 )}
               </NavLink>
-              <NavLink 
-                to="/semester-reports" 
+              {canAccessManagementPages ? <NavLink
+                to="/semester-reports"
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
                 {...collapsedNavTooltip('Term Closure')}
@@ -451,7 +452,7 @@ export default function Layout() {
                     {!isSidebarCollapsed && <span className="text-base">Term Closure</span>}
                   </>
                 )}
-              </NavLink>
+              </NavLink> : null}
               <NavLink 
                 to="/assessments" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}

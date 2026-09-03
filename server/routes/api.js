@@ -38,6 +38,8 @@ import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
 
 const router = express.Router();
 const ADMIN_ROLES = ['Admin', 'RegionalAdmin', 'SuperAdmin'];
+const MANAGEMENT_ROLES = ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'];
+const INSTITUTION_MANAGEMENT_ROLES = ['Admin', 'Manager'];
 
 // All routes below require authentication
 router.use(auth);
@@ -6033,7 +6035,7 @@ const buildTermClosureData = async (institution, start, end) => {
 };
 
 // Initiate term closure (replaces manual generate)
-router.post('/semester-reports/initiate', async (req, res) => {
+router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
     try {
         const { termId } = req.body;
         const institution = req.user.institution;
@@ -6094,7 +6096,7 @@ router.post('/semester-reports/initiate', async (req, res) => {
 });
 
 // Keep legacy generate endpoint for backward compat
-router.post('/semester-reports/generate', async (req, res) => {
+router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
     try {
         const { semester, academicYear, periodStart, periodEnd } = req.body;
         const institution = req.user.institution;
@@ -6144,19 +6146,12 @@ router.post('/semester-reports/generate', async (req, res) => {
 });
 
 // List semester reports
-router.get('/semester-reports', async (req, res) => {
+router.get('/semester-reports', requireRole(...MANAGEMENT_ROLES), async (req, res) => {
     try {
-        let filter = {};
-        if (req.user.role === 'RegionalAdmin') {
-            const insts = await Institution.find({ region: req.user.region }).select('name');
-            const instNames = insts.map(i => i.name);
-            filter.institution = { $in: instNames };
-        } else if (req.user.role !== 'SuperAdmin') {
-            filter.institution = req.user.institution;
-        }
+        let filter = await getFilter(req.user);
         const { status, institution, academicYear, page: requestedPage, pageSize: requestedPageSize } = req.query;
         if (status) filter.status = status;
-        if (institution) filter.institution = institution;
+        if (institution) filter = { $and: [filter, { institution }] };
         if (academicYear) filter.academicYear = academicYear;
 
         const parsedPage = Number.parseInt(String(requestedPage || ''), 10);
@@ -6233,9 +6228,10 @@ router.get('/semester-reports', async (req, res) => {
 });
 
 // Get single semester report
-router.get('/semester-reports/:id', async (req, res) => {
+router.get('/semester-reports/:id', requireRole(...MANAGEMENT_ROLES), async (req, res) => {
     try {
-        const report = await SemesterReport.findById(req.params.id)
+        const scopeFilter = await getFilter(req.user);
+        const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter })
             .populate('generatedBy', 'name email')
             .populate('reviewedByRegional', 'name email')
             .populate('reviewedByHQ', 'name email')
@@ -6249,9 +6245,10 @@ router.get('/semester-reports/:id', async (req, res) => {
 });
 
 // Refresh metrics (only in Draft status)
-router.put('/semester-reports/:id/refresh-metrics', async (req, res) => {
+router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
     try {
-        const report = await SemesterReport.findById(req.params.id);
+        const scopeFilter = await getFilter(req.user);
+        const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
         if (report.status !== 'Draft') {
             return res.status(400).json({ message: 'Metrics can only be refreshed in Draft status.' });
@@ -6286,9 +6283,10 @@ router.put('/semester-reports/:id/refresh-metrics', async (req, res) => {
 });
 
 // Certify report (saves commentary, marks as certified)
-router.put('/semester-reports/:id/certify', async (req, res) => {
+router.put('/semester-reports/:id/certify', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
     try {
-        const report = await SemesterReport.findById(req.params.id);
+        const scopeFilter = await getFilter(req.user);
+        const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
         if (report.status !== 'Draft' && report.status !== 'Rejected') {
             return res.status(400).json({ message: 'Report can only be certified from Draft or Rejected status.' });
@@ -6329,9 +6327,10 @@ router.put('/semester-reports/:id/certify', async (req, res) => {
 });
 
 // Submit report to Regional Office (only from Certified)
-router.put('/semester-reports/:id/submit', async (req, res) => {
+router.put('/semester-reports/:id/submit', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
     try {
-        const report = await SemesterReport.findById(req.params.id);
+        const scopeFilter = await getFilter(req.user);
+        const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
         // Allow submit from Certified (new flow) or Generated/Rejected (legacy)
         if (!['Certified', 'Generated', 'Rejected'].includes(report.status)) {
@@ -6366,9 +6365,10 @@ router.put('/semester-reports/:id/submit', async (req, res) => {
 });
 
 // Regional Office approves
-router.put('/semester-reports/:id/regional-approve', async (req, res) => {
+router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'), async (req, res) => {
     try {
-        const report = await SemesterReport.findById(req.params.id);
+        const scopeFilter = await getFilter(req.user);
+        const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
         if (report.status !== 'Submitted') {
             return res.status(400).json({ message: 'Report must be in Submitted status to approve regionally.' });
@@ -6404,9 +6404,10 @@ router.put('/semester-reports/:id/regional-approve', async (req, res) => {
 });
 
 // HQ approves
-router.put('/semester-reports/:id/hq-approve', async (req, res) => {
+router.put('/semester-reports/:id/hq-approve', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        const report = await SemesterReport.findById(req.params.id);
+        const scopeFilter = await getFilter(req.user);
+        const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
         if (report.status !== 'Regional_Approved') {
             return res.status(400).json({ message: 'Report must be Regional_Approved before HQ approval.' });
@@ -6446,9 +6447,10 @@ router.put('/semester-reports/:id/hq-approve', async (req, res) => {
 });
 
 // Reject report
-router.put('/semester-reports/:id/reject', async (req, res) => {
+router.put('/semester-reports/:id/reject', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const report = await SemesterReport.findById(req.params.id);
+        const scopeFilter = await getFilter(req.user);
+        const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
         const before = report.toObject();
         report.status = 'Rejected';
@@ -8240,7 +8242,7 @@ router.get('/learners/:id/progress', async (req, res) => {
 });
 
 // GET /api/learners/progress/bulk - Get progress summary for multiple learners
-router.get('/learners/progress/bulk', async (req, res) => {
+router.get('/learners/progress/bulk', requireRole(...MANAGEMENT_ROLES), async (req, res) => {
   try {
     const filter = await getFilter(req.user);
     const {

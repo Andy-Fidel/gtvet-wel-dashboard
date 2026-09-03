@@ -19,6 +19,7 @@ import type { AdminOverviewStats, DashboardStats } from "@/types/dashboard"
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton"
 import { AdminDashboardView } from "./AdminDashboardView"
 import { useEffect } from "react";
+import { isManagementRole } from "@/lib/rbac";
 
 type DelegatedPlacementSummary = {
   _id: string
@@ -69,6 +70,7 @@ export default function Dashboard() {
   };
 
   const isAdminView = user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin';
+  const canAccessManagementPages = isManagementRole(user?.role);
 
   const fetchUrl = isAdminView
     ? '/api/admin/overview'
@@ -203,9 +205,11 @@ export default function Dashboard() {
           <Button onClick={() => navigate('/learners')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md font-bold h-11 px-5">
             <Plus className="mr-2 h-4 w-4" /> Register Learner
           </Button>
-          <Button onClick={() => navigate('/semester-reports')} variant="outline" className="rounded-xl border-gray-200 hover:bg-gray-50 text-gray-700 font-bold h-11 px-5 bg-white shadow-sm">
-            <FileSpreadsheet className="mr-2 h-4 w-4 text-indigo-500" /> Submit Report
-          </Button>
+          {canAccessManagementPages ? (
+            <Button onClick={() => navigate('/semester-reports')} variant="outline" className="rounded-xl border-gray-200 hover:bg-gray-50 text-gray-700 font-bold h-11 px-5 bg-white shadow-sm">
+              <FileSpreadsheet className="mr-2 h-4 w-4 text-indigo-500" /> Submit Report
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -530,7 +534,7 @@ export default function Dashboard() {
                       {cohort.riskReasons && cohort.riskReasons.length > 0 && (
                         <p className="mt-3 text-xs font-bold text-gray-500">{cohort.riskReasons[0]}</p>
                       )}
-                      {cohort.riskLevel && cohort.riskLevel !== 'low' && (
+                      {canAccessManagementPages && cohort.riskLevel && cohort.riskLevel !== 'low' && (
                         <div className="mt-3">
                           <Button
                             type="button"

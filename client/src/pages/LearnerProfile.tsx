@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
 import { downloadPlacementAgreementPdf } from "@/lib/placementAgreementPdf"
+import { isManagementRole } from "@/lib/rbac"
 
 type UserSummary = {
   _id: string
@@ -299,6 +300,7 @@ export default function LearnerProfile() {
   const navigate = useNavigate()
   const { authFetch, user } = useAuth()
   const isOversightReadOnly = user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin'
+  const canAccessManagementPages = isManagementRole(user?.role)
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [data, setData] = useState<ProfileData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -758,9 +760,11 @@ export default function LearnerProfile() {
                     <Button onClick={() => setVisitOpen(true)} variant="outline" className="rounded-xl border-blue-200 text-blue-700 bg-blue-50/50 hover:bg-blue-100">
                         <Plus className="mr-2 h-4 w-4" /> Log Visit
                     </Button>
-                    <Button onClick={() => navigate(`/semester-reports`)} variant="outline" className="rounded-xl border-amber-200 text-amber-700 bg-amber-50/50 hover:bg-amber-100">
-                         Semester Reports
-                    </Button>
+                    {canAccessManagementPages ? (
+                      <Button onClick={() => navigate(`/semester-reports`)} variant="outline" className="rounded-xl border-amber-200 text-amber-700 bg-amber-50/50 hover:bg-amber-100">
+                           Semester Reports
+                      </Button>
+                    ) : null}
                     <Button onClick={() => setAssessmentOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md">
                         <Plus className="mr-2 h-4 w-4" /> Complete Assessment
                     </Button>
@@ -1520,7 +1524,7 @@ export default function LearnerProfile() {
                 </div>
 
                 {/* Semester Reports */}
-                <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
+                {canAccessManagementPages ? <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                     <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><FileText className="h-5 w-5 text-amber-500"/> Semester Reports</h3>
                     {semesterReports.length === 0 ? (
                         <p className="text-sm text-gray-500 text-center py-4">No semester reports generated yet.</p>
@@ -1543,7 +1547,7 @@ export default function LearnerProfile() {
                             ))}
                         </div>
                     )}
-                </div>
+                </div> : null}
             </div>
 
         </div>
