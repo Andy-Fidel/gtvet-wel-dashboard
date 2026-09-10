@@ -62,6 +62,8 @@ export function Navbar() {
   const getRoleBadgeColor = (role: string) => {
     switch(role) {
       case 'SuperAdmin': return 'bg-purple-500';
+      case 'HQManager': return 'bg-violet-600';
+      case 'HQStaff': return 'bg-slate-600';
       case 'Admin': return 'bg-blue-500';
       case 'Manager': return 'bg-green-500';
       default: return 'bg-gray-500';

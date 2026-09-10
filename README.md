@@ -4,12 +4,12 @@ Full‑stack dashboard for GTVET — WEL project. Frontend is a TypeScript + Rea
 
 Quick start
 
-HQ roles are assigned by SuperAdmin through User Governance:
+HQ roles are assigned by SuperAdmin through User Governance. Each account is assigned a National, Region, or Institution scope:
 
-- **HQ Manager** (`HQManager`): national oversight, with approval and rejection of term reports and industry partner submissions.
-- **HQ Staff** (`HQStaff`): read-only national oversight.
+- **HQ Manager** (`HQManager`): scoped operational oversight, with approval and rejection of term reports and industry partner submissions.
+- **HQ Staff** (`HQStaff`): read-only operational oversight.
 
-Neither HQ role can administer users or system settings. Both are separate from institution Manager and Staff roles and require no institution assignment. Existing accounts retain their roles. Personal authentication and notification read state remain available.
+SuperAdmin selects a National, Region, or Institution scope when creating either HQ role. The API applies that scope to institutions, learners, placements, reports, monitoring, assessments, documents, vacancies, partners, audit records, and approval decisions. Neither HQ role can administer users or system settings. Existing HQ accounts without an explicit scope retain national access for compatibility. Personal authentication and notification read state remain available.
 
 Run permission regression checks with `node --test server/tests/hqAccess.test.js` and build the frontend with `npm run build`.
 

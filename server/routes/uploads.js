@@ -1,4 +1,4 @@
-import { isHQRole, enforceHQAccess } from '../utils/hqAccess.js';
+import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import express from 'express';
 import multer from 'multer';
 import cloudinary, { isCloudinaryConfigured } from '../config/cloudinary.js';
@@ -507,6 +507,11 @@ router.get('/', async (req, res) => {
     // Non-super admins can only see their institution's documents
     if (req.user.role === 'IndustryPartner') {
       filter.partnerId = req.user.partnerId?._id || req.user.partnerId;
+    } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
+      filter.institution = req.user.institution;
+    } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
+      const institutions = await Institution.find({ region: req.user.region }).distinct('name');
+      filter.institution = { $in: institutions };
     } else if (req.user.role === 'RegionalAdmin') {
       const institutions = await Institution.find({ region: req.user.region }).distinct('name');
       filter.institution = { $in: institutions };

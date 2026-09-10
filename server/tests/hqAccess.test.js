@@ -4,7 +4,8 @@ import { canHQRequest, enforceHQAccess } from '../utils/hqAccess.js';
 import { User } from '../models/User.js';
 import { SemesterReport } from '../models/SemesterReport.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
-import router, { normalizeUserPayloadForRole } from '../routes/api.js';
+import { Institution } from '../models/Institution.js';
+import router, { getFilter, normalizeUserPayloadForRole } from '../routes/api.js';
 
 const response = () => ({
   statusCode: 200,
@@ -12,8 +13,8 @@ const response = () => ({
   json(body) { this.body = body; return this; },
 });
 
-async function dispatch(role, method, path, routePath = path) {
-  const req = { user: { role, _id: 'hq-user' }, method, path, params: { id: 'record-id' }, body: {} };
+async function dispatch(role, method, path, routePath = path, user = {}) {
+  const req = { user: { role, _id: 'hq-user', ...user }, method, path, params: { id: 'record-id' }, body: {} };
   const res = response();
   let allowed = false;
   enforceHQAccess(req, res, () => { allowed = true; });
@@ -37,12 +38,12 @@ test('HQ roles require no institution; institution roles still do', () => {
   }
 });
 
-test('only SuperAdmin can assign HQ roles and institution scopes are cleared', async () => {
+test('only SuperAdmin can assign HQ roles and national scope clears institution data', async () => {
   for (const role of ['HQManager', 'HQStaff']) {
-    const payload = { role, institution: 'Old Institution', region: 'Old Region', partnerId: 'old-partner', linkedLearners: ['old-learner'] };
+    const payload = { role, hqScopeType: 'National', institution: 'Old Institution', region: 'Old Region', partnerId: 'old-partner', linkedLearners: ['old-learner'] };
     const { normalized } = await normalizeUserPayloadForRole({ role: 'SuperAdmin' }, payload);
     assert.equal(normalized.role, role);
-    assert.equal(normalized.institution, 'N/A');
+    assert.equal(normalized.institution, '');
     assert.equal(normalized.region, '');
     assert.equal(normalized.partnerId, undefined);
     assert.deepEqual(normalized.linkedLearners, []);
@@ -51,6 +52,15 @@ test('only SuperAdmin can assign HQ roles and institution scopes are cleared', a
     }
     assert.equal((await normalizeUserPayloadForRole({ role: 'Admin' }, { role: 'Staff' }, { role })).status, 403);
   }
+});
+
+test('HQ institution and region scopes resolve like portal scopes', async (t) => {
+  t.mock.method(Institution, 'find', () => ({
+    select: () => ({ lean: async () => [{ name: 'Scoped A' }, { name: 'Scoped B' }] }),
+  }));
+  assert.deepEqual(await getFilter({ role: 'HQManager', hqScopeType: 'Institution', institution: 'Scoped A' }), { institution: 'Scoped A' });
+  assert.deepEqual(await getFilter({ role: 'HQStaff', hqScopeType: 'Region', region: 'Greater Accra' }), { institution: { $in: ['Scoped A', 'Scoped B'] } });
+  assert.deepEqual(await getFilter({ role: 'HQStaff', hqScopeType: 'National' }), {});
 });
 
 test('HQ reads are national operations, never user or system administration', () => {
@@ -96,11 +106,13 @@ test('manager reaches report decisions with national scope; staff and institutio
 });
 
 test('manager reaches partner decisions; staff cannot', async (t) => {
-  t.mock.method(IndustryPartner, 'findById', async () => null);
+  const filters = [];
+  t.mock.method(IndustryPartner, 'findOne', async (filter) => { filters.push(filter); return null; });
   for (const action of ['hq-approve', 'hq-reject']) {
     const path = `/industry-partners/record-id/${action}`;
     const routePath = `/industry-partners/:id/${action}`;
-    assert.equal((await dispatch('HQManager', 'PUT', path, routePath)).statusCode, 404);
+    assert.equal((await dispatch('HQManager', 'PUT', path, routePath, { hqScopeType: 'Region', region: 'Ashanti' })).statusCode, 404);
+    assert.deepEqual(filters.at(-1), { _id: 'record-id', region: 'Ashanti' });
     assert.equal((await dispatch('HQStaff', 'PUT', path, routePath)).statusCode, 403);
   }
 });

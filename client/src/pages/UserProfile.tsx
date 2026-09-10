@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { User, Mail, Building2, Phone, MapPin, Shield, Edit2, Loader2, Camera } from "lucide-react";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
+import { getHQScopeLabel, isHQRole } from "@/lib/rbac";
 
 export default function UserProfile() {
   const { user, authFetch } = useAuth();
@@ -51,6 +52,8 @@ export default function UserProfile() {
   const getRoleBadgeColor = (role: string) => {
     switch(role) {
       case 'SuperAdmin': return 'bg-purple-500';
+      case 'HQManager': return 'bg-violet-600';
+      case 'HQStaff': return 'bg-slate-600';
       case 'RegionalAdmin': return 'bg-indigo-500';
       case 'Admin': return 'bg-blue-500';
       case 'Manager': return 'bg-green-500';
@@ -63,6 +66,8 @@ export default function UserProfile() {
   const getRoleLabel = (role: string) => {
     switch(role) {
       case 'SuperAdmin': return 'Super Admin';
+      case 'HQManager': return 'HQ Manager';
+      case 'HQStaff': return 'HQ Staff';
       case 'RegionalAdmin': return 'Regional Admin';
       case 'IndustryPartner': return 'Industry Partner';
       case 'Guardian': return 'Parent / Guardian';
@@ -242,10 +247,12 @@ export default function UserProfile() {
             <div className="space-y-2">
               <Label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                 <Building2 className="h-4 w-4 text-[#FFB800]" />
-                {user.role === 'IndustryPartner' ? 'Company' : user.role === 'Guardian' ? 'Portal Scope' : 'Institution'}
+                {isHQRole(user.role) ? 'HQ Access Scope' : user.role === 'IndustryPartner' ? 'Company' : user.role === 'Guardian' ? 'Portal Scope' : 'Institution'}
               </Label>
               <div className="h-12 px-4 rounded-xl bg-gray-50 flex items-center text-gray-900 font-medium">
-                {user.role === 'IndustryPartner' 
+                {isHQRole(user.role)
+                  ? (user.role === 'SuperAdmin' ? 'National Administration' : getHQScopeLabel(user))
+                  : user.role === 'IndustryPartner'
                   ? (user.partnerId?.name || 'Partner Profile') 
                   : user.role === 'Guardian'
                     ? `${user.linkedLearners?.length || 0} linked learner${(user.linkedLearners?.length || 0) === 1 ? '' : 's'}`

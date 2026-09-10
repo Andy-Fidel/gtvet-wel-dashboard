@@ -26,6 +26,7 @@ export type User = {
     phone?: string
     institution?: string
     region?: string
+    hqScopeType?: 'National' | 'Region' | 'Institution'
     effectiveRegion?: string
     partnerId?: { _id: string, name: string }
     partnerPortalRole?: 'Coordinator' | 'Supervisor'
@@ -93,6 +94,11 @@ export const columns: ColumnDef<User>[] = [
         const partner = row.original.partnerId
         const linkedLearners = row.original.linkedLearners || []
         
+        if (role === 'HQManager' || role === 'HQStaff') {
+          if (row.original.hqScopeType === 'Institution') return `Institution: ${inst || 'N/A'}`
+          if (row.original.hqScopeType === 'Region') return `Region: ${region || 'N/A'}`
+          return 'National'
+        }
         if (role === 'RegionalAdmin') return `Region: ${region || 'N/A'}`
         if (role === 'IndustryPartner') return `Partner: ${partner?.name || 'N/A'}`
         if (role === 'Guardian') return `${linkedLearners.length} learner${linkedLearners.length === 1 ? '' : 's'} linked`

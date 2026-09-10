@@ -12,6 +12,7 @@ interface User {
   institution: string;
   phone?: string;
   region?: string;
+  hqScopeType?: 'National' | 'Region' | 'Institution';
   profilePicture?: string;
   partnerId?: {
     _id: string;

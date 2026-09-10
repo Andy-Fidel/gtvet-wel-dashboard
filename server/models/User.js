@@ -26,6 +26,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: function() { return this.role === 'RegionalAdmin'; }
   },
+  hqScopeType: {
+    type: String,
+    enum: ['National', 'Region', 'Institution'],
+    default: function() { return this.role === 'HQManager' || this.role === 'HQStaff' ? 'National' : undefined; },
+    required: function() { return this.role === 'HQManager' || this.role === 'HQStaff'; },
+  },
   partnerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'IndustryPartner',

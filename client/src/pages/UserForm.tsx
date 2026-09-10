@@ -29,6 +29,7 @@ const baseFormSchema = z.object({
   phone: z.string().optional(),
   institution: z.string().optional(),
   region: z.string().optional(),
+  hqScopeType: z.enum(["National", "Region", "Institution"]).optional(),
   partnerId: z.string().optional(),
   partnerPortalRole: z.enum(["Coordinator", "Supervisor"]).optional(),
   linkedLearners: z.array(z.string()).optional(),
@@ -40,6 +41,24 @@ const formSchema = baseFormSchema.refine((data) => {
 }, {
   message: "Region is required for Regional Admins",
   path: ["region"],
+}).refine((data) => {
+  if (['HQManager', 'HQStaff'].includes(data.role) && !data.hqScopeType) return false;
+  return true;
+}, {
+  message: "Select an HQ access scope",
+  path: ["hqScopeType"],
+}).refine((data) => {
+  if (['HQManager', 'HQStaff'].includes(data.role) && data.hqScopeType === 'Region' && !data.region) return false;
+  return true;
+}, {
+  message: "Region is required for this HQ scope",
+  path: ["region"],
+}).refine((data) => {
+  if (['HQManager', 'HQStaff'].includes(data.role) && data.hqScopeType === 'Institution' && !data.institution) return false;
+  return true;
+}, {
+  message: "Institution is required for this HQ scope",
+  path: ["institution"],
 }).refine((data) => {
   if (['Admin', 'Manager', 'Staff'].includes(data.role) && !data.institution) return false;
   return true;
@@ -151,6 +170,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
     defaultValues: initialData ? {
       ...initialData,
       password: "",
+      hqScopeType: ['HQManager', 'HQStaff'].includes(initialData.role) ? (initialData.hqScopeType || 'National') : undefined,
       partnerId: defaultPartnerId,
       partnerPortalRole: initialData.role === "IndustryPartner" ? (initialData.partnerPortalRole || "Coordinator") : undefined,
     } : {
@@ -162,6 +182,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       phone: "",
       institution: currentUser?.role === 'Admin' ? (currentUser?.institution || "") : "",
       region: currentUser?.region || "",
+      hqScopeType: "National",
       partnerId: "",
       partnerPortalRole: "Supervisor",
       linkedLearners: [],
@@ -172,6 +193,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
     const nextValues: UserFormValues = initialData ? {
       ...initialData,
       password: "",
+      hqScopeType: ['HQManager', 'HQStaff'].includes(initialData.role) ? (initialData.hqScopeType || 'National') : undefined,
       partnerId: getPartnerId(),
       partnerPortalRole: initialData.role === "IndustryPartner" ? (initialData.partnerPortalRole || "Coordinator") : undefined,
     } : {
@@ -183,6 +205,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       phone: "",
       institution: currentUser?.role === 'Admin' ? (currentUser?.institution || "") : "",
       region: currentUser?.region || "",
+      hqScopeType: "National",
       partnerId: "",
       partnerPortalRole: "Supervisor",
       linkedLearners: [],
@@ -195,13 +218,20 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
 
   const selectedRole = form.watch("role");
   const selectedInstitution = form.watch("institution")
+  const selectedHQScope = form.watch("hqScopeType")
   const uniqueRegions = Array.from(new Set(institutions.map(i => i.region))).filter(Boolean).sort();
   const allowedRoles = getManageableRoles(currentUser?.role)
   const roleOptions = Array.from(new Set([...(allowedRoles as readonly string[]), initialData?.role].filter(Boolean))) as Array<UserFormValues["role"]>
   const selectedRoleConfig = ROLE_CONFIG[selectedRole]
   const selectedInstitutionRecord = institutions.find((inst) => inst.name === selectedInstitution)
-  const scopeSummary = ["SuperAdmin", "HQManager", "HQStaff"].includes(selectedRole)
+  const scopeSummary = selectedRole === "SuperAdmin"
     ? "This user will have platform-wide access."
+    : ["HQManager", "HQStaff"].includes(selectedRole)
+      ? selectedHQScope === "Institution"
+        ? `This HQ user will work within ${selectedInstitution || "the selected institution"}.`
+        : selectedHQScope === "Region"
+          ? `This HQ user will work across ${form.watch("region") || "the selected region"}.`
+          : "This HQ user will have national operational scope."
     : selectedRole === "RegionalAdmin"
       ? `This user will manage institutions in ${form.watch("region") || "the selected region"}.`
       : selectedRole === "IndustryPartner"
@@ -282,11 +312,23 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       if (!form.getValues("partnerPortalRole")) form.setValue("partnerPortalRole", "Supervisor")
     } else if (selectedRole === "Guardian") {
       form.setValue("partnerId", "")
-    } else if (["SuperAdmin", "HQManager", "HQStaff"].includes(selectedRole)) {
+    } else if (selectedRole === "SuperAdmin") {
       form.setValue("institution", "")
       form.setValue("region", "")
       form.setValue("partnerId", "")
       form.setValue("linkedLearners", [])
+      form.setValue("hqScopeType", undefined)
+    } else if (["HQManager", "HQStaff"].includes(selectedRole)) {
+      form.setValue("partnerId", "")
+      form.setValue("partnerPortalRole", undefined)
+      form.setValue("linkedLearners", [])
+      if (!form.getValues("hqScopeType")) form.setValue("hqScopeType", "National")
+      if (form.getValues("hqScopeType") === "National") {
+        form.setValue("institution", "")
+        form.setValue("region", "")
+      } else if (form.getValues("hqScopeType") === "Region") {
+        form.setValue("institution", "")
+      }
     }
   }, [currentUser?.institution, currentUser?.role, form, selectedRole])
 
@@ -295,6 +337,18 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       form.setValue("region", selectedInstitutionRecord.region)
     }
   }, [form, selectedInstitutionRecord, selectedRole])
+
+  useEffect(() => {
+    if (!["HQManager", "HQStaff"].includes(selectedRole)) return
+    if (selectedHQScope === "National") {
+      form.setValue("institution", "")
+      form.setValue("region", "")
+    } else if (selectedHQScope === "Region") {
+      form.setValue("institution", "")
+    } else if (selectedHQScope === "Institution" && selectedInstitutionRecord?.region) {
+      form.setValue("region", selectedInstitutionRecord.region)
+    }
+  }, [form, selectedHQScope, selectedInstitutionRecord, selectedRole])
 
   const persistUser = async (values: UserFormValues, privilegedRoleConfirmed = false) => {
     setLoading(true)
@@ -451,6 +505,54 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {currentUser?.role === 'SuperAdmin' && ['HQManager', 'HQStaff'].includes(selectedRole) && (
+              <FormField control={form.control} name="hqScopeType" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-900">HQ Access Scope</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value || "National"}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select access scope" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="National">National — all regions and institutions</SelectItem>
+                      <SelectItem value="Region">Region — institutions in one region</SelectItem>
+                      <SelectItem value="Institution">Institution — one institution only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500">The selected scope is enforced by the API and reflected throughout the HQ portal.</p>
+                  <FormMessage />
+                </FormItem>
+              )} />
+            )}
+
+            {currentUser?.role === 'SuperAdmin' && ['HQManager', 'HQStaff'].includes(selectedRole) && selectedHQScope === 'Region' && (
+              <FormField control={form.control} name="region" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Region</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select region" /></SelectTrigger></FormControl>
+                    <SelectContent className="max-h-[250px]">
+                      {uniqueRegions.map((region) => <SelectItem key={region} value={region}>{region}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )} />
+            )}
+
+            {currentUser?.role === 'SuperAdmin' && ['HQManager', 'HQStaff'].includes(selectedRole) && selectedHQScope === 'Institution' && (
+              <FormField control={form.control} name="institution" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Institution</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select institution" /></SelectTrigger></FormControl>
+                    <SelectContent className="max-h-[250px]">
+                      {institutions.map((institution) => <SelectItem key={institution.name} value={institution.name}>{institution.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )} />
+            )}
+
             <FormField control={form.control} name="phone" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Phone</FormLabel>

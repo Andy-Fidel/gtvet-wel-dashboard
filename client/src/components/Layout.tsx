@@ -1,4 +1,4 @@
-import { isHQRole, canAccessHQPage } from '@/lib/rbac';
+import { isHQRole, canAccessHQPage, getHQScopeLabel } from '@/lib/rbac';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
 import { LayoutDashboard, Users, Briefcase, BriefcaseBusiness, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake, Archive, ArrowLeft } from 'lucide-react';
@@ -165,9 +165,11 @@ export default function Layout() {
                 {user.role === 'RegionalAdmin' ? 'Region' : (isHQRole(user.role) ? 'HQ' : (isIndustryPartner ? 'Company' : isGuardian ? 'Portal' : user.institution === 'N/A' ? 'Company' : 'Institution'))}
               </p>
               <p className="text-sm font-black text-gray-700 truncate">
-                {user.role === 'RegionalAdmin'
+                {isHQRole(user.role)
+                  ? (user.role === 'SuperAdmin' ? 'National Administration' : getHQScopeLabel(user))
+                  : user.role === 'RegionalAdmin'
                   ? (user.region || 'Regional Office')
-                  : isIndustryPartner || user.institution === 'N/A'
+                  : isIndustryPartner
                     ? (user.partnerId && typeof user.partnerId === 'object' ? user.partnerId.name : 'Partner Portal')
                     : isGuardian
                       ? 'Parent / Guardian Access'

@@ -1,4 +1,4 @@
-import { isHQRole, enforceHQAccess } from '../utils/hqAccess.js';
+import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import express from 'express';
 import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
@@ -68,15 +68,36 @@ const writeScopedCache = (key, payload) => {
 
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Helper: get institution filter (SuperAdmin sees all, RegionalAdmin sees their region)
-const getFilter = async (user) => {
-  if (isHQRole(user.role)) return {};
+const getHQInstitutionFilter = async (user) => {
+  if (!isScopedHQRole(user.role) || (user.hqScopeType || 'National') === 'National') return {};
+  if (user.hqScopeType === 'Institution') return { institution: user.institution };
+  const institutions = await Institution.find({ region: user.region }).select('name').lean();
+  return { institution: { $in: institutions.map((institution) => institution.name) } };
+};
+
+const getHQRegionFilter = async (user) => {
+  if (!isScopedHQRole(user.role) || (user.hqScopeType || 'National') === 'National') return {};
+  if (user.hqScopeType === 'Region') return { region: user.region };
+  const institution = await Institution.findOne({ name: user.institution }).select('region').lean();
+  return { region: institution?.region || user.region || '__unassigned__' };
+};
+
+// Shared institution-data scope for HQ, regional, and institution portals.
+export const getFilter = async (user) => {
+  if (user.role === 'SuperAdmin') return {};
+  if (isScopedHQRole(user.role)) return getHQInstitutionFilter(user);
   if (user.role === 'RegionalAdmin') {
      const insts = await Institution.find({ region: user.region }).select('name');
      const instNames = insts.map(i => i.name);
      return { institution: { $in: instNames } };
   }
   return { institution: user.institution };
+};
+
+const getHQPartnerFilter = async (user) => {
+  if (!isScopedHQRole(user.role) || (user.hqScopeType || 'National') === 'National') return {};
+  if (user.hqScopeType === 'Institution') return { linkedInstitutions: user.institution };
+  return { region: user.region };
 };
 
 // Helper: Notify Institution Admins
@@ -228,7 +249,8 @@ const getSupportTicketScope = async (user, { includeArchived = false, archivedOn
       ? {}
       : { archivedAt: null };
 
-  if (isHQRole(user.role)) return {};
+  if (user.role === 'SuperAdmin') return { ...archiveFilter };
+  if (isScopedHQRole(user.role)) return { ...(await getHQInstitutionFilter(user)), ...archiveFilter };
   if (user.role === 'RegionalAdmin') {
     const insts = await Institution.find({ region: user.region }).select('name');
     return { institution: { $in: insts.map((inst) => inst.name) }, ...archiveFilter };
@@ -343,7 +365,8 @@ const buildProgressionLockKey = (academicYear, institutionName) =>
 
 const resolveScopedInstitutionNames = async (user) => {
   if (isHQRole(user.role)) {
-    const institutions = await Institution.find({}).select('name').lean();
+    const hqFilter = await getHQInstitutionFilter(user);
+    const institutions = await Institution.find(hqFilter.institution ? { name: hqFilter.institution } : {}).select('name').lean();
     return institutions.map((institution) => institution.name).filter(Boolean);
   }
 
@@ -1047,7 +1070,8 @@ const calculatePlacementManagementSummary = ({
 };
 
 const getAuditLogScope = async (user) => {
-  if (isHQRole(user.role)) return {};
+  if (user.role === 'SuperAdmin') return {};
+  if (isScopedHQRole(user.role)) return getHQInstitutionFilter(user);
   if (user.role === 'RegionalAdmin') {
     const insts = await Institution.find({ region: user.region }).select('name');
     return { institution: { $in: insts.map((inst) => inst.name) } };
@@ -1057,7 +1081,8 @@ const getAuditLogScope = async (user) => {
 
 // Placement filter: includes delegated placements for institution-level users
 const getPlacementFilter = async (user) => {
-  if (isHQRole(user.role)) return {};
+  if (user.role === 'SuperAdmin') return {};
+  if (isScopedHQRole(user.role)) return getHQInstitutionFilter(user);
   if (user.role === 'RegionalAdmin') {
      const insts = await Institution.find({ region: user.region }).select('name');
      const instNames = insts.map(i => i.name);
@@ -1343,15 +1368,47 @@ export const normalizeUserPayloadForRole = async (actor, payload, existingUser =
     return { status: 403, message: 'Forbidden: Only SuperAdmins can manage Industry Partner accounts' };
   }
 
-  if (isHQRole(targetRole)) {
-    normalized.institution = 'N/A';
+  if (targetRole === 'SuperAdmin') {
+    normalized.hqScopeType = undefined;
+    normalized.institution = '';
     normalized.region = '';
     normalized.partnerId = undefined;
     normalized.linkedLearners = [];
     return { normalized };
   }
 
+  if (isScopedHQRole(targetRole)) {
+    normalized.hqScopeType = normalized.hqScopeType || existingUser?.hqScopeType || 'National';
+    if (!['National', 'Region', 'Institution'].includes(normalized.hqScopeType)) {
+      return { status: 400, message: 'A valid HQ access scope is required' };
+    }
+
+    if (normalized.hqScopeType === 'Institution') {
+      const institutionName = normalized.institution?.trim();
+      if (!institutionName) return { status: 400, message: 'Institution is required for this HQ scope' };
+      const institution = await Institution.findOne({ name: institutionName }).select('name region');
+      if (!institution) return { status: 400, message: 'Selected institution was not found' };
+      normalized.institution = institution.name;
+      normalized.region = institution.region || '';
+    } else if (normalized.hqScopeType === 'Region') {
+      if (!normalized.region?.trim()) return { status: 400, message: 'Region is required for this HQ scope' };
+      const regionExists = await Institution.exists({ region: normalized.region.trim() });
+      if (!regionExists) return { status: 400, message: 'Selected region was not found' };
+      normalized.region = normalized.region.trim();
+      normalized.institution = '';
+    } else {
+      normalized.institution = '';
+      normalized.region = '';
+    }
+
+    normalized.partnerId = undefined;
+    normalized.partnerPortalRole = undefined;
+    normalized.linkedLearners = [];
+    return { normalized };
+  }
+
   if (targetRole === 'RegionalAdmin') {
+    normalized.hqScopeType = undefined;
     if (!normalized.region?.trim()) {
       return { status: 400, message: 'Region is required for Regional Admins' };
     }
@@ -1363,6 +1420,7 @@ export const normalizeUserPayloadForRole = async (actor, payload, existingUser =
   }
 
   if (targetRole === 'IndustryPartner') {
+    normalized.hqScopeType = undefined;
     if (!normalized.partnerId) {
       return { status: 400, message: 'Industry Partner is required for this role' };
     }
@@ -1380,6 +1438,7 @@ export const normalizeUserPayloadForRole = async (actor, payload, existingUser =
   }
 
   if (targetRole === 'Guardian') {
+    normalized.hqScopeType = undefined;
     const learnerIds = Array.isArray(normalized.linkedLearners)
       ? normalized.linkedLearners.filter(Boolean)
       : [];
@@ -1409,6 +1468,7 @@ export const normalizeUserPayloadForRole = async (actor, payload, existingUser =
   }
 
   let institutionName = normalized.institution?.trim();
+  normalized.hqScopeType = undefined;
   if (actor.role === 'Admin') {
     institutionName = actor.institution;
   }
@@ -1453,8 +1513,14 @@ const requirePrivilegedRoleConfirmation = (actor, payload, existingUser = null) 
     confirmationRequired: {
       role: targetRole,
       previousRole,
-      scope: isHQRole(targetRole)
+      scope: targetRole === 'SuperAdmin'
         ? 'Platform-wide governance'
+        : isScopedHQRole(targetRole)
+          ? payload.hqScopeType === 'Institution'
+            ? `HQ governance for ${payload.institution || existingUser?.institution || 'the selected institution'}`
+            : payload.hqScopeType === 'Region'
+              ? `HQ governance for ${payload.region || existingUser?.region || 'the selected region'}`
+              : 'National HQ governance'
         : targetRole === 'RegionalAdmin'
           ? `Regional governance for ${payload.region || existingUser?.region || 'the selected region'}`
           : `Institution administration for ${payload.institution || existingUser?.institution || 'the selected institution'}`,
@@ -1464,7 +1530,8 @@ const requirePrivilegedRoleConfirmation = (actor, payload, existingUser = null) 
 
 const getOperationalOwnerCandidates = async (user) => {
   if (isHQRole(user.role)) {
-    return User.find({ role: { $in: ['Admin', 'Manager', 'Staff'] }, status: 'Active' })
+    const scope = await getHQInstitutionFilter(user);
+    return User.find({ role: { $in: ['Admin', 'Manager', 'Staff'] }, status: 'Active', ...scope })
       .select('_id name role institution')
       .sort({ institution: 1, name: 1 })
       .lean();
@@ -1493,7 +1560,8 @@ const getOperationalOwnerCandidates = async (user) => {
 };
 
 const getVisibleSupportAssignees = async (user) => {
-  const users = await User.find({ status: 'Active' })
+  const hqScope = isScopedHQRole(user.role) ? await getHQInstitutionFilter(user) : {};
+  const users = await User.find({ status: 'Active', ...hqScope })
     .select('name email role institution region partnerId')
     .lean();
 
@@ -2989,7 +3057,11 @@ router.post('/access-approvals', requireRole('Admin', 'RegionalAdmin'), async (r
         let institution = req.user.institution || 'N/A';
         let region = req.user.region || '';
 
-        if (req.user.role === 'RegionalAdmin') {
+        if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
+            filter.name = req.user.institution;
+        } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
+            filter.region = req.user.region;
+        } else if (req.user.role === 'RegionalAdmin') {
             if (requestedInstitution) {
                 const institutionRecord = await Institution.findOne({ name: requestedInstitution }).select('name region');
                 if (!institutionRecord) {
@@ -5315,7 +5387,9 @@ router.get('/search', async (req, res) => {
         // Search Institutions (SuperAdmin only)
         let institutions = [];
         if (isHQRole(req.user.role)) {
+            const hqScope = await getHQInstitutionFilter(req.user);
             institutions = await Institution.find({
+                ...(hqScope.institution ? { name: hqScope.institution } : {}),
                 $or: [
                     { name: searchRegex },
                     { code: searchRegex }
@@ -5349,7 +5423,13 @@ router.get('/institutions/:id/summary', requireRole('HQManager', 'HQStaff', 'Sup
             return res.status(404).json({ message: 'Institution not found' });
         }
 
-        if (req.user.role === 'RegionalAdmin' && institution.region !== req.user.region) {
+        const hqInstitutionDenied = isScopedHQRole(req.user.role)
+          && req.user.hqScopeType === 'Institution'
+          && institution.name !== req.user.institution;
+        const hqRegionDenied = isScopedHQRole(req.user.role)
+          && req.user.hqScopeType === 'Region'
+          && institution.region !== req.user.region;
+        if ((req.user.role === 'RegionalAdmin' && institution.region !== req.user.region) || hqInstitutionDenied || hqRegionDenied) {
             return res.status(403).json({ message: 'Access denied' });
         }
 
@@ -11366,6 +11446,8 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         let totalUsers;
         if (req.user.role === 'RegionalAdmin') {
             totalUsers = await User.countDocuments({ $or: [{ institution: filter.institution }, { region: req.user.region }] });
+        } else if (isScopedHQRole(req.user.role) && Object.keys(filter).length > 0) {
+            totalUsers = await User.countDocuments(filter);
         } else {
             totalUsers = await User.countDocuments();
         }
@@ -11376,7 +11458,13 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         const reportFilter = Object.keys(filter).length > 0 ? { institution: filter.institution } : {};
         const totalReports = await SemesterReport.countDocuments(reportFilter);
         const institutions = await Institution.find(instFilter).sort({ name: 1 });
-        const partnerFilter = req.user.role === 'RegionalAdmin' ? { region: req.user.region } : {};
+        const partnerFilter = req.user.role === 'RegionalAdmin'
+          ? { region: req.user.region }
+          : isScopedHQRole(req.user.role)
+            ? req.user.hqScopeType === 'Institution'
+              ? { linkedInstitutions: req.user.institution }
+              : await getHQRegionFilter(req.user)
+            : {};
         const totalPartners = await IndustryPartner.countDocuments(partnerFilter);
         const partnersDetails = await IndustryPartner.find(partnerFilter).sort({ createdAt: -1 });
 
@@ -12019,14 +12107,16 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             };
         }
 
-        const userScope = req.user.role === 'RegionalAdmin'
+        const userScope = req.user.role === 'RegionalAdmin' || (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region')
             ? {
                 $or: [
                     { institution: filter.institution },
                     { region: req.user.region },
                 ],
             }
-            : {};
+            : isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution'
+              ? { institution: req.user.institution }
+              : {};
         const governedUsers = await User.find(userScope).select('role status institution region passwordChangeRequired');
         const roleBreakdownMap = governedUsers.reduce((acc, user) => {
             acc[user.role] = (acc[user.role] || 0) + 1;
@@ -12268,7 +12358,8 @@ router.post('/admin/deadline-risk/notify', requireRole('SuperAdmin', 'RegionalAd
 // ==================== STUDENT VACANCIES ====================
 
 const getVacancyScope = async (user) => {
-    if (isHQRole(user.role)) return {};
+    if (user.role === 'SuperAdmin') return {};
+    if (isScopedHQRole(user.role)) return getHQRegionFilter(user);
     if (user.role === 'IndustryPartner') return { partner: getPartnerId(user) };
     if (user.role === 'RegionalAdmin') return { region: user.region };
 
@@ -12486,7 +12577,11 @@ router.get('/industry-partners', async (req, res) => {
             ? Math.min(parsedPageSize, 100)
             : 24;
         const scopeClauses = [];
-        if (req.user.role === 'RegionalAdmin') {
+        if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
+            scopeClauses.push({ linkedInstitutions: req.user.institution });
+        } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
+            scopeClauses.push({ region: req.user.region });
+        } else if (req.user.role === 'RegionalAdmin') {
             scopeClauses.push({ region: req.user.region });
         } else if (['Admin', 'Manager', 'Staff'].includes(req.user.role)) {
             const institution = await Institution.findOne({ name: req.user.institution }).select('region').lean();
@@ -12631,7 +12726,11 @@ router.get('/industry-partners/search', async (req, res) => {
         
         const filter = { name: { $regex: query, $options: 'i' } };
         // Optional: constrain query to user's region if they are RegionalAdmin/Admin
-        if (req.user.role === 'RegionalAdmin' || req.user.role === 'Admin' || req.user.role === 'Manager') {
+        if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
+             filter.linkedInstitutions = req.user.institution;
+        } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
+             filter.region = req.user.region;
+        } else if (req.user.role === 'RegionalAdmin' || req.user.role === 'Admin' || req.user.role === 'Manager') {
              if (req.user.region) {
                  filter.region = req.user.region;
              }
@@ -12722,7 +12821,8 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
 
 router.put('/industry-partners/:id/hq-approve', requireRole('HQManager', 'SuperAdmin'), async (req, res) => {
     try {
-        const partner = await IndustryPartner.findById(req.params.id);
+        const partnerScope = await getHQPartnerFilter(req.user);
+        const partner = await IndustryPartner.findOne({ _id: req.params.id, ...partnerScope });
         if (!partner) return res.status(404).json({ message: 'Partner not found' });
 
         const before = partner.toObject();
@@ -12755,7 +12855,8 @@ router.put('/industry-partners/:id/hq-approve', requireRole('HQManager', 'SuperA
 
 router.put('/industry-partners/:id/hq-reject', requireRole('HQManager', 'SuperAdmin'), async (req, res) => {
     try {
-        const partner = await IndustryPartner.findById(req.params.id);
+        const partnerScope = await getHQPartnerFilter(req.user);
+        const partner = await IndustryPartner.findOne({ _id: req.params.id, ...partnerScope });
         if (!partner) return res.status(404).json({ message: 'Partner not found' });
 
         const before = partner.toObject();

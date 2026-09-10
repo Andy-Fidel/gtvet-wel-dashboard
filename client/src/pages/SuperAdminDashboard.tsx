@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { useNavigate, useSearchParams } from "react-router-dom"
+import { canAccessHQPage, getHQScopeLabel, hasHQPermission } from "@/lib/rbac"
 
 interface InstitutionStat {
   _id: string;
@@ -240,7 +241,11 @@ export default function SuperAdminDashboard() {
   const [expandedRegions, setExpandedRegions] = useState<string[]>([]);
   const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "semesterOverSemesterPercent">("placementRate");
   const [actionFilter, setActionFilter] = useState<"All" | HqActionCategory>("All");
-  const { authFetch } = useAuth();
+  const { authFetch, user } = useAuth();
+  const canManageUsers = hasHQPermission(user?.role, 'users:manage');
+  const canManageSystem = hasHQPermission(user?.role, 'system:manage');
+  const canNotifyInstitutions = canManageSystem;
+  const scopeLabel = user?.role === 'SuperAdmin' ? 'National Administration' : getHQScopeLabel(user);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedDashboardView = searchParams.get("view");
@@ -584,7 +589,9 @@ export default function SuperAdminDashboard() {
       target: "/users?governance=password-reset-pending&from=hq-action-centre",
       score: 58 + Math.min(data.userGovernance.pendingPasswordResets, 20),
     }] : []),
-  ].sort((a, b) => b.score - a.score);
+  ]
+    .filter((item) => canAccessHQPage(user?.role, item.target.split('?')[0]))
+    .sort((a, b) => b.score - a.score);
   const actionCategories: Array<"All" | HqActionCategory> = ["All", "Reports", "Support", "Deadlines", "Governance", "Data quality"];
   const filteredActionItems = (actionFilter === "All" ? hqActionItems : hqActionItems.filter((item) => item.category === actionFilter)).slice(0, 10);
   const criticalActionCount = hqActionItems.filter((item) => item.priority === "Critical").length;
@@ -658,7 +665,7 @@ export default function SuperAdminDashboard() {
           </div>
           <div>
             <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">System Overview</h2>
-            <p className="text-muted-foreground">System health and institution governance</p>
+            <p className="text-muted-foreground">System health and institution governance · {scopeLabel}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -706,7 +713,9 @@ export default function SuperAdminDashboard() {
                 <div>
                   <CardTitle className="text-2xl font-black text-gray-950">HQ Action Centre</CardTitle>
                   <CardDescription className="mt-1 font-semibold text-gray-600">
-                    Priority-ordered work requiring headquarters review, ownership, or intervention.
+                    {user?.role === 'HQStaff'
+                      ? 'Priority-ordered operational work visible within your assigned scope.'
+                      : 'Priority-ordered work requiring headquarters review, ownership, or intervention.'}
                   </CardDescription>
                 </div>
               </div>
@@ -1334,9 +1343,9 @@ export default function SuperAdminDashboard() {
               </CardDescription>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-              <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/academic-calendar')}>
+              {canManageSystem ? <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/academic-calendar')}>
                 Open Calendar
-              </Button>
+              </Button> : null}
               <Button variant="outline" className="w-full rounded-xl border-gray-200 font-bold sm:w-auto" onClick={() => navigate('/semester-reports')}>
                 Open Reports
               </Button>
@@ -1427,14 +1436,14 @@ export default function SuperAdminDashboard() {
                       >
                         Open
                       </Button>
-                      <Button
+                      {canNotifyInstitutions ? <Button
                         size="sm"
                         className="h-8 rounded-lg bg-red-600 text-xs font-bold text-white hover:bg-red-700"
                         disabled={notifyingDeadlineKeys.includes(`overdue:${item._id}`)}
                         onClick={() => notifyDeadlineInstitution(item, 'overdue')}
                       >
                         {notifyingDeadlineKeys.includes(`overdue:${item._id}`) ? 'Notifying...' : 'Notify'}
-                      </Button>
+                      </Button> : null}
                     </div>
                   </div>
                 )) : <p className="text-sm text-gray-500">No overdue institution submissions.</p>}
@@ -1466,14 +1475,14 @@ export default function SuperAdminDashboard() {
                       >
                         Open
                       </Button>
-                      <Button
+                      {canNotifyInstitutions ? <Button
                         size="sm"
                         className="h-8 rounded-lg bg-amber-600 text-xs font-bold text-white hover:bg-amber-700"
                         disabled={notifyingDeadlineKeys.includes(`at-risk:${item._id}`)}
                         onClick={() => notifyDeadlineInstitution(item, 'at-risk')}
                       >
                         {notifyingDeadlineKeys.includes(`at-risk:${item._id}`) ? 'Notifying...' : 'Notify'}
-                      </Button>
+                      </Button> : null}
                     </div>
                   </div>
                 )) : <p className="text-sm text-gray-500">No institutions currently flagged as at risk.</p>}
@@ -1487,31 +1496,31 @@ export default function SuperAdminDashboard() {
         <CardHeader className="p-8 pb-4">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <CardTitle className="text-2xl font-black">Global User Governance</CardTitle>
+              <CardTitle className="text-2xl font-black">{user?.role === 'SuperAdmin' ? 'Global User Governance' : 'User Governance Snapshot'}</CardTitle>
               <CardDescription className="text-base font-bold text-gray-400 mt-2">
                 Role distribution, inactive accounts, orphaned institutions, and privileged-access anomalies.
               </CardDescription>
             </div>
-            <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/users')}>
+            {canManageUsers ? <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/users')}>
               Open Users
-            </Button>
+            </Button> : <Badge className="border border-slate-200 bg-slate-50 text-slate-600">View only</Badge>}
           </div>
         </CardHeader>
         <CardContent className="p-8 pt-2 space-y-5">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <button onClick={() => navigate('/users')} className="rounded-2xl bg-blue-50 p-4 text-left hover:bg-blue-100 transition-colors">
+            <button disabled={!canManageUsers} onClick={() => navigate('/users')} className="rounded-2xl bg-blue-50 p-4 text-left transition-colors enabled:hover:bg-blue-100 disabled:cursor-default">
               <p className="text-xs font-black uppercase tracking-wider text-blue-500">Roles Tracked</p>
               <p className="text-3xl font-black text-blue-700 mt-2">{data.userGovernance?.roleBreakdown?.length || 0}</p>
             </button>
-            <button onClick={() => navigate('/users?status=Inactive')} className="rounded-2xl bg-red-50 p-4 text-left hover:bg-red-100 transition-colors">
+            <button disabled={!canManageUsers} onClick={() => navigate('/users?status=Inactive')} className="rounded-2xl bg-red-50 p-4 text-left transition-colors enabled:hover:bg-red-100 disabled:cursor-default">
               <p className="text-xs font-black uppercase tracking-wider text-red-500">Inactive Users</p>
               <p className="text-3xl font-black text-red-700 mt-2">{data.userGovernance?.inactiveUsers || 0}</p>
             </button>
-            <button onClick={() => navigate('/users?governance=password-reset-pending')} className="rounded-2xl bg-amber-50 p-4 text-left hover:bg-amber-100 transition-colors">
+            <button disabled={!canManageUsers} onClick={() => navigate('/users?governance=password-reset-pending')} className="rounded-2xl bg-amber-50 p-4 text-left transition-colors enabled:hover:bg-amber-100 disabled:cursor-default">
               <p className="text-xs font-black uppercase tracking-wider text-amber-500">Password Resets Pending</p>
               <p className="text-3xl font-black text-amber-700 mt-2">{data.userGovernance?.pendingPasswordResets || 0}</p>
             </button>
-            <button onClick={() => navigate('/users?governance=orphaned-institutions&role=Admin&status=Active')} className="rounded-2xl bg-purple-50 p-4 text-left hover:bg-purple-100 transition-colors">
+            <button disabled={!canManageUsers} onClick={() => navigate('/users?governance=orphaned-institutions&role=Admin&status=Active')} className="rounded-2xl bg-purple-50 p-4 text-left transition-colors enabled:hover:bg-purple-100 disabled:cursor-default">
               <p className="text-xs font-black uppercase tracking-wider text-purple-500">Orphaned Institutions</p>
               <p className="text-3xl font-black text-purple-700 mt-2">{data.userGovernance?.institutionsWithoutActiveAdmins?.length || 0}</p>
             </button>
@@ -1521,9 +1530,9 @@ export default function SuperAdminDashboard() {
             <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-sm font-black text-gray-900">Users by Role</p>
-                <button onClick={() => navigate('/users')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
+                {canManageUsers ? <button onClick={() => navigate('/users')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
                   Manage
-                </button>
+                </button> : null}
               </div>
               <div className="space-y-3">
                 {data.userGovernance?.roleBreakdown?.length ? data.userGovernance.roleBreakdown.map((item) => (
@@ -1538,9 +1547,9 @@ export default function SuperAdminDashboard() {
             <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-sm font-black text-gray-900">Institutions Without Active Admins</p>
-                <button onClick={() => navigate('/users?governance=orphaned-institutions&role=Admin&status=Active')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
+                {canManageUsers ? <button onClick={() => navigate('/users?governance=orphaned-institutions&role=Admin&status=Active')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
                   Assign Admins
-                </button>
+                </button> : null}
               </div>
               <div className="space-y-3">
                 {data.userGovernance?.institutionsWithoutActiveAdmins?.length ? data.userGovernance.institutionsWithoutActiveAdmins.map((institution) => (
@@ -1555,9 +1564,9 @@ export default function SuperAdminDashboard() {
             <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-sm font-black text-gray-900">Privileged Access Anomalies</p>
-                <button onClick={() => navigate('/users?governance=privileged-anomalies')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
+                {canManageUsers ? <button onClick={() => navigate('/users?governance=privileged-anomalies')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
                   Review Access
-                </button>
+                </button> : null}
               </div>
               <div className="space-y-3">
                 {data.userGovernance?.privilegedUserAnomalies?.length ? data.userGovernance.privilegedUserAnomalies.map((entry) => (
@@ -1689,10 +1698,10 @@ export default function SuperAdminDashboard() {
               <div>
                 <CardTitle className="text-2xl font-black">School Governance</CardTitle>
                 <CardDescription className="text-base font-bold text-gray-400 mt-2">
-                  Add and manage registered TVET institutions
+                  {canManageSystem ? 'Add and manage registered TVET institutions' : 'Registered TVET institutions in your assigned scope'}
                 </CardDescription>
               </div>
-              <div className="flex items-center gap-2">
+              {canManageSystem ? <div className="flex items-center gap-2">
                 <input
                   id="institution-csv-import"
                   type="file"
@@ -1715,7 +1724,7 @@ export default function SuperAdminDashboard() {
                 >
                   Register School
                 </Button>
-              </div>
+              </div> : <Badge className="border border-slate-200 bg-slate-50 text-slate-600">View only</Badge>}
             </div>
 
             {/* Summary Stats */}
@@ -1803,10 +1812,12 @@ export default function SuperAdminDashboard() {
                         </button>
                         <div id={regionPanelId} className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                           {displayInst.map((inst) => (
-                            <div
+                            <button
+                              type="button"
                               key={inst._id}
+                              disabled={!canManageSystem}
                               onClick={() => { setEditingInstitution(inst); setInstOpen(true); }}
-                              className="flex items-start gap-3 p-3 bg-white border border-gray-100 rounded-xl hover:border-purple-200 hover:shadow-md transition-all cursor-pointer group"
+                              className="flex items-start gap-3 p-3 bg-white border border-gray-100 rounded-xl text-left transition-all group enabled:hover:border-purple-200 enabled:hover:shadow-md disabled:cursor-default"
                             >
                               <div className="p-2 bg-purple-50 rounded-xl group-hover:bg-purple-100 transition-colors shrink-0">
                                 <Building2 className="h-4 w-4 text-purple-500" />
@@ -1821,7 +1832,7 @@ export default function SuperAdminDashboard() {
                                   <span className="text-[9px] bg-blue-50 text-blue-500 px-1.5 py-0.5 rounded font-bold">{inst.gender || 'Mixed'}</span>
                                 </div>
                               </div>
-                            </div>
+                            </button>
                           ))}
                         </div>
                         {institutions.length > 6 && !isExpanded && (
@@ -1839,7 +1850,7 @@ export default function SuperAdminDashboard() {
               );
             })()}
 
-            <Dialog open={instOpen} onOpenChange={setInstOpen}>
+            {canManageSystem ? <Dialog open={instOpen} onOpenChange={setInstOpen}>
                 <DialogContent className="sm:max-w-[600px] rounded-[2rem] border-0 shadow-2xl p-0 overflow-hidden">
                     <div className="p-8">
                         <DialogHeader className="mb-6">
@@ -1865,7 +1876,7 @@ export default function SuperAdminDashboard() {
                         />
                     </div>
                 </DialogContent>
-            </Dialog>
+            </Dialog> : null}
           </CardContent>
         </Card>
 

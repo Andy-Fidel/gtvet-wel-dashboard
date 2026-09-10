@@ -1,4 +1,3 @@
-import HQDashboard from '@/pages/HQDashboard';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
 import ProtectedRoute from '@/components/ProtectedRoute';
@@ -30,11 +29,7 @@ const IndustryPartners = lazy(() => import('@/pages/IndustryPartners'));
 const CalendarView = lazy(() => import('@/pages/CalendarView'));
 const AcademicCalendarPage = lazy(() => import('@/pages/AcademicCalendar'));
 const Users = lazy(() => import('@/pages/Users'));
-const FullSuperAdminDashboard = lazy(() => import('@/pages/SuperAdminDashboard'));
-function SuperAdminDashboard() {
-  const { user } = useAuth();
-  return user?.role === 'SuperAdmin' ? <FullSuperAdminDashboard /> : <HQDashboard />;
-}
+const SuperAdminDashboard = lazy(() => import('@/pages/SuperAdminDashboard'));
 const HQIndustryPartners = lazy(() => import('@/pages/HQIndustryPartners'));
 const PartnerDashboard = lazy(() => import('@/pages/PartnerDashboard'));
 const PartnerHistory = lazy(() => import('@/pages/PartnerHistory'));
@@ -61,7 +56,9 @@ function HomeRoute() {
     return <Navigate to="/guardian-dashboard" replace />;
   }
 
-  if (user?.role === 'HQManager' || user?.role === 'HQStaff') return <HQDashboard />;
+  if (user?.role === 'HQManager' || user?.role === 'HQStaff') {
+    return <Navigate to="/system-overview" replace />;
+  }
 
   if (user?.role === 'SuperAdmin') {
     return <Navigate to="/system-overview" replace />;
