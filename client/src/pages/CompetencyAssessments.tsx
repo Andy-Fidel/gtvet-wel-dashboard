@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 
 import {
   type ColumnDef,
@@ -118,7 +119,7 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
         role?: string
       }
 
-      const isOversightUser = meta?.role === 'SuperAdmin' || meta?.role === 'RegionalAdmin'
+      const isOversightUser = isHQRole(meta?.role) || meta?.role === 'RegionalAdmin'
 
       return (
         <DropdownMenu>
@@ -187,7 +188,7 @@ export default function CompetencyAssessments() {
     const { authFetch, user } = useAuth()
     const [searchParams, setSearchParams] = useSearchParams()
     const isEditingExistingAssessment = Boolean(editingAssessment?._id)
-    const isHeadquarters = user?.role === 'SuperAdmin'
+    const isHeadquarters = isHQRole(user?.role)
     const isRegionalOversight = user?.role === 'RegionalAdmin'
     const isOversightPortal = isHeadquarters || isRegionalOversight
     const oversightScopeLabel = isHeadquarters ? 'National' : 'Regional'

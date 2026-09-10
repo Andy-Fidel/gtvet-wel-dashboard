@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -299,7 +300,7 @@ export default function LearnerProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { authFetch, user } = useAuth()
-  const isOversightReadOnly = user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin'
+  const isOversightReadOnly = isHQRole(user?.role) || user?.role === 'RegionalAdmin'
   const canAccessManagementPages = isManagementRole(user?.role)
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [data, setData] = useState<ProfileData | null>(null)

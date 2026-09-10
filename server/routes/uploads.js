@@ -1,3 +1,4 @@
+import { isHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import express from 'express';
 import multer from 'multer';
 import cloudinary, { isCloudinaryConfigured } from '../config/cloudinary.js';
@@ -22,7 +23,7 @@ const __dirname = path.dirname(__filename);
 const localUploadRoot = path.resolve(__dirname, '../local-uploads');
 const canManageInstitutionRecord = (user, institution) => {
   if (!institution) return false;
-  if (user.role === 'SuperAdmin') return true;
+  if (isHQRole(user.role)) return true;
   if (user.role === 'RegionalAdmin') return true;
   return user.institution === institution;
 };
@@ -31,7 +32,7 @@ const getUserPartnerId = (user) => user?.partnerId?._id?.toString?.() || user?.p
 
 const canAccessLearner = (user, learner) => {
   if (!learner) return false;
-  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (isHQRole(user.role) || user.role === 'RegionalAdmin') return true;
   if (user.role === 'Guardian') {
     return (user.linkedLearners || []).some((linkedLearner) => linkedLearner._id?.toString?.() === learner._id.toString());
   }
@@ -42,7 +43,7 @@ const canAccessLearner = (user, learner) => {
 
 const canAccessPlacement = (user, placement) => {
   if (!placement) return false;
-  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (isHQRole(user.role) || user.role === 'RegionalAdmin') return true;
   if (user.role === 'IndustryPartner') {
     const userPartnerId = getUserPartnerId(user);
     const placementPartnerId = placement.partner?.toString?.();
@@ -57,7 +58,7 @@ const canAccessPlacement = (user, placement) => {
 
 const canAccessSupportTicket = (user, ticket) => {
   if (!ticket) return false;
-  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (isHQRole(user.role) || user.role === 'RegionalAdmin') return true;
   if (user.role === 'IndustryPartner') {
     return ticket.partnerId?.toString?.() === getUserPartnerId(user);
   }
@@ -70,14 +71,14 @@ const canAccessSupportTicket = (user, ticket) => {
 
 const canAccessMonitoringVisit = (user, visit) => {
   if (!visit) return false;
-  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (isHQRole(user.role) || user.role === 'RegionalAdmin') return true;
   if (visit.submittedBy?.toString?.() === user._id.toString()) return true;
   return visit.institution === user.institution;
 };
 
 const canAccessEmployerEvaluation = async (user, evaluation) => {
   if (!evaluation) return false;
-  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') return true;
+  if (isHQRole(user.role) || user.role === 'RegionalAdmin') return true;
   if (user.role === 'IndustryPartner') {
     return evaluation.partner?.toString?.() === getUserPartnerId(user);
   }
@@ -182,6 +183,7 @@ router.get('/local-file/:folder/:fileName', async (req, res) => {
 
 // All routes below require auth
 router.use(auth);
+router.use(enforceHQAccess);
 
 // ==================== PROFILE PICTURE ====================
 router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (req, res) => {
@@ -508,7 +510,7 @@ router.get('/', async (req, res) => {
     } else if (req.user.role === 'RegionalAdmin') {
       const institutions = await Institution.find({ region: req.user.region }).distinct('name');
       filter.institution = { $in: institutions };
-    } else if (req.user.role !== 'SuperAdmin') {
+    } else if (!isHQRole(req.user.role)) {
       filter.institution = req.user.institution;
     }
 

@@ -1,3 +1,4 @@
+import { canApproveHQ } from '@/lib/rbac'
 import { useCallback, useEffect, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { Building2, CheckCircle2, Clock3, Mail, MapPin, Plus, Search, UserPlus, XCircle } from "lucide-react"
@@ -44,7 +45,7 @@ interface HQIndustryPartnersResponse {
 }
 
 export default function HQIndustryPartners() {
-  const { authFetch } = useAuth()
+  const { authFetch, user } = useAuth()
   const [partners, setPartners] = useState<HQIndustryPartner[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState("")
@@ -163,13 +164,13 @@ export default function HQIndustryPartners() {
           <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">HQ Industry Partner Registry</h2>
           <p className="text-muted-foreground mt-1">Review every registered partner and approve new submissions before they enter the placement network.</p>
         </div>
-        <Button
+        {user?.role === 'SuperAdmin' && <Button
           type="button"
           onClick={() => setRegistrationOpen(true)}
           className="h-12 rounded-2xl bg-[#FFB800] px-6 font-black text-gray-900 shadow-lg shadow-[#FFB800]/20 hover:bg-[#FFD700]"
         >
           <Plus className="mr-2 h-5 w-5" /> Register Partner
-        </Button>
+        </Button>}
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -304,7 +305,7 @@ export default function HQIndustryPartners() {
                       </div>
 
                       <div className="flex flex-col gap-2 xl:w-48">
-                        {partner.approvalStatus === "PendingHQApproval" ? (
+                        {canApproveHQ(user?.role) && partner.approvalStatus === "PendingHQApproval" ? (
                           <>
                             <Button onClick={() => openDecision(partner, "approve")} className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white">
                               <CheckCircle2 className="mr-2 h-4 w-4" /> Approve
@@ -314,14 +315,14 @@ export default function HQIndustryPartners() {
                             </Button>
                           </>
                         ) : null}
-                        <Button
+                        {user?.role === 'SuperAdmin' && <Button
                           onClick={() => createPortalAccount(partner)}
                           variant="outline"
                           disabled={!isApprovedPartner(partner) || partner.status !== "Active"}
                           className="rounded-xl"
                         >
                           <UserPlus className="mr-2 h-4 w-4" /> Portal
-                        </Button>
+                        </Button>}
                       </div>
                     </div>
                   </div>

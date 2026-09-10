@@ -24,7 +24,7 @@ const baseFormSchema = z.object({
   name: z.string().min(2, "Name is required"),
   email: z.string().email("Invalid email address"),
   password: z.string().min(6, "Password must be at least 6 characters").optional().or(z.literal('')),
-  role: z.enum(["SuperAdmin", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"]),
+  role: z.enum(["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"]),
   status: z.enum(["Active", "Inactive"]),
   phone: z.string().optional(),
   institution: z.string().optional(),
@@ -80,6 +80,8 @@ interface PrivilegedConfirmationState {
 }
 
 const ROLE_CONFIG = {
+  HQManager: { label: "HQ Manager", description: "National oversight with term report and partner approvals.", scopeLabel: "HQ-wide access" },
+  HQStaff: { label: "HQ Staff", description: "Read-only national oversight.", scopeLabel: "HQ-wide read-only access" },
   SuperAdmin: {
     label: "SuperAdmin",
     description: "Platform-wide governance across all regions, institutions, and partners.",
@@ -118,7 +120,7 @@ const ROLE_CONFIG = {
 } as const
 
 const getManageableRoles = (actorRole?: string) => {
-  if (actorRole === "SuperAdmin") return ["SuperAdmin", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"] as const
+  if (actorRole === "SuperAdmin") return ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"] as const
   if (actorRole === "RegionalAdmin") return ["Admin", "Manager", "Staff", "Guardian"] as const
   return ["Manager", "Staff", "Guardian"] as const
 }
@@ -198,7 +200,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
   const roleOptions = Array.from(new Set([...(allowedRoles as readonly string[]), initialData?.role].filter(Boolean))) as Array<UserFormValues["role"]>
   const selectedRoleConfig = ROLE_CONFIG[selectedRole]
   const selectedInstitutionRecord = institutions.find((inst) => inst.name === selectedInstitution)
-  const scopeSummary = selectedRole === "SuperAdmin"
+  const scopeSummary = ["SuperAdmin", "HQManager", "HQStaff"].includes(selectedRole)
     ? "This user will have platform-wide access."
     : selectedRole === "RegionalAdmin"
       ? `This user will manage institutions in ${form.watch("region") || "the selected region"}.`
@@ -280,7 +282,7 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
       if (!form.getValues("partnerPortalRole")) form.setValue("partnerPortalRole", "Supervisor")
     } else if (selectedRole === "Guardian") {
       form.setValue("partnerId", "")
-    } else if (selectedRole === "SuperAdmin") {
+    } else if (["SuperAdmin", "HQManager", "HQStaff"].includes(selectedRole)) {
       form.setValue("institution", "")
       form.setValue("region", "")
       form.setValue("partnerId", "")

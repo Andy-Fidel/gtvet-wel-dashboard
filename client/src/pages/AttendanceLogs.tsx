@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 import { useEffect, useMemo, useState } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import { format } from "date-fns"
@@ -93,7 +94,7 @@ export default function AttendanceLogs() {
 
   const learnerId = useMemo(() => new URLSearchParams(location.search).get("learnerId") || "", [location.search])
   const isIndustryPartner = user?.role === "IndustryPartner"
-  const isOversightReadOnly = user?.role === "SuperAdmin" || user?.role === "RegionalAdmin"
+  const isOversightReadOnly = isHQRole(user?.role) || user?.role === "RegionalAdmin"
 
   useEffect(() => {
     const fetchLogs = async () => {

@@ -196,7 +196,7 @@ export function Navbar() {
                   </p>
                   <div className="flex items-center gap-2 mt-2">
                     <Badge className={`${getRoleBadgeColor(user?.role || '')} text-white border-0 text-[10px]`}>
-                      {user?.role}
+                      {user?.role === 'HQManager' ? 'HQ Manager' : user?.role === 'HQStaff' ? 'HQ Staff' : user?.role}
                     </Badge>
                   </div>
                 </div>

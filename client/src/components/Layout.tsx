@@ -1,3 +1,4 @@
+import { isHQRole, canAccessHQPage } from '@/lib/rbac';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
 import { LayoutDashboard, Users, Briefcase, BriefcaseBusiness, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake, Archive, ArrowLeft } from 'lucide-react';
@@ -70,7 +71,7 @@ export default function Layout() {
 
   const isAdmin = isAdminRole(user?.role);
   const canAccessManagementPages = isManagementRole(user?.role);
-  const isSuperAdmin = user?.role === 'SuperAdmin';
+  const isSuperAdmin = isHQRole(user?.role);
   const isRegionalAdmin = user?.role === 'RegionalAdmin';
   const isIndustryPartner = user?.role === 'IndustryPartner';
   const isGuardian = user?.role === 'Guardian';
@@ -161,7 +162,7 @@ export default function Layout() {
           {user && !isSidebarCollapsed && (
             <div className="bg-gray-50/50 rounded-2xl px-4 py-3 mt-2">
               <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-                {user.role === 'RegionalAdmin' ? 'Region' : (user.role === 'SuperAdmin' ? 'HQ' : (isIndustryPartner ? 'Company' : isGuardian ? 'Portal' : user.institution === 'N/A' ? 'Company' : 'Institution'))}
+                {user.role === 'RegionalAdmin' ? 'Region' : (isHQRole(user.role) ? 'HQ' : (isIndustryPartner ? 'Company' : isGuardian ? 'Portal' : user.institution === 'N/A' ? 'Company' : 'Institution'))}
               </p>
               <p className="text-sm font-black text-gray-700 truncate">
                 {user.role === 'RegionalAdmin'
@@ -193,13 +194,13 @@ export default function Layout() {
               </NavLink>
           )}
 
-          {isSuperAdmin ? HQ_NAV_GROUPS.map((group) => (
+          {isSuperAdmin ? HQ_NAV_GROUPS.filter((group) => group.items.some((item) => canAccessHQPage(user?.role, item.to))).map((group) => (
             <div key={group.label} className="pt-2 first:pt-0">
               <p className={`px-6 pb-2 text-[10px] font-black uppercase tracking-[0.16em] text-gray-400 ${isSidebarCollapsed ? 'text-center' : ''}`}>
                 {isSidebarCollapsed ? '•' : group.label}
               </p>
               <div className="space-y-1">
-                {group.items.map((item) => {
+                {group.items.filter((item) => canAccessHQPage(user?.role, item.to)).map((item) => {
                   const Icon = item.icon;
                   return (
                     <NavLink

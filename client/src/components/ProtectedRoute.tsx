@@ -1,3 +1,5 @@
+import { useLocation } from 'react-router-dom';
+import { isHQRole, canAccessHQPage } from '@/lib/rbac';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 
@@ -7,6 +9,7 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, requiredRoles }: ProtectedRouteProps) {
+  const location = useLocation();
   const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
@@ -24,7 +27,7 @@ export default function ProtectedRoute({ children, requiredRoles }: ProtectedRou
     return <Navigate to="/login" replace />;
   }
 
-  if (requiredRoles && user && !requiredRoles.includes(user.role)) {
+  if (!canAccessHQPage(user?.role, location.pathname) || (requiredRoles && user && !requiredRoles.includes(user.role) && !(isHQRole(user.role) && requiredRoles.includes('SuperAdmin')))) {
     return <Navigate to="/" replace />;
   }
 

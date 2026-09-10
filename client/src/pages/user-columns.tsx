@@ -16,7 +16,7 @@ export type User = {
     _id: string
     name: string
     email: string
-    role: 'SuperAdmin' | 'RegionalAdmin' | 'Admin' | 'Manager' | 'Staff' | 'IndustryPartner' | 'Guardian'
+    role: 'SuperAdmin' | 'HQManager' | 'HQStaff' | 'RegionalAdmin' | 'Admin' | 'Manager' | 'Staff' | 'IndustryPartner' | 'Guardian'
     status: 'Active' | 'Inactive'
     lifecycleStatus?: {
       code: 'Invited' | 'ResetPending' | 'PasswordChangeRequired' | 'Active' | 'Inactive'
@@ -112,7 +112,7 @@ export const columns: ColumnDef<User>[] = [
         
         return (
           <div className="flex flex-col items-start gap-1">
-            <Badge className={`${color} text-white border-0`}>{role}</Badge>
+            <Badge className={`${color} text-white border-0`}>{role === "HQManager" ? "HQ Manager" : role === "HQStaff" ? "HQ Staff" : role}</Badge>
             {role === 'IndustryPartner' ? (
               <span className="text-xs font-semibold text-gray-500">{row.original.partnerPortalRole || 'Coordinator'}</span>
             ) : null}

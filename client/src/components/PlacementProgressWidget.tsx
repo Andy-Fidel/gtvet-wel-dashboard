@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac';
 
 import { useEffect, useState } from "react"
 import { useAuth } from "@/context/AuthContext"
@@ -17,7 +18,7 @@ export function PlacementProgressWidget() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') return;
+    if (isHQRole(user?.role) || user?.role === 'RegionalAdmin') return;
 
     authFetch('/api/dashboard/stats')
       .then(async (res) => {
@@ -37,7 +38,7 @@ export function PlacementProgressWidget() {
       });
   }, [authFetch, user?.role]);
 
-  if (user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin' || user?.role === 'IndustryPartner' || loading || !stats) return null;
+  if (isHQRole(user?.role) || user?.role === 'RegionalAdmin' || user?.role === 'IndustryPartner' || loading || !stats) return null;
 
   const percentage = stats.totalLearners > 0 
     ? Math.round((stats.placed / stats.totalLearners) * 100) 

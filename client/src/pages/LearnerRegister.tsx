@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 import { useEffect, useState, useRef } from "react"
 import { type Learner, columns } from "./learners/columns"
 import { DataTable } from "@/components/ui/data-table"
@@ -351,7 +352,7 @@ export default function LearnerRegister() {
               ? "Regional learner participation, progression, placement readiness, and institutional oversight."
               : "Manage and track all TVET learners in the system."}
           </p>
-          {!isRegionalOversight && user?.role !== 'SuperAdmin' ? (
+          {!isRegionalOversight && !isHQRole(user?.role) ? (
             <p className="text-xs font-semibold text-indigo-600 mt-2">
               Learners now progress automatically after Semester 2 closes for the active academic year.
             </p>
@@ -361,7 +362,7 @@ export default function LearnerRegister() {
            {isRegionalOversight ? (
              <Badge className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-indigo-700">Regional · Read only</Badge>
            ) : null}
-           {!isRegionalOversight && user?.role !== 'SuperAdmin' && (
+           {!isRegionalOversight && !isHQRole(user?.role) && (
              <>
                <input
                  type="file"

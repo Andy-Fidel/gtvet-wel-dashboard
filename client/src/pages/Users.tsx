@@ -729,12 +729,12 @@ export default function Users() {
 
         const riskyAccounts = data.filter((entry) =>
             (entry.auditSummary?.failedLoginCount ?? 0) >= 5
-            || (["SuperAdmin", "RegionalAdmin", "Admin"].includes(entry.role) && entry.status === "Inactive")
+            || (["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin"].includes(entry.role) && entry.status === "Inactive")
             || (entry.auditSummary?.recentSensitiveActions?.length ?? 0) >= 3
         )
 
         const dormantPrivilegedAccounts = data
-            .filter((entry) => ["SuperAdmin", "RegionalAdmin", "Admin"].includes(entry.role) && entry.status === "Active")
+            .filter((entry) => ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin"].includes(entry.role) && entry.status === "Active")
             .filter((entry) => {
                 if (!entry.lastLoginAt) return true
                 return (Date.now() - new Date(entry.lastLoginAt).getTime()) / (1000 * 60 * 60 * 24) >= 45
@@ -756,7 +756,7 @@ export default function Users() {
                 acc[region] = { region, totalUsers: 0, privilegedUsers: 0, invitedUsers: 0 }
             }
             acc[region].totalUsers += 1
-            if (["SuperAdmin", "RegionalAdmin", "Admin"].includes(entry.role)) acc[region].privilegedUsers += 1
+            if (["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin"].includes(entry.role)) acc[region].privilegedUsers += 1
             if (entry.lifecycleStatus?.code === "Invited") acc[region].invitedUsers += 1
             return acc
         }, {})).sort((a, b) => b.totalUsers - a.totalUsers)
@@ -1944,7 +1944,7 @@ export default function Users() {
                                     const failedLogins = entry.auditSummary?.failedLoginCount ?? 0
                                     const reasons = [
                                         failedLogins >= 5 ? `${failedLogins} failed logins` : "",
-                                        ["SuperAdmin", "RegionalAdmin", "Admin"].includes(entry.role) && entry.status === "Inactive" ? "Privileged account inactive" : "",
+                                        ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin"].includes(entry.role) && entry.status === "Inactive" ? "Privileged account inactive" : "",
                                         (entry.auditSummary?.recentSensitiveActions?.length ?? 0) >= 3 ? "High recent sensitive activity" : "",
                                     ].filter(Boolean)
 

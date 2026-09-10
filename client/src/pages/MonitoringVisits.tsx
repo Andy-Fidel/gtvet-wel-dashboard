@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 
 import {
   type ColumnDef,
@@ -256,7 +257,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
         role?: string 
       }
 
-      const isOversightUser = meta?.role === 'SuperAdmin' || meta?.role === 'RegionalAdmin'
+      const isOversightUser = isHQRole(meta?.role) || meta?.role === 'RegionalAdmin'
  
       return (
         <DropdownMenu>
@@ -323,7 +324,7 @@ export default function MonitoringVisits() {
     const { authFetch, user } = useAuth()
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
-    const isHeadquarters = user?.role === 'SuperAdmin'
+    const isHeadquarters = isHQRole(user?.role)
     const isRegionalOversight = user?.role === 'RegionalAdmin'
     const isOversightPortal = isHeadquarters || isRegionalOversight
     const oversightScopeLabel = isHeadquarters ? 'National' : 'Regional'

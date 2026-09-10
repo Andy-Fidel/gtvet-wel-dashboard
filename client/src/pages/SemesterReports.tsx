@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 import { useState, useEffect } from "react"
 import {
   type ColumnDef,
@@ -357,7 +358,7 @@ export default function SemesterReports() {
           <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Term Closure Reports</h2>
           <p className="text-gray-400 font-bold mt-1">Structured end-of-term reporting with auto-generated metrics</p>
         </div>
-        {user?.role !== 'SuperAdmin' && user?.role !== 'RegionalAdmin' && (
+        {!isHQRole(user?.role) && user?.role !== 'RegionalAdmin' && (
           <Button
             data-help-id="semester-reports-initiate"
             onClick={() => setShowInitiate(true)}

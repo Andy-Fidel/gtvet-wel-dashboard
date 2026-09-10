@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
-type AppRole = "SuperAdmin" | "RegionalAdmin" | "Admin" | "Manager" | "Staff" | "IndustryPartner" | "Guardian"
+type AppRole = "SuperAdmin" | "HQManager" | "HQStaff" | "RegionalAdmin" | "Admin" | "Manager" | "Staff" | "IndustryPartner" | "Guardian"
 
 type GuideStep = {
   title: string
@@ -45,7 +45,7 @@ const INSTITUTION_ROLES: AppRole[] = ["Admin", "Manager", "Staff"]
 const INSTITUTION_AND_REGION_ROLES: AppRole[] = ["RegionalAdmin", "Admin", "Manager", "Staff"]
 const MANAGEMENT_ROLES: AppRole[] = ["SuperAdmin", "RegionalAdmin", "Admin", "Manager"]
 const ADMIN_ROLES: AppRole[] = ["SuperAdmin", "RegionalAdmin", "Admin"]
-const ALL_ROLES: AppRole[] = ["SuperAdmin", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"]
+const ALL_ROLES: AppRole[] = ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"]
 
 const guideDefinitions: GuideDefinition[] = [
   {

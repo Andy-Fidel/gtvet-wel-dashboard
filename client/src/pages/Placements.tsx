@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 import {
   type SortingState,
   type VisibilityState,
@@ -116,7 +117,7 @@ export default function Placements() {
     const [evidencePlacement, setEvidencePlacement] = useState<Placement | null>(null)
     const [evidenceDocuments, setEvidenceDocuments] = useState<EvidenceDocument[]>([])
     const { authFetch, user, isLoading: authLoading } = useAuth()
-    const isOversightReadOnly = user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin'
+    const isOversightReadOnly = isHQRole(user?.role) || user?.role === 'RegionalAdmin'
 
     // Search & filter state
     const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") || "")
@@ -545,7 +546,7 @@ export default function Placements() {
                         <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
                     
-                    {user?.role !== 'RegionalAdmin' && user?.role !== 'SuperAdmin' && (
+                    {user?.role !== 'RegionalAdmin' && !isHQRole(user?.role) && (
                         <Button data-help-id="placements-new" onClick={() => setNewOpen(true)} className="bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-bold h-10 px-6 rounded-xl shadow-sm shrink-0">
                             <Plus className="mr-2 h-4 w-4" /> New Placement
                         </Button>
@@ -934,7 +935,7 @@ export default function Placements() {
                                         </div>
                                     )}
 
-                                    {req.sourceType === 'LearnerFound' && user?.role !== 'SuperAdmin' && user?.role !== 'RegionalAdmin' && (
+                                    {req.sourceType === 'LearnerFound' && !isHQRole(user?.role) && user?.role !== 'RegionalAdmin' && (
                                         <div className="flex flex-wrap gap-2">
                                             {req.status === 'SelfSourced_Submitted' ? (
                                                 <Button size="sm" variant="outline" className="rounded-xl" disabled={selfSourcedActionLoading === req._id} onClick={() => handleUpdateSelfSourcedStatus(req, 'Under_Verification')}>

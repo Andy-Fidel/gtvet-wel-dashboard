@@ -1,3 +1,4 @@
+import { isHQRole, canApproveHQ } from '@/lib/rbac'
 import { useState, useEffect } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import {
@@ -223,7 +224,7 @@ export default function SemesterReportDetail() {
   const isSubmitted = report.status === 'Submitted';
   const isRegionalApproved = report.status === 'Regional_Approved';
   const isApproved = report.status === 'HQ_Approved';
-  const canEdit = isDraft || isRejected;
+  const canEdit = (isDraft || isRejected) && !isHQRole(user?.role) && user?.role !== 'RegionalAdmin';
   const currentWorkflowIndex = Math.max(0, reportWorkflowStages.findIndex((stage) => stage.status === report.status));
   const rejectedAtIndex = report.reviewedByHQ ? 3 : report.reviewedByRegional ? 2 : 0;
 
@@ -566,7 +567,7 @@ export default function SemesterReportDetail() {
               )}
 
               {/* Review comment (for reviewers) */}
-              {(isSubmitted || isRegionalApproved) && (user?.role === 'RegionalAdmin' || user?.role === 'SuperAdmin') && (
+              {(isSubmitted || isRegionalApproved) && (user?.role === 'RegionalAdmin' || canApproveHQ(user?.role)) && (
                 <div>
                   <label className="text-sm font-bold text-gray-700 block mb-2">Review Comment (optional)</label>
                   <textarea
@@ -582,7 +583,7 @@ export default function SemesterReportDetail() {
               {/* Action buttons */}
               <div className="flex gap-3 flex-wrap">
                 {/* Draft → Certify */}
-                {canEdit && user?.role !== 'SuperAdmin' && user?.role !== 'RegionalAdmin' && (
+                {canEdit && !isHQRole(user?.role) && user?.role !== 'RegionalAdmin' && (
                   <Button
                     onClick={handleCertify}
                     disabled={acting}
@@ -594,7 +595,7 @@ export default function SemesterReportDetail() {
                 )}
 
                 {/* Certified → Submit */}
-                {isCertified && user?.role !== 'SuperAdmin' && user?.role !== 'RegionalAdmin' && (
+                {isCertified && !isHQRole(user?.role) && user?.role !== 'RegionalAdmin' && (
                   <Button
                     onClick={handleSubmit}
                     disabled={acting}
@@ -618,7 +619,7 @@ export default function SemesterReportDetail() {
                 )}
 
                 {/* HQ Approve */}
-                {isRegionalApproved && user?.role === 'SuperAdmin' && (
+                {isRegionalApproved && canApproveHQ(user?.role) && (
                   <>
                     <Button onClick={() => handleAction('hq-approve')} disabled={acting} className="rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold">
                       <CheckCircle2 className="h-4 w-4 mr-2" /> Approve (HQ)

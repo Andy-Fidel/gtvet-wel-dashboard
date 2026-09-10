@@ -1,3 +1,4 @@
+import { isHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import express from 'express';
 import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
@@ -43,6 +44,7 @@ const INSTITUTION_MANAGEMENT_ROLES = ['Admin', 'Manager'];
 
 // All routes below require authentication
 router.use(auth);
+router.use(enforceHQAccess);
 
 const DASHBOARD_CACHE_TTL_MS = Number(process.env.DASHBOARD_CACHE_TTL_MS || 60 * 1000);
 const dashboardCache = new LRUCache({ max: 500, ttl: DASHBOARD_CACHE_TTL_MS });
@@ -68,7 +70,7 @@ const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g,
 
 // Helper: get institution filter (SuperAdmin sees all, RegionalAdmin sees their region)
 const getFilter = async (user) => {
-  if (user.role === 'SuperAdmin') return {};
+  if (isHQRole(user.role)) return {};
   if (user.role === 'RegionalAdmin') {
      const insts = await Institution.find({ region: user.region }).select('name');
      const instNames = insts.map(i => i.name);
@@ -104,7 +106,7 @@ const buildAttendanceScope = async (user) => {
     }
     return { partner };
   }
-  if (user.role === 'SuperAdmin' || user.role === 'RegionalAdmin') {
+  if (isHQRole(user.role) || user.role === 'RegionalAdmin') {
     return getFilter(user);
   }
   // Institution users: include attendance for own-institution AND delegated placements
@@ -226,7 +228,7 @@ const getSupportTicketScope = async (user, { includeArchived = false, archivedOn
       ? {}
       : { archivedAt: null };
 
-  if (user.role === 'SuperAdmin') return {};
+  if (isHQRole(user.role)) return {};
   if (user.role === 'RegionalAdmin') {
     const insts = await Institution.find({ region: user.region }).select('name');
     return { institution: { $in: insts.map((inst) => inst.name) }, ...archiveFilter };
@@ -340,7 +342,7 @@ const buildProgressionLockKey = (academicYear, institutionName) =>
   `learner-auto-progression:${academicYear}:${institutionName}`;
 
 const resolveScopedInstitutionNames = async (user) => {
-  if (user.role === 'SuperAdmin') {
+  if (isHQRole(user.role)) {
     const institutions = await Institution.find({}).select('name').lean();
     return institutions.map((institution) => institution.name).filter(Boolean);
   }
@@ -916,7 +918,7 @@ const markSupportTicketReadForUser = (ticket, userId) => {
 const notifyHQOfPartnerSubmission = async ({ partner, sender }) => {
     try {
         await notifyUsers({
-            roles: ['SuperAdmin'],
+            roles: ['SuperAdmin', 'HQManager'],
             sender: sender?._id || null,
             type: 'partner',
             title: 'New industry partner awaiting HQ approval',
@@ -926,7 +928,7 @@ const notifyHQOfPartnerSubmission = async ({ partner, sender }) => {
         });
 
         const hqRecipients = await User.find({
-            role: 'SuperAdmin',
+            role: { $in: ['SuperAdmin', 'HQManager'] },
             status: 'Active',
             email: { $exists: true, $ne: '' },
             'notificationPreferences.email': true,
@@ -1045,7 +1047,7 @@ const calculatePlacementManagementSummary = ({
 };
 
 const getAuditLogScope = async (user) => {
-  if (user.role === 'SuperAdmin') return {};
+  if (isHQRole(user.role)) return {};
   if (user.role === 'RegionalAdmin') {
     const insts = await Institution.find({ region: user.region }).select('name');
     return { institution: { $in: insts.map((inst) => inst.name) } };
@@ -1055,7 +1057,7 @@ const getAuditLogScope = async (user) => {
 
 // Placement filter: includes delegated placements for institution-level users
 const getPlacementFilter = async (user) => {
-  if (user.role === 'SuperAdmin') return {};
+  if (isHQRole(user.role)) return {};
   if (user.role === 'RegionalAdmin') {
      const insts = await Institution.find({ region: user.region }).select('name');
      const instNames = insts.map(i => i.name);
@@ -1094,7 +1096,7 @@ const getOrCreateSystemSettings = async () => {
 
 const getManageableUserRoles = (actorRole) => {
   if (actorRole === 'SuperAdmin') {
-    return ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner', 'Guardian'];
+    return ['SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner', 'Guardian'];
   }
   if (actorRole === 'RegionalAdmin') {
     return ['Admin', 'Manager', 'Staff', 'Guardian'];
@@ -1105,7 +1107,7 @@ const getManageableUserRoles = (actorRole) => {
   return [];
 };
 
-const PRIVILEGED_USER_ROLES = ['SuperAdmin', 'RegionalAdmin', 'Admin'];
+const PRIVILEGED_USER_ROLES = ['HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin', 'Admin'];
 
 const getUserLifecycleState = (user) => {
   if (user.status === 'Inactive') {
@@ -1319,7 +1321,7 @@ const hasDeactivationBlockers = (impact) => {
   );
 };
 
-const normalizeUserPayloadForRole = async (actor, payload, existingUser = null) => {
+export const normalizeUserPayloadForRole = async (actor, payload, existingUser = null) => {
   const normalized = { ...payload };
   const targetRole = payload.role || existingUser?.role;
 
@@ -1330,6 +1332,9 @@ const normalizeUserPayloadForRole = async (actor, payload, existingUser = null) 
   if (targetRole !== 'IndustryPartner') normalized.partnerPortalRole = undefined;
 
   const manageableRoles = getManageableUserRoles(actor.role);
+  if (existingUser && !manageableRoles.includes(existingUser.role)) {
+    return { status: 403, message: 'Forbidden: You cannot manage this user role' };
+  }
   if (!manageableRoles.includes(targetRole)) {
     return { status: 403, message: `Forbidden: You cannot assign the ${targetRole} role` };
   }
@@ -1338,7 +1343,7 @@ const normalizeUserPayloadForRole = async (actor, payload, existingUser = null) 
     return { status: 403, message: 'Forbidden: Only SuperAdmins can manage Industry Partner accounts' };
   }
 
-  if (targetRole === 'SuperAdmin') {
+  if (isHQRole(targetRole)) {
     normalized.institution = 'N/A';
     normalized.region = '';
     normalized.partnerId = undefined;
@@ -1448,7 +1453,7 @@ const requirePrivilegedRoleConfirmation = (actor, payload, existingUser = null) 
     confirmationRequired: {
       role: targetRole,
       previousRole,
-      scope: targetRole === 'SuperAdmin'
+      scope: isHQRole(targetRole)
         ? 'Platform-wide governance'
         : targetRole === 'RegionalAdmin'
           ? `Regional governance for ${payload.region || existingUser?.region || 'the selected region'}`
@@ -1458,7 +1463,7 @@ const requirePrivilegedRoleConfirmation = (actor, payload, existingUser = null) 
 };
 
 const getOperationalOwnerCandidates = async (user) => {
-  if (user.role === 'SuperAdmin') {
+  if (isHQRole(user.role)) {
     return User.find({ role: { $in: ['Admin', 'Manager', 'Staff'] }, status: 'Active' })
       .select('_id name role institution')
       .sort({ institution: 1, name: 1 })
@@ -1493,7 +1498,7 @@ const getVisibleSupportAssignees = async (user) => {
     .lean();
 
   return users.filter((candidate) => {
-    if (user.role === 'SuperAdmin') return ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(candidate.role);
+    if (isHQRole(user.role)) return ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(candidate.role);
     if (user.role === 'RegionalAdmin') {
       return candidate.role !== 'SuperAdmin' && (candidate.region === user.region || candidate.institution === user.institution);
     }
@@ -2159,7 +2164,7 @@ router.get('/ownership/users', async (req, res) => {
 
 // ==================== SETTINGS ====================
 
-router.get('/settings/notifications', requireRole(...ADMIN_ROLES), async (req, res) => {
+router.get('/settings/notifications', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('notificationPreferences');
         res.json(user?.notificationPreferences || {});
@@ -2169,7 +2174,7 @@ router.get('/settings/notifications', requireRole(...ADMIN_ROLES), async (req, r
     }
 });
 
-router.get('/settings/notifications/whatsapp-status', requireRole(...ADMIN_ROLES), async (req, res) => {
+router.get('/settings/notifications/whatsapp-status', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('phone notificationPreferences');
         res.json({
@@ -3237,7 +3242,7 @@ router.post('/support-tickets', async (req, res) => {
                 if (!linkedLearnerIds.includes(learner._id.toString())) {
                     return res.status(403).json({ message: 'You do not have access to this learner' });
                 }
-            } else if (req.user.role !== 'SuperAdmin' && req.user.role !== 'IndustryPartner' && learner.institution !== req.user.institution) {
+            } else if (!isHQRole(req.user.role) && req.user.role !== 'IndustryPartner' && learner.institution !== req.user.institution) {
                 return res.status(403).json({ message: 'You do not have access to this learner' });
             }
 
@@ -3294,7 +3299,7 @@ router.post('/support-tickets', async (req, res) => {
             after: ticket,
         });
 
-        if (req.user.role !== 'SuperAdmin') {
+        if (!isHQRole(req.user.role)) {
             const recipientIds = [];
             if (placement?.owner) recipientIds.push(placement.owner);
 
@@ -3652,7 +3657,7 @@ const buildAuditLogQuery = async (user, params) => {
     return query;
 };
 
-router.get('/audit-logs', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.get('/audit-logs', requireRole('HQManager', 'HQStaff', 'Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const query = await buildAuditLogQuery(req.user, req.query);
         const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
@@ -3731,7 +3736,7 @@ router.get('/audit-logs', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), a
     }
 });
 
-router.get('/audit-logs/export', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.get('/audit-logs/export', requireRole('HQManager', 'HQStaff', 'Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const query = await buildAuditLogQuery(req.user, req.query);
 
@@ -3762,7 +3767,7 @@ router.get('/audit-logs/export', requireRole('Admin', 'SuperAdmin', 'RegionalAdm
     }
 });
 
-router.get('/audit-logs/anomalies', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.get('/audit-logs/anomalies', requireRole('HQManager', 'HQStaff', 'Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const scope = await getAuditLogScope(req.user);
         const days = Number(req.query.days) || 30;
@@ -4159,7 +4164,7 @@ router.get('/monitoring-visits/due', async (req, res) => {
 
 const canMutateMonitoringVisit = (user, visit, action = 'update') => {
     if (!visit) return false;
-    if (user.role === 'SuperAdmin') return false;
+    if (isHQRole(user.role)) return false;
     if (['RegionalAdmin', 'Admin'].includes(user.role)) return true;
 
     const isOwner = visit.submittedBy?.toString() === user._id.toString();
@@ -5309,7 +5314,7 @@ router.get('/search', async (req, res) => {
 
         // Search Institutions (SuperAdmin only)
         let institutions = [];
-        if (req.user.role === 'SuperAdmin') {
+        if (isHQRole(req.user.role)) {
             institutions = await Institution.find({
                 $or: [
                     { name: searchRegex },
@@ -5329,7 +5334,7 @@ router.get('/search', async (req, res) => {
     }
 });
 
-router.get('/institutions/:id/summary', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.get('/institutions/:id/summary', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const institutionId = String(req.params.id || '').trim();
         if (!mongoose.Types.ObjectId.isValid(institutionId)) {
@@ -5622,7 +5627,7 @@ router.get('/calendar/events', async (req, res) => {
 
 // ==================== ACADEMIC CALENDAR CRUD (HQ Only) ====================
 
-router.get('/academic-terms', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'), async (req, res) => {
+router.get('/academic-terms', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'), async (req, res) => {
     try {
         const terms = await AcademicTerm.find()
             .populate('createdBy', 'name email')
@@ -5743,7 +5748,7 @@ router.get('/academic-calendar', async (req, res) => {
         const events = await AcademicCalendar.find()
             .populate('createdBy', 'name email')
             .sort({ startDate: 1 });
-        if (req.user.role === 'SuperAdmin' || req.user.role === 'RegionalAdmin' || !institutionCalendarType) {
+        if (isHQRole(req.user.role) || req.user.role === 'RegionalAdmin' || !institutionCalendarType) {
           return res.json(events);
         }
         res.json(events.filter((event) => (
@@ -6146,7 +6151,7 @@ router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_
 });
 
 // List semester reports
-router.get('/semester-reports', requireRole(...MANAGEMENT_ROLES), async (req, res) => {
+router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMENT_ROLES), async (req, res) => {
     try {
         let filter = await getFilter(req.user);
         const { status, institution, academicYear, page: requestedPage, pageSize: requestedPageSize } = req.query;
@@ -6228,7 +6233,7 @@ router.get('/semester-reports', requireRole(...MANAGEMENT_ROLES), async (req, re
 });
 
 // Get single semester report
-router.get('/semester-reports/:id', requireRole(...MANAGEMENT_ROLES), async (req, res) => {
+router.get('/semester-reports/:id', requireRole('HQManager', 'HQStaff', ...MANAGEMENT_ROLES), async (req, res) => {
     try {
         const scopeFilter = await getFilter(req.user);
         const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter })
@@ -6389,7 +6394,7 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
         });
 
         notifyUsers({
-            roles: ['SuperAdmin'],
+            roles: ['SuperAdmin', 'HQManager'],
             sender: req.user._id,
             type: 'report',
             title: 'Report Endorsed Regionally',
@@ -6404,7 +6409,7 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
 });
 
 // HQ approves
-router.put('/semester-reports/:id/hq-approve', requireRole('SuperAdmin'), async (req, res) => {
+router.put('/semester-reports/:id/hq-approve', requireRole('HQManager', 'SuperAdmin'), async (req, res) => {
     try {
         const scopeFilter = await getFilter(req.user);
         const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
@@ -6447,14 +6452,14 @@ router.put('/semester-reports/:id/hq-approve', requireRole('SuperAdmin'), async 
 });
 
 // Reject report
-router.put('/semester-reports/:id/reject', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const scopeFilter = await getFilter(req.user);
         const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
         const before = report.toObject();
         report.status = 'Rejected';
-        if (req.user.role === 'SuperAdmin') {
+        if (isHQRole(req.user.role)) {
             report.reviewedByHQ = req.user._id;
             report.hqComment = req.body.comment || 'Rejected by HQ';
         } else {
@@ -6751,7 +6756,7 @@ router.get('/learners', async (req, res) => {
     else if (academicStatus) query.academicStatus = academicStatus;
     if (year) query.year = year;
     if (program) query.program = program;
-    if (institution && (req.user.role === 'SuperAdmin' || req.user.role === 'RegionalAdmin')) {
+    if (institution && (isHQRole(req.user.role) || req.user.role === 'RegionalAdmin')) {
       const allowedInstitutions = filter.institution?.$in;
       if (Array.isArray(allowedInstitutions) && !allowedInstitutions.includes(institution)) {
         return res.status(403).json({ message: 'Institution is outside your assigned region' });
@@ -6987,7 +6992,7 @@ router.get('/learners/options', async (req, res) => {
     else if (academicStatus) query.academicStatus = academicStatus;
     if (year) query.year = year;
     if (program) query.program = program;
-    if (institution && (req.user.role === 'SuperAdmin' || req.user.role === 'RegionalAdmin')) {
+    if (institution && (isHQRole(req.user.role) || req.user.role === 'RegionalAdmin')) {
       query.institution = institution;
     }
     if (search) {
@@ -8242,7 +8247,7 @@ router.get('/learners/:id/progress', async (req, res) => {
 });
 
 // GET /api/learners/progress/bulk - Get progress summary for multiple learners
-router.get('/learners/progress/bulk', requireRole(...MANAGEMENT_ROLES), async (req, res) => {
+router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...MANAGEMENT_ROLES), async (req, res) => {
   try {
     const filter = await getFilter(req.user);
     const {
@@ -10426,12 +10431,12 @@ router.get('/users/governance/overview', requireRole('SuperAdmin'), async (req, 
 
         const riskyAccounts = enrichedUsers.filter((entry) =>
             (entry.auditSummary?.failedLoginCount ?? 0) >= 5
-            || (['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(entry.role) && entry.status === 'Inactive')
+            || (PRIVILEGED_USER_ROLES.includes(entry.role) && entry.status === 'Inactive')
             || (entry.auditSummary?.recentSensitiveActions?.length ?? 0) >= 3
         );
 
         const dormantPrivilegedAccounts = enrichedUsers
-            .filter((entry) => ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(entry.role) && entry.status === 'Active')
+            .filter((entry) => PRIVILEGED_USER_ROLES.includes(entry.role) && entry.status === 'Active')
             .filter((entry) => {
                 if (!entry.lastLoginAt) return true;
                 return (Date.now() - new Date(entry.lastLoginAt).getTime()) / (1000 * 60 * 60 * 24) >= 45;
@@ -10448,7 +10453,7 @@ router.get('/users/governance/overview', requireRole('SuperAdmin'), async (req, 
                 acc[region] = { region, totalUsers: 0, privilegedUsers: 0, invitedUsers: 0 };
             }
             acc[region].totalUsers += 1;
-            if (['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(entry.role)) acc[region].privilegedUsers += 1;
+            if (PRIVILEGED_USER_ROLES.includes(entry.role)) acc[region].privilegedUsers += 1;
             if (entry.lifecycleStatus?.code === 'Invited') acc[region].invitedUsers += 1;
             return acc;
         }, {})).sort((a, b) => b.totalUsers - a.totalUsers);
@@ -10861,6 +10866,9 @@ router.delete('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'),
     try {
         const userToDelete = await User.findById(req.params.id);
         if (!userToDelete) return res.status(404).json({ message: 'User not found' });
+        if (!getManageableUserRoles(req.user.role).includes(userToDelete.role)) {
+            return res.status(403).json({ message: 'Forbidden: You cannot manage this user role' });
+        }
 
         if (req.user.role === 'SuperAdmin') {
             // SuperAdmin can delete any user
@@ -10907,7 +10915,7 @@ router.get('/my-institution', async (req, res) => {
 
 // ==================== INSTITUTIONS (SuperAdmin only) ====================
 
-router.get('/institutions', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.get('/institutions', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const filter = {};
         // RegionalAdmin can only see their own region's institutions
@@ -11099,7 +11107,7 @@ router.delete('/institutions/:id', requireRole('SuperAdmin'), async (req, res) =
 
 // ==================== SUPER ADMIN OVERVIEW ====================
 
-router.get('/admin/overview', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const cacheKey = getScopedCacheKey('admin-overview', req.user);
         if (req.query.refresh !== 'true') {
@@ -12260,7 +12268,7 @@ router.post('/admin/deadline-risk/notify', requireRole('SuperAdmin', 'RegionalAd
 // ==================== STUDENT VACANCIES ====================
 
 const getVacancyScope = async (user) => {
-    if (user.role === 'SuperAdmin') return {};
+    if (isHQRole(user.role)) return {};
     if (user.role === 'IndustryPartner') return { partner: getPartnerId(user) };
     if (user.role === 'RegionalAdmin') return { region: user.region };
 
@@ -12333,7 +12341,7 @@ const normalizeVacancyPayload = (body, partner) => {
     };
 };
 
-router.get('/vacancies', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'), async (req, res) => {
+router.get('/vacancies', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'), async (req, res) => {
     try {
         const scope = await getVacancyScope(req.user);
         const includeAll = req.query.includeAll === '1' || req.query.includeAll === 'true';
@@ -12342,7 +12350,7 @@ router.get('/vacancies', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Ma
 
         if (req.user.role === 'IndustryPartner') {
             if (['Draft', 'Published', 'Closed'].includes(requestedStatus)) filter.status = requestedStatus;
-        } else if (includeAll && ['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+        } else if (includeAll && (isHQRole(req.user.role) || req.user.role === 'RegionalAdmin')) {
             if (['Draft', 'Published', 'Closed'].includes(requestedStatus)) filter.status = requestedStatus;
         } else {
             filter.status = 'Published';
@@ -12670,7 +12678,7 @@ router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), asyn
 
 router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'), async (req, res) => {
     try {
-        const approvalStatus = req.user.role === 'SuperAdmin' ? 'Approved' : 'PendingHQApproval';
+        const approvalStatus = isHQRole(req.user.role) ? 'Approved' : 'PendingHQApproval';
         const newPartner = new IndustryPartner({
             ...req.body,
             approvalStatus,
@@ -12712,7 +12720,7 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
     }
 });
 
-router.put('/industry-partners/:id/hq-approve', requireRole('SuperAdmin'), async (req, res) => {
+router.put('/industry-partners/:id/hq-approve', requireRole('HQManager', 'SuperAdmin'), async (req, res) => {
     try {
         const partner = await IndustryPartner.findById(req.params.id);
         if (!partner) return res.status(404).json({ message: 'Partner not found' });
@@ -12745,7 +12753,7 @@ router.put('/industry-partners/:id/hq-approve', requireRole('SuperAdmin'), async
     }
 });
 
-router.put('/industry-partners/:id/hq-reject', requireRole('SuperAdmin'), async (req, res) => {
+router.put('/industry-partners/:id/hq-reject', requireRole('HQManager', 'SuperAdmin'), async (req, res) => {
     try {
         const partner = await IndustryPartner.findById(req.params.id);
         if (!partner) return res.status(404).json({ message: 'Partner not found' });

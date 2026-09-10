@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { BriefcaseBusiness, CalendarClock, Mail, MapPin, Phone, Search, Users } from "lucide-react"
 import { toast } from "sonner"
@@ -43,7 +44,7 @@ export default function Vacancies() {
     ].some((value) => value?.toLowerCase().includes(normalizedQuery)))
   }, [query, vacancies])
 
-  const scopeLabel = user?.role === "SuperAdmin"
+  const scopeLabel = isHQRole(user?.role)
     ? "Published opportunities nationwide"
     : user?.role === "RegionalAdmin"
       ? `Published opportunities in ${user.region || "your region"}`

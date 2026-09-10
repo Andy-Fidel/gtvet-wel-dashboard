@@ -1,3 +1,4 @@
+import { isHQRole } from '@/lib/rbac'
 
 import { type ColumnDef } from "@tanstack/react-table"
 import { MoreHorizontal, ArrowUpDown } from "lucide-react"
@@ -127,7 +128,7 @@ export const columns: ColumnDef<Learner>[] = [
       }
 
       const isRegionalOversight = meta?.role === 'RegionalAdmin'
-      const isOversightUser = meta?.role === 'SuperAdmin' || isRegionalOversight
+      const isOversightUser = isHQRole(meta?.role) || isRegionalOversight
  
       return (
         <DropdownMenu>
