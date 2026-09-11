@@ -10,6 +10,7 @@
     "start:cluster": "CLUSTER_ENABLED=true node index.js",
     "bootstrap:superadmin": "node bootstrap_superadmin.js",
     "dev": "nodemon index.js",
+    "smtp:verify": "node verify_smtp.js",
     "generate:vapid": "web-push generate-vapid-keys"
   },
   "keywords": [],

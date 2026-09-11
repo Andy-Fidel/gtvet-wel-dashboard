@@ -1,8 +1,14 @@
 import nodemailer from 'nodemailer';
 
+const smtpPort = Number(process.env.SMTP_PORT);
+const smtpSecure = process.env.SMTP_SECURE === 'true'
+  || (!process.env.SMTP_SECURE && smtpPort === 465);
+const smtpFromAddress = process.env.SMTP_FROM || process.env.SMTP_USER;
+
 const smtpConfigured = Boolean(
   process.env.SMTP_HOST
-  && process.env.SMTP_PORT
+  && Number.isInteger(smtpPort)
+  && smtpPort > 0
   && process.env.SMTP_USER
   && process.env.SMTP_PASS
 );
@@ -10,7 +16,8 @@ const smtpConfigured = Boolean(
 const transporter = smtpConfigured
   ? nodemailer.createTransport({
       host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT),
+      port: smtpPort,
+      secure: smtpSecure,
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
@@ -20,6 +27,8 @@ const transporter = smtpConfigured
 
 export const isMailerConfigured = () => smtpConfigured;
 
+export const verifyMailerConnection = async () => assertMailerConfigured().verify();
+
 const assertMailerConfigured = () => {
   if (!transporter) {
     const error = new Error('Email delivery is not configured on this server');
@@ -28,6 +37,11 @@ const assertMailerConfigured = () => {
   }
   return transporter;
 };
+
+const from = (name) => ({
+  name,
+  address: smtpFromAddress,
+});
 
 // Prevent HTML/XSS injection in email templates
 const escapeHtml = (value) => {
@@ -46,7 +60,7 @@ export const sendPlacementApprovalEmail = async (institutionEmail, learnerName, 
         const safeCompanyName = escapeHtml(companyName);
         const safeTrackingId = escapeHtml(trackingId);
         const info = await assertMailerConfigured().sendMail({
-            from: '"GTVET Admin" <no-reply@gtvet.gov.gh>',
+            from: from('GTVET Admin'),
             to: institutionEmail,
             subject: `Placement Approved: ${safeLearnerName}`,
             html: `
@@ -78,7 +92,7 @@ export const sendReportStatusEmail = async (institutionEmail, semester, academic
         const color = isApproved ? 'green' : (status === 'Rejected' ? 'red' : 'orange');
         
         const info = await assertMailerConfigured().sendMail({
-            from: '"GTVET Admin" <no-reply@gtvet.gov.gh>',
+            from: from('GTVET Admin'),
             to: institutionEmail,
             subject: `Semester Report Update: ${safeStatus}`,
             html: `
@@ -103,7 +117,7 @@ export const sendReportStatusEmail = async (institutionEmail, semester, academic
 export const sendPasswordResetEmail = async (email, resetUrl) => {
     try {
         const info = await assertMailerConfigured().sendMail({
-            from: '"GTVET Security" <security@gtvet.gov.gh>',
+            from: from('GTVET Security'),
             to: email,
             subject: 'Password Reset Request',
             html: `
@@ -140,7 +154,7 @@ export const sendHQIndustryPartnerSubmissionEmail = async (emails, partner, subm
         const safeSubmitter = escapeHtml(submittedBy?.name || 'Unknown');
         const safeSubmitterRole = escapeHtml(submittedBy?.role);
         const info = await assertMailerConfigured().sendMail({
-            from: '"GTVET HQ" <no-reply@gtvet.gov.gh>',
+            from: from('GTVET HQ'),
             to: emails,
             subject: `HQ Approval Needed: ${safeName}`,
             html: `

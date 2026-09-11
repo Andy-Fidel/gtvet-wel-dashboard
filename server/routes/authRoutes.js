@@ -10,6 +10,8 @@ import { logAuditEvent } from '../utils/audit.js';
 const router = express.Router();
 
 router.get('/csrf', (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.set('Pragma', 'no-cache');
   const csrfToken = issueCsrfToken(res);
   res.json({ csrfToken });
 });

@@ -106,6 +106,14 @@ const buildCookie = (name, value, options = {}) => {
 
 const isSecureCookie = () => process.env.NODE_ENV === 'production';
 
+const tokensMatch = (cookieToken, headerToken) => {
+  if (typeof cookieToken !== 'string' || typeof headerToken !== 'string') return false;
+  const cookieBuffer = Buffer.from(cookieToken, 'utf8');
+  const headerBuffer = Buffer.from(headerToken, 'utf8');
+  return cookieBuffer.length === headerBuffer.length
+    && crypto.timingSafeEqual(cookieBuffer, headerBuffer);
+};
+
 export const issueCsrfToken = (res) => {
   const csrfToken = crypto.randomBytes(24).toString('hex');
   appendResponseCookie(res, buildCookie(CSRF_COOKIE_NAME, csrfToken, {
@@ -155,7 +163,7 @@ export const csrfProtection = (req, res, next) => {
   const csrfCookie = cookies[CSRF_COOKIE_NAME];
   const csrfHeader = req.headers['x-csrf-token'];
 
-  if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+  if (!tokensMatch(csrfCookie, csrfHeader)) {
     return res.status(403).json({ message: 'Invalid CSRF token' });
   }
 
