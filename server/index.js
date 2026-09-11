@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { csrfProtection } from './middleware/auth.js';
+import { provisionQaTestersFromEnvironment } from './utils/qaProvisioning.js';
 
 dotenv.config();
 
@@ -193,6 +194,7 @@ const startWorker = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/gtvet-wel');
     console.log(`MongoDB connected (worker ${process.pid})`);
+    await provisionQaTestersFromEnvironment();
   } catch (err) {
     console.error(`MongoDB connection error (worker ${process.pid}):`, err);
     process.exit(1);
