@@ -26,6 +26,7 @@ import { PlacementAgreement } from '../models/PlacementAgreement.js';
 import { Vacancy } from '../models/Vacancy.js';
 import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
+import { parsePartnerCsv } from '../utils/partnerImport.js';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
@@ -12772,6 +12773,49 @@ router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), asyn
         res.json(partner);
     } catch (error) {
         res.status(500).json({ message: 'Error linking partner' });
+    }
+});
+
+router.post('/industry-partners/import-csv', requireRole('SuperAdmin'), async (req, res) => {
+    let rows;
+    try { rows = parsePartnerCsv(req.body.csv); }
+    catch (error) { return res.status(400).json({ message: error.message }); }
+    try {
+        const results = [];
+        for (let offset = 0; offset < rows.length; offset += 10) {
+          if (req.timedout) break;
+          const batch = await Promise.all(rows.slice(offset, offset + 10).map(async (entry) => {
+            const { row, data, errors } = entry;
+            if (!errors.length && await IndustryPartner.exists({ name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' } })) {
+                errors.push('Company name already exists; existing partner was not changed');
+            }
+            if (errors.length) {
+                return { row, name: data.name, status: 'Skipped', message: errors.join('; ') };
+            }
+            if (req.body.preview !== false) {
+                return { row, name: data.name, status: 'Ready', message: `${data.region} · ${data.totalSlots} slots` };
+            }
+            let partner;
+            try {
+                partner = await IndustryPartner.create({ ...data, usedSlots: 0, linkedInstitutions: [],
+                    approvalStatus: 'Approved', approvalRequestedAt: new Date(), approvalReviewedAt: new Date(),
+                    approvalReviewedBy: req.user._id, approvalComment: 'Bulk registered by HQ', addedBy: req.user._id });
+            } catch (error) {
+                return { row, name: data.name, status: 'Skipped', message: error.code === 11000 ? 'Company name already exists' : 'Registration failed; retry this row' };
+            }
+            await logAuditEvent({ req, action: 'CREATE', entityType: 'IndustryPartner', entityId: partner._id,
+                summary: `Bulk registered and approved industry partner ${partner.name}`, after: partner,
+                metadata: { source: 'csv', row } });
+            return { row, name: data.name, status: 'Created', message: 'Registered and approved' };
+          }));
+          results.push(...batch);
+        }
+        if (req.timedout) return;
+        return res.json({ results, created: results.filter(row => row.status === 'Created').length,
+            ready: results.filter(row => row.status === 'Ready').length, skipped: results.filter(row => row.status === 'Skipped').length });
+    } catch (error) {
+        console.error('Partner CSV import failed:', error);
+        return res.status(500).json({ message: 'Import interrupted. Preview the file again before retrying; existing companies will be skipped.' });
     }
 });
 

@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
+import { PartnerBulkRegistration } from './PartnerBulkRegistration'
 
 type HQIndustryPartner = IndustryPartner & {
   district?: string
@@ -164,13 +165,13 @@ export default function HQIndustryPartners() {
           <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">HQ Industry Partner Registry</h2>
           <p className="text-muted-foreground mt-1">Review every registered partner and approve new submissions before they enter the placement network.</p>
         </div>
-        {user?.role === 'SuperAdmin' && <Button
+        {user?.role === 'SuperAdmin' && <div className="flex flex-wrap gap-3"><PartnerBulkRegistration onImported={fetchPartners} /><Button
           type="button"
           onClick={() => setRegistrationOpen(true)}
           className="h-12 rounded-2xl bg-[#FFB800] px-6 font-black text-gray-900 shadow-lg shadow-[#FFB800]/20 hover:bg-[#FFD700]"
         >
           <Plus className="mr-2 h-5 w-5" /> Register Partner
-        </Button>}
+        </Button></div>}
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">

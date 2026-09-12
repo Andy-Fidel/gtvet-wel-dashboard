@@ -126,6 +126,8 @@ const createApp = () => {
   }));
 
   // Payload size limit to prevent memory exhaustion
+  // A 1 MB CSV can expand when quotes and control characters are JSON escaped.
+  app.use('/api/industry-partners/import-csv', express.json({ limit: '7mb' }));
   app.use(express.json({ limit: '1mb' }));
 
   // Sanitize user input to prevent NoSQL injection
