@@ -1,4 +1,5 @@
-export const PARTNER_COLUMNS = ['name', 'sector', 'region', 'totalSlots', 'district', 'tradeArea', 'town', 'location', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'status'];
+import { normalizeCoordinates } from './workplaceCoordinates.js';
+export const PARTNER_COLUMNS = ['name', 'sector', 'region', 'totalSlots', 'district', 'tradeArea', 'town', 'location', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'status', 'latitude', 'longitude'];
 const regions = ['Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern', 'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah', 'Upper East', 'Upper West', 'Volta', 'Western', 'Western North'];
 
 export function parsePartnerCsv(csv) {
@@ -51,6 +52,10 @@ export function parsePartnerCsv(csv) {
       catch { errors.push('website must be a valid http or https URL'); }
     }
     const key = data.name.toLowerCase();
+    try { data.coordinates = normalizeCoordinates({ lat: data.latitude, lng: data.longitude }); }
+    catch (error) { errors.push(error.message); }
+    delete data.latitude;
+    delete data.longitude;
     if (seen.has(key)) errors.push('Duplicate company name in this file');
     seen.add(key);
     return { row, data, errors };

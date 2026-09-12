@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { normalizeCoordinates } from '../utils/workplaceCoordinates.js';
 
 const placementSchema = new mongoose.Schema({
   learner: { type: mongoose.Schema.Types.ObjectId, ref: 'Learner', required: true },
@@ -26,8 +27,8 @@ const placementSchema = new mongoose.Schema({
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   institution: { type: String, required: true },
   coordinates: {
-    lat: Number,
-    lng: Number,
+    lat: { type: Number, min: -90, max: 90 },
+    lng: { type: Number, min: -180, max: 180 },
   },
 
   // Cross-region monitoring delegation
@@ -39,6 +40,11 @@ const placementSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Add indexes for quick querying and trend aggregation
+placementSchema.pre('validate', function () {
+  try {
+    normalizeCoordinates(this.coordinates, this.status === 'Active' && (this.isNew || this.isModified('status') || this.isModified('coordinates')));
+  } catch (error) { this.invalidate('coordinates', error.message); }
+});
 placementSchema.index({ learner: 1 });
 placementSchema.index({ learner: 1, academicYear: 1 });
 placementSchema.index({ institution: 1 });

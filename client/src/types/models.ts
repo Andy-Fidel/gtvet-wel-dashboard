@@ -46,6 +46,7 @@ export interface Learner {
 
 /** Industry Partner entity */
 export interface IndustryPartner {
+  coordinates?: { lat?: number; lng?: number };
   _id: string;
   name: string;
   sector: string;

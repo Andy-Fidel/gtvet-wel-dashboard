@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 
 type Result = { row: number; name: string; status: 'Ready' | 'Created' | 'Skipped'; message: string }
 type Summary = { results: Result[]; created: number; ready: number; skipped: number }
-const template = 'name,sector,region,totalSlots,district,tradeArea,town,location,contactPerson,contactPhone,contactEmail,website,status\r\n';
+const template = 'name,sector,region,totalSlots,district,tradeArea,town,location,contactPerson,contactPhone,contactEmail,website,status,latitude,longitude\r\n';
 
 function download(text: string, filename: string) {
   const url = URL.createObjectURL(new Blob(['\uFEFF', text], { type: 'text/csv;charset=utf-8' }))

@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -38,7 +39,7 @@ type IndustryPartnerFormValues = z.infer<typeof formSchema>
 
 interface IndustryPartnerFormProps {
   onSuccess: () => void;
-  initialData?: IndustryPartnerFormValues & { _id?: string; usedSlots?: number; mouDocumentUrl?: string };
+  initialData?: IndustryPartnerFormValues & { _id?: string; usedSlots?: number; mouDocumentUrl?: string; coordinates?: { lat?: number; lng?: number } };
 }
 
 const GHANA_REGIONS = [
@@ -49,6 +50,8 @@ const GHANA_REGIONS = [
 
 export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerFormProps) {
   const [loading, setLoading] = useState(false)
+  const [lat, setLat] = useState(String(initialData?.coordinates?.lat ?? ''))
+  const [lng, setLng] = useState(String(initialData?.coordinates?.lng ?? ''))
   const [mouFile, setMouFile] = useState<File | null>(null)
   const normalizeNumberInput = (value: string) => (value === "" ? 0 : parseInt(value, 10))
   const { authFetch } = useAuth()
@@ -65,7 +68,7 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
   async function onSubmit(data: IndustryPartnerFormValues) {
     setLoading(true)
     try {
-      const finalData = { ...data };
+      const finalData = { ...data, coordinates: readCoordinates(lat, lng) };
 
       if (mouFile) {
         toast.info("Uploading MoU document...");
@@ -103,6 +106,7 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+        <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} disabled={loading} />
         
         {/* Company Details */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

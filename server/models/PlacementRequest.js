@@ -7,6 +7,7 @@ const placementRequestSchema = new mongoose.Schema({
   program: { type: String, required: true },
   requestedSlots: { type: Number, required: true },
   placementRegion: { type: String, trim: true },
+  coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
   sourceType: {
     type: String,
     enum: ['InstitutionFound', 'LearnerFound'],

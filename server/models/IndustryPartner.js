@@ -8,6 +8,7 @@ const industryPartnerSchema = new mongoose.Schema({
   tradeArea: { type: String },
   town: { type: String },
   location: { type: String },
+  coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
   contactPerson: { type: String },
   contactPhone: { type: String },
   contactEmail: { type: String },

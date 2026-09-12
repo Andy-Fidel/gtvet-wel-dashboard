@@ -31,6 +31,7 @@ import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 import { PromptDialog } from "@/components/PromptDialog"
 import { Handshake, Search as SearchIcon, Loader2, X } from "lucide-react"
 import { Input } from "@/components/ui/input"
+import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
 
 type DelegateUser = {
   _id: string;
@@ -40,6 +41,7 @@ type DelegateUser = {
 };
 
 export type PlacementRequestData = {
+  coordinates?: { lat?: number; lng?: number };
   _id: string;
   institution: string;
   program: string;
@@ -123,6 +125,7 @@ export default function Placements() {
     const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") || "")
     const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get("search") || "")
     const [statusFilter, setStatusFilter] = useState<'' | 'Active' | 'Completed' | 'Terminated'>('')
+    const [missingCoordinates, setMissingCoordinates] = useState(false)
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
     // Confirmation dialog state (replaces window.confirm)
@@ -160,7 +163,7 @@ export default function Placements() {
     // Reset page on status filter change
     useEffect(() => {
         setPlacementsPage(1)
-    }, [statusFilter])
+    }, [statusFilter, missingCoordinates])
 
     useEffect(() => {
         setActiveTab(delegatedView ? "delegated" : "all")
@@ -189,6 +192,7 @@ export default function Placements() {
                 })
                 if (debouncedSearch) placementParams.set('search', debouncedSearch)
                 if (statusFilter) placementParams.set('status', statusFilter)
+                if (missingCoordinates) placementParams.set('missingCoordinates', '1')
 
                 const [placementsRes, requestsRes, delegatedRes] = await Promise.all([
                     authFetch(`/api/placements?${placementParams.toString()}`),
@@ -240,7 +244,7 @@ export default function Placements() {
             }
         }
         fetchData()
-    }, [refreshKey, authFetch, authLoading, user, placementsPage, placementsPageSize, debouncedSearch, statusFilter])
+    }, [refreshKey, authFetch, authLoading, user, placementsPage, placementsPageSize, debouncedSearch, statusFilter, missingCoordinates])
 
     const handleEditSuccess = () => {
         setEditOpen(false)
@@ -494,9 +498,13 @@ export default function Placements() {
     // Convert handler state (replaces window.confirm)
     const [convertConfirmOpen, setConvertConfirmOpen] = useState(false)
     const [convertRequest, setConvertRequest] = useState<PlacementRequestData | null>(null)
+    const [convertLat, setConvertLat] = useState('')
+    const [convertLng, setConvertLng] = useState('')
 
     const handleConvertSelfSourcedPlacement = (request: PlacementRequestData) => {
         setConvertRequest(request)
+        setConvertLat(String(request.coordinates?.lat ?? ''))
+        setConvertLng(String(request.coordinates?.lng ?? ''))
         setConvertConfirmOpen(true)
     }
 
@@ -506,10 +514,12 @@ export default function Placements() {
         try {
             const res = await authFetch(`/api/placement-requests/${convertRequest._id}/convert`, {
                 method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ coordinates: readCoordinates(convertLat, convertLng, true) }),
             })
             const payload = await res.json().catch(() => ({}))
             if (!res.ok) throw new Error(payload.message || "Failed to convert learner-sourced placement")
-            toast.success("Learner-sourced placement converted successfully")
+            toast.success("Placement request activated successfully")
             setRefreshKey((prev) => prev + 1)
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Failed to convert learner-sourced placement")
@@ -642,6 +652,7 @@ export default function Placements() {
                                 )}
                             </div>
                             <div className="flex items-center gap-1.5 flex-wrap">
+                                <Button variant={missingCoordinates ? 'default' : 'outline'} onClick={() => setMissingCoordinates(value => !value)}>Missing workplace GPS</Button>
                                 {([
                                     { value: '' as const, label: 'All' },
                                     { value: 'Active' as const, label: 'Active' },
@@ -935,7 +946,8 @@ export default function Placements() {
                                         </div>
                                     )}
 
-                                    {req.sourceType === 'LearnerFound' && !isHQRole(user?.role) && user?.role !== 'RegionalAdmin' && (
+                                    {req.sourceType !== 'LearnerFound' && req.status === 'Submitted' && ['Admin', 'Manager'].includes(user?.role || '') && <Button onClick={() => handleConvertSelfSourcedPlacement(req)}>Add GPS and Activate</Button>}
+                                    {req.sourceType === 'LearnerFound' && ['Admin', 'Manager'].includes(user?.role || '') && (
                                         <div className="flex flex-wrap gap-2">
                                             {req.status === 'SelfSourced_Submitted' ? (
                                                 <Button size="sm" variant="outline" className="rounded-xl" disabled={selfSourcedActionLoading === req._id} onClick={() => handleUpdateSelfSourcedStatus(req, 'Under_Verification')}>
@@ -1101,17 +1113,13 @@ export default function Placements() {
             />
 
             {/* Convert Self-Sourced to Placement Confirmation */}
-            <ConfirmationDialog
-                open={convertConfirmOpen}
-                onOpenChange={setConvertConfirmOpen}
-                title="Convert to Active Placements"
-                description={convertRequest
-                    ? `Convert ${convertRequest.requestedSlots} learner(s) at ${convertRequest.selfSourcedHost?.companyName || 'this company'} into active placement records?`
-                    : ''}
-                confirmLabel="Convert Now"
-                variant="warning"
-                onConfirm={confirmConvert}
-            />
+            <Dialog open={convertConfirmOpen} onOpenChange={setConvertConfirmOpen}>
+                <DialogContent className="bg-white">
+                    <DialogHeader><DialogTitle>Activate Placement Request</DialogTitle><DialogDescription>Confirm the workplace coordinates before creating active placements for {convertRequest?.requestedSlots} learners.</DialogDescription></DialogHeader>
+                    <WorkplaceCoordinates lat={convertLat} lng={convertLng} onChange={(a, b) => { setConvertLat(a); setConvertLng(b) }} disabled={Boolean(selfSourcedActionLoading)} />
+                    <Button disabled={Boolean(selfSourcedActionLoading)} onClick={() => void confirmConvert()}>Activate Placements</Button>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

@@ -61,6 +61,7 @@ export default function HQIndustryPartners() {
   const [decisionComment, setDecisionComment] = useState("")
   const [submittingDecision, setSubmittingDecision] = useState(false)
   const [registrationOpen, setRegistrationOpen] = useState(false)
+  const [editingPartner, setEditingPartner] = useState<HQIndustryPartner | null>(null)
 
   const fetchPartners = useCallback(async () => {
     try {
@@ -167,7 +168,7 @@ export default function HQIndustryPartners() {
         </div>
         {user?.role === 'SuperAdmin' && <div className="flex flex-wrap gap-3"><PartnerBulkRegistration onImported={fetchPartners} /><Button
           type="button"
-          onClick={() => setRegistrationOpen(true)}
+          onClick={() => { setEditingPartner(null); setRegistrationOpen(true) }}
           className="h-12 rounded-2xl bg-[#FFB800] px-6 font-black text-gray-900 shadow-lg shadow-[#FFB800]/20 hover:bg-[#FFD700]"
         >
           <Plus className="mr-2 h-5 w-5" /> Register Partner
@@ -306,6 +307,7 @@ export default function HQIndustryPartners() {
                       </div>
 
                       <div className="flex flex-col gap-2 xl:w-48">
+                        {user?.role === 'SuperAdmin' && <Button variant="outline" onClick={() => { setEditingPartner(partner); setRegistrationOpen(true) }}>Edit Partner / GPS</Button>}
                         {canApproveHQ(user?.role) && partner.approvalStatus === "PendingHQApproval" ? (
                           <>
                             <Button onClick={() => openDecision(partner, "approve")} className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white">
@@ -338,12 +340,12 @@ export default function HQIndustryPartners() {
         <DialogContent className="max-h-[90vh] overflow-y-auto rounded-[2rem] border-none bg-white p-0 sm:max-w-[640px]">
           <div className="p-8">
             <DialogHeader className="mb-6">
-              <DialogTitle className="text-2xl font-black">Register Industry Partner</DialogTitle>
+              <DialogTitle className="text-2xl font-black">{editingPartner ? 'Edit Industry Partner' : 'Register Industry Partner'}</DialogTitle>
               <DialogDescription>
-                HQ registrations are approved immediately and become visible to regional and institution portals in the selected region.
+                {editingPartner ? 'Update partner details and workplace coordinates for future placements.' : 'HQ registrations are approved immediately and become visible to regional and institution portals in the selected region.'}
               </DialogDescription>
             </DialogHeader>
-            <IndustryPartnerForm onSuccess={handleRegistrationSuccess} />
+            <IndustryPartnerForm initialData={editingPartner || undefined} onSuccess={editingPartner ? async () => { setRegistrationOpen(false); setEditingPartner(null); toast.success('Partner updated'); await fetchPartners() } : handleRegistrationSuccess} />
           </div>
         </DialogContent>
       </Dialog>

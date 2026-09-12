@@ -11,6 +11,7 @@ const monitoringVisitSchema = new mongoose.Schema({
   actionRequired: String,
   learner: { type: mongoose.Schema.Types.ObjectId, ref: 'Learner', required: true },
   institution: { type: String, required: true },
+  placement: { type: mongoose.Schema.Types.ObjectId, ref: 'Placement' },
 
   // Geolocation verification
   submittedLocation: {
@@ -20,7 +21,7 @@ const monitoringVisitSchema = new mongoose.Schema({
   },
   locationVerified: {
     type: String,
-    enum: ['Verified', 'Unverified', 'No GPS', 'No Placement'],
+    enum: ['Verified', 'Unverified', 'No GPS', 'No Placement', 'Site coordinates missing'],
     default: 'No GPS',
   },
   gpsCapturedAt: Date,

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react"
+import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -77,6 +78,8 @@ interface UnifiedPlacementFormProps {
 
 export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacementFormProps) {
   const [loading, setLoading] = useState(false)
+  const [lat, setLat] = useState('')
+  const [lng, setLng] = useState('')
   const [partners, setPartners] = useState<IndustryPartner[]>([])
   const [learners, setLearners] = useState<Learner[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -108,6 +111,11 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   })
 
   const placementType = form.watch("placementType");
+  const selectedPartnerId = form.watch('partner')
+  useEffect(() => {
+    const site = placementType === 'registered' ? partners.find(partner => partner._id === selectedPartnerId)?.coordinates : undefined
+    setLat(String(site?.lat ?? '')); setLng(String(site?.lng ?? ''))
+  }, [selectedPartnerId, placementType, partners])
 
   useEffect(() => {
     const fetchData = async () => {
@@ -206,6 +214,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
 
     setLoading(true)
     try {
+      const coordinates = readCoordinates(lat, lng)
       if (data.placementType === 'registered') {
           // Send to placement-requests endpoint
           const res = await authFetch('/api/placement-requests', {
@@ -213,6 +222,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 partner: data.partner,
+                coordinates,
                 learners: data.learners,
                 program: selectedLearnerInfo?.program || 'Unassigned',
                 requestedSlots: data.learners.length,
@@ -224,7 +234,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           })
           const resData = await res.json()
           if (!res.ok) throw new Error(resData.message || "Failed to submit request")
-      } else if (data.placementType === 'custom') {
+      } else if (data.placementType === 'custom' && coordinates) {
           // Send to bulk placements endpoint
           const res = await authFetch('/api/placements', {
             method: 'POST',
@@ -232,6 +242,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
             body: JSON.stringify({
                 learners: data.learners,
                 companyName: data.companyName,
+                coordinates,
                 sector: data.sector,
                 location: data.location,
                 placementRegion: data.placementRegion,
@@ -256,7 +267,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 placementRegion: data.placementRegion,
                 startDate: data.startDate,
                 endDate: data.endDate,
-                sourceType: 'LearnerFound',
+                sourceType: data.placementType === 'learner_sourced' ? 'LearnerFound' : 'InstitutionFound',
+                coordinates,
                 selfSourcedHost: {
                   companyName: data.companyName,
                   sector: data.sector,
@@ -275,7 +287,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           if (!res.ok) throw new Error(resData.message || "Failed to submit learner-sourced placement")
       }
 
-      toast.success(data.placementType === "learner_sourced" ? "Learner-sourced placement submitted for verification" : "Learners placed successfully")
+      toast.success(data.placementType === "learner_sourced" ? "Learner-sourced placement submitted for verification" : !coordinates ? "Request saved. Add workplace coordinates under Placement Requests to activate." : "Learners placed successfully")
       onSuccess()
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Something went wrong";
@@ -304,6 +316,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} disabled={loading} />
+        <p className="text-sm text-gray-600">Partner coordinates are prefilled when available. Change them for a different branch. Without coordinates, this is saved as a request for follow-up, not an active placement.</p>
         {selectedLearnerIds.length > 0 && (() => {
             const blockedLearners = learners.filter((learner) =>
                 selectedLearnerIds.includes(learner._id) && !learner.readiness?.isReadyForPlacement

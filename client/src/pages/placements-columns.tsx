@@ -36,6 +36,7 @@ export interface HealthScore {
 }
 
 export type Placement = {
+    coordinates?: { lat?: number; lng?: number }
     _id: string
     learner: {
         _id: string

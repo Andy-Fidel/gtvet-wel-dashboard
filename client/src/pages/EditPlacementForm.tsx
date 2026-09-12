@@ -20,7 +20,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useState } from "react"
-import { Loader2, CalendarDays, MapPin } from "lucide-react"
+import { Loader2, CalendarDays } from "lucide-react"
+import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
 import { useAuth } from "@/context/AuthContext"
 import { toast } from "sonner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -71,6 +72,7 @@ interface EditPlacementFormProps {
         closureNote?: string;
         startDate?: string | Date;
         endDate?: string | Date;
+        coordinates?: { lat?: number; lng?: number };
     };
 }
 
@@ -79,8 +81,8 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
   const { authFetch } = useAuth()
 
   // GPS coordinates for the placement site
-  const [coordLat, setCoordLat] = useState(initialData && (initialData as Record<string, unknown>).coordinates ? String(((initialData as Record<string, unknown>).coordinates as {lat?: number}).lat || '') : '')
-  const [coordLng, setCoordLng] = useState(initialData && (initialData as Record<string, unknown>).coordinates ? String(((initialData as Record<string, unknown>).coordinates as {lng?: number}).lng || '') : '')
+  const [coordLat, setCoordLat] = useState(String(initialData.coordinates?.lat ?? ''))
+  const [coordLng, setCoordLng] = useState(String(initialData.coordinates?.lng ?? ''))
   const [placementRegion, setPlacementRegion] = useState((initialData as Record<string, unknown>)?.placementRegion as string || '')
 
   const form = useForm<EditPlacementFormValues>({
@@ -103,6 +105,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
   async function onSubmit(values: EditPlacementFormValues) {
     setLoading(true)
     try {
+        const coordinates = readCoordinates(coordLat, coordLng, values.status === 'Active')
         const url = `/api/placements/${initialData._id}`;
         const response = await authFetch(url, {
             method: 'PUT',
@@ -111,7 +114,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
                 ...values,
                 closureReason: values.status === "Active" ? "" : values.closureReason?.trim() || "",
                 closureNote: values.status === "Active" ? "" : values.closureNote?.trim() || "",
-                ...(coordLat && coordLng ? { coordinates: { lat: parseFloat(coordLat), lng: parseFloat(coordLng) } } : {}),
+                coordinates,
                 ...(placementRegion ? { placementRegion } : {}),
             }),
         })
@@ -268,45 +271,8 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
           )}
         </div>
 
-        {/* GPS Coordinates (for visit verification) */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
-              <MapPin className="h-3.5 w-3.5" /> Site GPS Coordinates <span className="text-gray-400 font-normal">(optional)</span>
-            </label>
-            <button
-              type="button"
-              onClick={() => {
-                if (navigator.geolocation) {
-                  navigator.geolocation.getCurrentPosition((pos) => {
-                    setCoordLat(pos.coords.latitude.toFixed(6));
-                    setCoordLng(pos.coords.longitude.toFixed(6));
-                  });
-                }
-              }}
-              className="text-xs text-indigo-400 hover:text-indigo-300 font-bold underline"
-            >
-              Use my location
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <input
-              type="text"
-              placeholder="Latitude (e.g. 7.3362)"
-              value={coordLat}
-              onChange={(e) => setCoordLat(e.target.value)}
-              className="h-12 rounded-xl border-transparent bg-[#F5F5FA] px-4 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-            />
-            <input
-              type="text"
-              placeholder="Longitude (e.g. -2.3268)"
-              value={coordLng}
-              onChange={(e) => setCoordLng(e.target.value)}
-              className="h-12 rounded-xl border-transparent bg-[#F5F5FA] px-4 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-            />
-          </div>
-          <p className="text-[10px] text-gray-400 font-medium">Used to verify monitoring visit locations. Click &ldquo;Use my location&rdquo; if you&apos;re at the placement site.</p>
-        </div>
+        <WorkplaceCoordinates lat={coordLat} lng={coordLng} onChange={(a, b) => { setCoordLat(a); setCoordLng(b) }} disabled={loading} />
+        <p className="text-sm text-gray-600">Required for active placements. Saving coordinates rechecks pending visits using their originally captured locations.</p>
 
          {/* Placement Region (for cross-region delegation) */}
          <div className="space-y-2">
