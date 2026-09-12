@@ -43,8 +43,8 @@ export function Navbar() {
       case '/guardian-dashboard': return 'Guardian Portal';
       case '/partner-dashboard': return 'Partner Portal';
       case '/partner-history': return 'Partner History';
-      case '/partner-vacancies': return 'Student Vacancies';
-      case '/vacancies': return 'Student Vacancies';
+      case '/partner-vacancies': return 'Learner Vacancies';
+      case '/vacancies': return 'Learner Vacancies';
       case '/settings': return 'Settings';
       default: return 'Dashboard';
     }

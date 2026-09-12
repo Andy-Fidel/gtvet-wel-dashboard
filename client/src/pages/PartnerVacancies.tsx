@@ -165,7 +165,7 @@ export default function PartnerVacancies() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="flex items-center gap-3 text-2xl font-black text-gray-900 md:text-3xl">
-            <BriefcaseBusiness className="h-7 w-7 text-[#FFB800]" /> Student Vacancies
+            <BriefcaseBusiness className="h-7 w-7 text-[#FFB800]" /> Learner Vacancies
           </h2>
           <p className="mt-1 font-medium text-gray-500">Declare placement opportunities for TVET students in your region.</p>
         </div>

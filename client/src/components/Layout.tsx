@@ -25,7 +25,7 @@ const HQ_NAV_GROUPS = [
       { to: '/semester-reports', label: 'Report Approvals', icon: FileText },
       { to: '/monitoring-visits', label: 'Monitoring Reviews', icon: ClipboardList },
       { to: '/assessments', label: 'Assessments', icon: GraduationCap },
-      { to: '/vacancies', label: 'Student Vacancies', icon: BriefcaseBusiness },
+      { to: '/vacancies', label: 'Learner Vacancies', icon: BriefcaseBusiness },
       { to: '/support-center', label: 'Support Escalations', icon: LifeBuoy },
     ],
   },
@@ -56,7 +56,7 @@ const REGIONAL_OVERSIGHT_ITEMS = [
   { to: '/monitoring-visits', label: 'Monitoring Visits', icon: ClipboardList },
   { to: '/assessments', label: 'Competency Assessments', icon: GraduationCap },
   { to: '/semester-reports', label: 'Term Closure', icon: FileText },
-  { to: '/vacancies', label: 'Student Vacancies', icon: BriefcaseBusiness },
+  { to: '/vacancies', label: 'Learner Vacancies', icon: BriefcaseBusiness },
 ] as const;
 
 export default function Layout() {
@@ -282,13 +282,13 @@ export default function Layout() {
                 to="/partner-vacancies"
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
-                {...collapsedNavTooltip('Student Vacancies')}
+                {...collapsedNavTooltip('Learner Vacancies')}
               >
                 {({ isActive }) => (
                   <>
                     <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
                     <BriefcaseBusiness size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">Student Vacancies</span>}
+                    {!isSidebarCollapsed && <span className="text-base">Learner Vacancies</span>}
                   </>
                 )}
               </NavLink>
@@ -510,13 +510,13 @@ export default function Layout() {
                 to="/vacancies"
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
-                {...collapsedNavTooltip('Student Vacancies')}
+                {...collapsedNavTooltip('Learner Vacancies')}
               >
                 {({ isActive }) => (
                   <>
                     <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
                     <BriefcaseBusiness size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">Student Vacancies</span>}
+                    {!isSidebarCollapsed && <span className="text-base">Learner Vacancies</span>}
                   </>
                 )}
               </NavLink>

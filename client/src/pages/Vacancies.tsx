@@ -54,14 +54,14 @@ export default function Vacancies() {
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 pt-12 md:p-8 md:pt-16">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h2 className="flex items-center gap-3 text-2xl font-black text-gray-900 md:text-3xl"><BriefcaseBusiness className="h-7 w-7 text-[#FFB800]" /> Student Vacancies</h2>
+          <h2 className="flex items-center gap-3 text-2xl font-black text-gray-900 md:text-3xl"><BriefcaseBusiness className="h-7 w-7 text-[#FFB800]" /> Learner Vacancies</h2>
           <p className="mt-1 font-medium text-gray-500">{scopeLabel}</p>
         </div>
         <div className="relative w-full md:w-96"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" /><Input aria-label="Search vacancies" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search partner, programme, or location..." className="h-11 rounded-xl pl-10" /></div>
       </div>
 
       {loading ? (
-        <Card className="rounded-2xl"><CardContent className="p-12 text-center text-gray-500">Loading student vacancies...</CardContent></Card>
+        <Card className="rounded-2xl"><CardContent className="p-12 text-center text-gray-500">Loading learner vacancies...</CardContent></Card>
       ) : filteredVacancies.length === 0 ? (
         <Card className="rounded-[2rem] border-dashed"><CardContent className="p-14 text-center"><BriefcaseBusiness className="mx-auto h-14 w-14 text-gray-300" /><p className="mt-4 text-lg font-black text-gray-600">No published vacancies found</p><p className="mt-1 text-sm text-gray-500">New opportunities declared by industry partners will appear here.</p></CardContent></Card>
       ) : (
