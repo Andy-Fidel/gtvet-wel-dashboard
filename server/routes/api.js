@@ -1,4 +1,5 @@
 import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js';
+import { canLogMonitoringVisit, monitoringScope } from '../utils/monitoringAccess.js';
 import express from 'express';
 import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
@@ -94,6 +95,13 @@ export const getFilter = async (user) => {
      return { institution: { $in: instNames } };
   }
   return { institution: user.institution };
+};
+
+const getMonitoringFilter = async (user, learnerOptions = false) => {
+  if (isHQRole(user.role) || user.role === 'RegionalAdmin') return getFilter(user);
+  if (!canLogMonitoringVisit(user)) return { _id: { $in: [] } };
+  const delegated = await Placement.find({ delegate: user._id, status: 'Active' }).distinct('learner');
+  return monitoringScope(user, delegated, learnerOptions);
 };
 
 const getHQPartnerFilter = async (user) => {
@@ -4027,7 +4035,7 @@ router.get('/monitoring-visits/export', async (req, res) => {
 
 router.get('/monitoring-visits', async (req, res) => {
     try {
-      const filter = await getFilter(req.user);
+      const filter = await getMonitoringFilter(req.user);
       const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
       const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
       const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
@@ -4269,13 +4277,15 @@ const determineMonitoringVisitVerification = async ({ learnerId, submittedLocati
 
 router.post('/monitoring-visits', async (req, res) => {
     try {
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
+        if (!canLogMonitoringVisit(req.user)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for monitoring visits.' });
         }
         const { submittedLocation, ...visitData } = req.body;
-        const learnerRecord = await Learner.findById(visitData.learner).select('institution');
+        if (!mongoose.isValidObjectId(visitData.learner)) return res.status(400).json({ message: 'Select a valid learner.' });
+        const learnerScope = await getMonitoringFilter(req.user, true);
+        const learnerRecord = await Learner.findOne({ $and: [{ _id: visitData.learner }, learnerScope] }).select('institution');
         if (!learnerRecord) {
-            return res.status(404).json({ message: 'Learner not found' });
+            return res.status(404).json({ message: 'Learner not found or outside your institution and active delegations.' });
         }
 
         const verification = await determineMonitoringVisitVerification({
@@ -4470,7 +4480,7 @@ router.put('/monitoring-visits/:id', async (req, res) => {
         if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for monitoring visits.' });
         }
-        const filter = await getFilter(req.user);
+        const filter = await getMonitoringFilter(req.user);
         const existingVisit = await MonitoringVisit.findOne({ _id: req.params.id, ...filter });
         if (!existingVisit) {
             return res.status(404).json({ message: 'Visit not found or unauthorized' });
@@ -4493,6 +4503,7 @@ router.put('/monitoring-visits/:id', async (req, res) => {
         const nextPayload = {
             ...existingVisit.toObject(),
             ...requestBody,
+            learner: existingVisit.learner,
         };
         const verification = await determineMonitoringVisitVerification({
             learnerId: nextPayload.learner,
@@ -4671,7 +4682,7 @@ router.delete('/monitoring-visits/:id', async (req, res) => {
         if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for monitoring visits.' });
         }
-        const filter = await getFilter(req.user);
+        const filter = await getMonitoringFilter(req.user);
         const visit = await MonitoringVisit.findOne({ _id: req.params.id, ...filter });
         if (!visit) {
             return res.status(404).json({ message: 'Visit not found or unauthorized' });
@@ -7036,8 +7047,10 @@ router.get('/learners', async (req, res) => {
 
 router.get('/learners/options', async (req, res) => {
   try {
-    const filter = await getFilter(req.user);
-    const query = { ...filter };
+    const filter = req.query.purpose === 'monitoring'
+      ? await getMonitoringFilter(req.user, true)
+      : await getFilter(req.user);
+    const query = { $and: [filter] };
     const { status, academicStatus, year, program, search, institution, limit: requestedLimit } = req.query;
 
     if (status) query.status = status;

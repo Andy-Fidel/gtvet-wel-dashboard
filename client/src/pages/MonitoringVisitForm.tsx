@@ -46,7 +46,7 @@ type MonitoringVisitFormValues = z.infer<typeof formSchema>
 
 interface MonitoringVisitFormProps {
     onSuccess: (data?: { offlineQueued?: boolean }) => void;
-    initialData?: Partial<MonitoringVisitFormValues> & { 
+    initialData?: Omit<Partial<MonitoringVisitFormValues>, 'learner'> & {
         _id?: string;
         updatedAt?: string;
         learner?: string | { _id: string; name: string; trackingId: string };
@@ -61,7 +61,8 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
   // GPS capture state
   const [gpsStatus, setGpsStatus] = useState<'acquiring' | 'captured' | 'denied' | 'unavailable'>('acquiring')
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
-  const draftKey = `draft:monitoring-visit:${initialData?._id || "new"}`
+  const presetLearner = typeof initialData?.learner === 'object' ? initialData.learner._id : initialData?.learner || ''
+  const draftKey = `draft:monitoring-visit:${user?._id}:${initialData?._id || `new:${presetLearner || 'unselected'}`}`
 
   const captureLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -81,15 +82,26 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
   useEffect(() => { captureLocation(); }, [captureLocation]);
 
   useEffect(() => {
-    authFetch('/api/learners/options')
-        .then(res => res.json())
+    authFetch('/api/learners/options?purpose=monitoring')
+        .then(async res => {
+          const data = await res.json()
+          if (!res.ok || !Array.isArray(data)) throw new Error(data?.message || 'Unable to load learners')
+          return data
+        })
         .then(data => setLearners(data))
-        .catch(err => console.error("Error fetching learners:", err))
+        .catch(err => toast.error(err.message || 'Unable to load learners'))
   }, [authFetch])
 
   const form = useForm<MonitoringVisitFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: initialData ? {
+        visitType: 'Routine',
+        attendanceStatus: 'Present',
+        performanceRating: 3,
+        keyObservations: '',
+        issuesIdentified: '',
+        actionRequired: '',
+        gpsExceptionReason: '',
         ...initialData,
         visitDate: safeDateString(initialData.visitDate),
         learner: (typeof initialData.learner === 'object' && initialData.learner)
@@ -114,7 +126,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
     if (!draft) return
 
     form.reset({
-      learner: typeof draft.learner === "string" ? draft.learner : "",
+      learner: presetLearner || (typeof draft.learner === "string" ? draft.learner : ""),
       visitType: draft.visitType === "Urgent" || draft.visitType === "Emergency" || draft.visitType === "Follow-up" ? draft.visitType : "Routine",
       visitDate: draft.visitDate ? new Date(String(draft.visitDate)) : new Date(),
       attendanceStatus: draft.attendanceStatus === "Absent" || draft.attendanceStatus === "Excused" || draft.attendanceStatus === "Late" ? draft.attendanceStatus : "Present",
@@ -124,7 +136,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
       actionRequired: typeof draft.actionRequired === "string" ? draft.actionRequired : "",
       gpsExceptionReason: typeof draft.gpsExceptionReason === "string" ? draft.gpsExceptionReason : "",
     })
-  }, [draftKey, form, initialData?._id])
+  }, [draftKey, form, initialData?._id, presetLearner])
 
   useEffect(() => {
     if (initialData?._id) return
@@ -183,7 +195,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         <FormField control={form.control} name="learner" render={({ field }) => (
             <FormItem>
               <FormLabel className="text-sm font-semibold text-gray-900">Learner / Trainee</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value} disabled={!!initialData?.learner}>
+              <Select onValueChange={field.onChange} value={field.value} disabled={!!initialData?.learner}>
                 <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
                 <SelectContent>
                     {learners.map((learner) => (
@@ -266,7 +278,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
             <FormField control={form.control} name="visitType" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Visit Type</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
                     <SelectContent>
                         <SelectItem value="Routine">Routine</SelectItem>
@@ -285,7 +297,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
              <FormField control={form.control} name="attendanceStatus" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Attendance Status</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select status" /></SelectTrigger></FormControl>
                     <SelectContent>
                         <SelectItem value="Present">Present</SelectItem>
