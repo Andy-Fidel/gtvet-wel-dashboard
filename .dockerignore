@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+**/node_modules
+client/dist
+server/local-uploads
+*.docx
+*.log
+.DS_Store

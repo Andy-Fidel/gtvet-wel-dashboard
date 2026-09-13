@@ -1,0 +1,59 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: gtvet-wel-dashboard:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - /etc/gtvet-wel/app.env
+    environment:
+      NODE_ENV: production
+      PORT: 5001
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      TRUST_PROXY: loopback
+    ports:
+      - "127.0.0.1:5001:5001"
+    volumes:
+      - local_uploads:/app/server/local-uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5001/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - web
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["public"]
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - web
+
+networks:
+  web:
+
+volumes:
+  local_uploads:
+  caddy_data:
+  caddy_config:
