@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { format } from "date-fns"
 import { CalendarDays, Loader2 } from "lucide-react"
+import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import type { Learner } from "@/types/models"
 import { Button } from "@/components/ui/button"
@@ -166,16 +167,21 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
           return
         }
 
-        const res = await authFetch("/api/learners/options")
+        const res = await authFetch(initialData?._id ? "/api/learners/options" : "/api/attendance-logs/learner-options")
+        if (!res.ok) {
+          const error = await res.json().catch(() => ({ message: "Failed to load learners" }))
+          throw new Error(error.message || "Failed to load learners")
+        }
         const data = await res.json()
         setLearners(data)
       } catch (err) {
         console.error("Error fetching learners:", err)
+        toast.error(err instanceof Error ? err.message : "Failed to load learners")
       }
     }
 
     fetchLearners()
-  }, [authFetch, user?.role])
+  }, [authFetch, initialData?._id, user?.role])
 
   useEffect(() => {
     if (entryType === "Daily") {
@@ -225,6 +231,7 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
       onSuccess(data)
     } catch (error) {
       console.error("Error submitting attendance log:", error)
+      toast.error(error instanceof Error ? error.message : "Failed to save attendance log")
     } finally {
       setLoading(false)
     }
@@ -257,6 +264,9 @@ export function AttendanceLogForm({ onSuccess, initialData, presetLearnerId }: A
                   ))}
                 </SelectContent>
               </Select>
+              {!initialData?._id && user?.role !== "IndustryPartner" && (
+                <FormDescription>Only learners with an active placement can have attendance recorded.</FormDescription>
+              )}
               <FormMessage />
             </FormItem>
           )}

@@ -9782,6 +9782,47 @@ router.delete('/placements/:id', async (req, res) => {
 
 // ==================== ATTENDANCE LOGS ====================
 
+router.get('/attendance-logs/learner-options', async (req, res) => {
+    try {
+        if (!['Admin', 'Manager', 'Staff'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Institution attendance learner options are not available for this role' });
+        }
+
+        const placementScope = await getPlacementScope(req.user);
+        const activePlacements = await Placement.find({
+            ...placementScope,
+            status: 'Active',
+        })
+            .select('learner')
+            .lean();
+
+        const learnerIds = [...new Set(activePlacements
+            .map((placement) => placement.learner?.toString())
+            .filter(Boolean))];
+
+        if (learnerIds.length === 0) {
+            return res.json([]);
+        }
+
+        const learners = await Learner.find({
+            _id: { $in: learnerIds },
+            academicStatus: { $in: ['Active', 'Graduating'] },
+            status: { $ne: 'Dropped' },
+        })
+            .select('firstName lastName middleName trackingId institution region program year status academicStatus')
+            .sort({ lastName: 1, firstName: 1, middleName: 1, trackingId: 1 })
+            .lean();
+
+        return res.json(learners.map((learner) => ({
+            ...learner,
+            name: buildLearnerDisplayName(learner),
+        })));
+    } catch (error) {
+        console.error('Error fetching attendance learner options:', error);
+        return res.status(500).json({ message: 'Error fetching learners eligible for attendance' });
+    }
+});
+
 router.get('/attendance-logs', async (req, res) => {
     try {
         const scope = await buildAttendanceScope(req.user);
@@ -9870,14 +9911,23 @@ router.post('/attendance-logs', async (req, res) => {
 
             learner = await Learner.findById(learnerId);
         } else {
-            const filter = await getFilter(req.user);
-            learner = await Learner.findOne({ _id: learnerId, ...filter });
-            if (!learner) {
-                return res.status(404).json({ message: 'Learner not found or unauthorized' });
+            if (!['Admin', 'Manager', 'Staff'].includes(req.user.role)) {
+                return res.status(403).json({ message: 'You do not have permission to create attendance logs' });
             }
 
-            placement = await Placement.findOne({ learner: learnerId, institution: learner.institution })
+            const placementScope = await getPlacementScope(req.user);
+            placement = await Placement.findOne({
+                learner: learnerId,
+                status: 'Active',
+                ...placementScope,
+            })
                 .sort({ startDate: -1 });
+
+            if (!placement) {
+                return res.status(400).json({ message: 'Select a learner with an active placement before recording attendance' });
+            }
+
+            learner = await Learner.findById(learnerId);
         }
 
         if (!learner) {
@@ -9885,7 +9935,7 @@ router.post('/attendance-logs', async (req, res) => {
         }
 
         if (!placement) {
-            return res.status(400).json({ message: 'Learner does not have a placement record yet' });
+            return res.status(400).json({ message: 'Learner does not have an active placement record' });
         }
 
         const newLog = await AttendanceLog.create({
