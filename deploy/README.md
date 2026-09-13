@@ -61,7 +61,8 @@ For a delayed DNS handoff, install `dns-cutover.sh` as
 `/usr/local/sbin/gtvet-dns-cutover` and the matching systemd service and timer.
 The timer waits until the production hostname resolves to the configured server,
 takes a final Atlas dump, restores `test.*` as `gtvet-wel.*`, verifies the local
-application, and starts Caddy. It marks a successful cutover so it runs only once.
+application, starts Caddy, verifies HTTPS and the production CSRF cookie, and
+marks a successful cutover so it runs only once.
 
 ## Update and rollback
 
