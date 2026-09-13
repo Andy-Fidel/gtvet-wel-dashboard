@@ -13,10 +13,15 @@ public profile that terminates HTTPS and proxies requests to the application.
 ## Stage privately
 
 ```bash
+docker network create --driver bridge \
+  --subnet 172.29.0.0/24 --gateway 172.29.0.1 gtvet-wel-web
 cd /opt/gtvet-wel/deploy
 docker compose up -d --build app
 curl --fail http://127.0.0.1:5001/health
 ```
+
+The fixed bridge lets the application reach a host-installed MongoDB bound to
+`172.29.0.1` without exposing MongoDB on a public interface. Create it only once.
 
 ## Enable HTTPS
 
