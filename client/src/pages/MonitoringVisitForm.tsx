@@ -49,6 +49,7 @@ interface MonitoringVisitFormProps {
     initialData?: Omit<Partial<MonitoringVisitFormValues>, 'learner'> & {
         _id?: string;
         updatedAt?: string;
+        placement?: string;
         learner?: string | { _id: string; name: string; trackingId: string };
     };
 }
@@ -164,6 +165,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         }
         const payload = {
             ...values,
+            ...(initialData?.placement ? { placement: initialData.placement } : {}),
             ...(initialData?._id && initialData.updatedAt ? { clientUpdatedAt: initialData.updatedAt } : {}),
             ...(gpsCoords && !initialData?._id ? { submittedLocation: gpsCoords } : {}),
         };

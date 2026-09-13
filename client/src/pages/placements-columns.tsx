@@ -433,9 +433,13 @@ export const columns: ColumnDef<Placement>[] = [
         onOpenEvidence: (placement: Placement) => void,
         onAssignDelegate?: (placement: Placement) => void,
         role?: string
+        delegatedView?: boolean
+        institution?: string
+        onViewDelegatedLearner?: (placement: Placement) => void
       }
 
-      const isOversightUser = meta?.role === 'SuperAdmin' || meta?.role === 'RegionalAdmin'
+      const isOversightUser = ['SuperAdmin', 'RegionalAdmin', 'HQManager', 'HQStaff'].includes(meta?.role || '')
+      const isDelegated = !!meta?.delegatedView || (!isOversightUser && placement.institution !== meta?.institution)
  
       return (
         <DropdownMenu>
@@ -456,14 +460,15 @@ export const columns: ColumnDef<Placement>[] = [
             <DropdownMenuItem onClick={() => meta?.onOpenEvidence(placement)}>
               View Evidence
             </DropdownMenuItem>
-            {!isOversightUser && (
+            {isDelegated && <DropdownMenuItem onClick={() => meta?.onViewDelegatedLearner?.(placement)}>View learner / Log visit</DropdownMenuItem>}
+            {!isOversightUser && !isDelegated && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => meta?.onEdit(placement)}>Edit Details</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => meta?.onAssignDelegate?.(placement)}>
+                {['Admin', 'Manager'].includes(meta?.role || '') && <DropdownMenuItem onClick={() => meta?.onAssignDelegate?.(placement)}>
                   <Handshake className="mr-2 h-4 w-4" /> Assign Delegate
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => meta?.onDelete(placement._id)} className="text-red-600 focus:text-red-600">Delete Placement</DropdownMenuItem>
+                </DropdownMenuItem>}
+                {['Admin', 'Manager'].includes(meta?.role || '') && <DropdownMenuItem onClick={() => meta?.onDelete(placement._id)} className="text-red-600 focus:text-red-600">Delete Placement</DropdownMenuItem>}
               </>
             )}
           </DropdownMenuContent>

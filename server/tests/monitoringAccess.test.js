@@ -33,7 +33,7 @@ test('delegated learner options and visit records use the correct reference fiel
     $or: [{ institution: 'Institute A' }, { _id: { $in: ['delegated-id'] } }],
   });
   assert.deepEqual(monitoringScope(user, ['delegated-id']), {
-    $or: [{ institution: 'Institute A' }, { learner: { $in: ['delegated-id'] } }],
+    $or: [{ institution: 'Institute A' }, { placement: { $in: ['delegated-id'] } }],
   });
   assert.deepEqual(monitoringScope(user, []), { institution: 'Institute A' });
   assert.deepEqual(monitoringScope({}, []), { institution: '__unassigned__' });

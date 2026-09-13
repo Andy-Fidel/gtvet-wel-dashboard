@@ -17,6 +17,7 @@ import { EditPlacementForm } from "./EditPlacementForm"
 import { UnifiedPlacementForm } from "./UnifiedPlacementForm"
 import { DataTable } from "@/components/ui/data-table"
 import { type Placement, columns } from "./placements-columns"
+import { MonitoringVisitForm } from './MonitoringVisitForm'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
@@ -141,6 +142,15 @@ export default function Placements() {
 
     // Delegate assignment state
     const [delegateOpen, setDelegateOpen] = useState(false)
+    const [delegatedLearner, setDelegatedLearner] = useState<{ placement: { _id: string; companyName: string; location: string }; learner: { _id: string; name: string; trackingId: string; program: string; institution: string } } | null>(null)
+    const viewDelegatedLearner = async (placement: Placement) => {
+        try {
+            const res = await authFetch(`/api/placements/${placement._id}/delegated-learner`)
+            const payload = await res.json()
+            if (!res.ok) throw new Error(payload.message || 'Unable to load learner')
+            setDelegatedLearner(payload)
+        } catch (error) { toast.error(error instanceof Error ? error.message : 'Unable to load learner') }
+    }
     const [delegatePlacement, setDelegatePlacement] = useState<Placement | null>(null)
     const [delegateCandidates, setDelegateCandidates] = useState<DelegateUser[]>([])
     const [delegateSearch, setDelegateSearch] = useState('')
@@ -540,6 +550,15 @@ export default function Placements() {
 
     return (
         <div className="h-full flex-1 flex-col space-y-4 md:space-y-6 pt-12 md:pt-16 pb-4 md:pb-8 flex w-full relative z-0">
+            <Dialog open={!!delegatedLearner} onOpenChange={open => { if (!open) setDelegatedLearner(null) }}>
+                <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[800px]">
+                    <DialogHeader>
+                        <DialogTitle>{delegatedLearner?.learner.name}</DialogTitle>
+                        <DialogDescription>{delegatedLearner?.learner.trackingId} · {delegatedLearner?.learner.program} · {delegatedLearner?.learner.institution}<br />{delegatedLearner?.placement.companyName} — {delegatedLearner?.placement.location}</DialogDescription>
+                    </DialogHeader>
+                    {delegatedLearner && <MonitoringVisitForm initialData={{ learner: delegatedLearner.learner._id, placement: delegatedLearner.placement._id }} onSuccess={() => { setDelegatedLearner(null); toast.success('Visit saved') }} />}
+                </DialogContent>
+            </Dialog>
              <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 px-4 md:px-8">
                 <div>
                   <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
@@ -799,7 +818,9 @@ export default function Placements() {
                                                 onOpenMessages: handleOpenMessages,
                                                 onOpenEvidence: handleOpenEvidence,
                                                 onAssignDelegate: handleAssignDelegate,
-                                                role: user?.role
+                                                role: user?.role,
+                                                institution: user?.institution,
+                                                onViewDelegatedLearner: viewDelegatedLearner,
                                             }} 
                                             sorting={sorting}
                                             onSortingChange={setSorting}
@@ -853,12 +874,15 @@ export default function Placements() {
                                         data={delegatedData}
                                         columns={columns}
                                         meta={{
+                                            delegatedView: true,
+                                            onViewDelegatedLearner: viewDelegatedLearner,
                                             onEdit: handleEdit,
                                             onDelete: handleDelete,
                                             onOpenMessages: handleOpenMessages,
                                             onOpenEvidence: handleOpenEvidence,
                                             onAssignDelegate: handleAssignDelegate,
-                                            role: user?.role
+                                            role: user?.role,
+                                            institution: user?.institution,
                                         }}
                                         sorting={sorting}
                                         onSortingChange={setSorting}

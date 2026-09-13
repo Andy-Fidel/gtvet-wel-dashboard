@@ -100,7 +100,7 @@ export const getFilter = async (user) => {
 const getMonitoringFilter = async (user, learnerOptions = false) => {
   if (isHQRole(user.role) || user.role === 'RegionalAdmin') return getFilter(user);
   if (!canLogMonitoringVisit(user)) return { _id: { $in: [] } };
-  const delegated = await Placement.find({ delegate: user._id, status: 'Active' }).distinct('learner');
+  const delegated = await Placement.find({ delegate: user._id, status: 'Active' }).distinct(learnerOptions ? 'learner' : '_id');
   return monitoringScope(user, delegated, learnerOptions);
 };
 
@@ -1102,10 +1102,11 @@ const getPlacementFilter = async (user) => {
     return { partner: getPartnerId(user) };
   }
   // Institution staff: own institution OR delegated to them
+  if (!canLogMonitoringVisit(user)) return { _id: { $in: [] } };
   return {
     $or: [
       { institution: user.institution },
-      { delegate: user._id },
+      { delegate: user._id, status: 'Active' },
     ]
   };
 };
@@ -3999,7 +4000,7 @@ router.get('/audit-logs/anomalies', requireRole('HQManager', 'HQStaff', 'Admin',
 
 router.get('/monitoring-visits/export', async (req, res) => {
     try {
-        const filter = await getFilter(req.user);
+        const filter = await getMonitoringFilter(req.user);
         const systemSettings = await getOrCreateSystemSettings();
         const visits = await MonitoringVisit.find(filter)
             .populate({
@@ -4181,7 +4182,7 @@ router.get('/monitoring-visits', async (req, res) => {
 
 router.get('/monitoring-visits/due', async (req, res) => {
     try {
-      const filter = await getFilter(req.user);
+      const filter = await getPlacementScope(req.user);
       const settings = await getOrCreateSystemSettings();
       const now = new Date();
 
@@ -4247,7 +4248,7 @@ router.get('/monitoring-visits/due', async (req, res) => {
 const canMutateMonitoringVisit = (user, visit, action = 'update') => {
     if (!visit) return false;
     if (isHQRole(user.role)) return false;
-    if (['RegionalAdmin', 'Admin'].includes(user.role)) return true;
+    if (['RegionalAdmin', 'Admin'].includes(user.role) && user.institution === visit.institution) return true;
 
     const isOwner = visit.submittedBy?.toString() === user._id.toString();
     if (!isOwner) return false;
@@ -4267,8 +4268,9 @@ const canMutateMonitoringVisit = (user, visit, action = 'update') => {
     return true;
 };
 
-const determineMonitoringVisitVerification = async ({ learnerId, submittedLocation, gpsExceptionReason = '' }) => {
-    const placement = await Placement.findOne({ learner: learnerId, status: 'Active' }).select('coordinates');
+const determineMonitoringVisitVerification = async ({ learnerId, placementId, delegateId, submittedLocation, gpsExceptionReason = '' }) => {
+    const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : { status: 'Active' }), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates');
+    if (delegateId && !placement) return { error: 'No active delegated placement is available for this learner.' };
     const result = locationCheck(submittedLocation, placement?.coordinates);
     if (!placement && hasCoordinates(submittedLocation)) result.locationVerified = 'No Placement';
     if (!hasCoordinates(submittedLocation) && !gpsExceptionReason?.trim()) return { error: 'A GPS exception reason is required when GPS is unavailable.' };
@@ -4290,6 +4292,8 @@ router.post('/monitoring-visits', async (req, res) => {
 
         const verification = await determineMonitoringVisitVerification({
             learnerId: visitData.learner,
+            placementId: visitData.placement,
+            delegateId: req.user.institution !== learnerRecord.institution ? req.user._id : undefined,
             submittedLocation,
             gpsExceptionReason: visitData.gpsExceptionReason,
         });
@@ -4301,6 +4305,7 @@ router.post('/monitoring-visits', async (req, res) => {
         let delegationFields = {};
         if (req.user.institution !== learnerRecord.institution) {
             const activePlacement = await Placement.findOne({
+                _id: verification.placement,
                 learner: visitData.learner,
                 delegate: req.user._id,
                 status: 'Active',
@@ -4507,6 +4512,8 @@ router.put('/monitoring-visits/:id', async (req, res) => {
         };
         const verification = await determineMonitoringVisitVerification({
             learnerId: nextPayload.learner,
+            placementId: existingVisit.placement,
+            delegateId: req.user.institution !== existingVisit.institution ? req.user._id : undefined,
             submittedLocation: nextPayload.submittedLocation,
             gpsExceptionReason: nextPayload.gpsExceptionReason,
         });
@@ -9536,7 +9543,7 @@ router.put('/placements/:id/owner', async (req, res) => {
             return res.status(403).json({ message: 'You do not have permission to assign placement owners' });
         }
 
-        const filter = await getPlacementScope(req.user);
+        const filter = await getFilter(req.user);
         const placement = await Placement.findOne({ _id: req.params.id, ...filter });
         if (!placement) {
             return res.status(404).json({ message: 'Placement not found or unauthorized' });
@@ -9623,6 +9630,13 @@ router.put('/placements/:id/partner-supervisor', requireRole('SuperAdmin'), asyn
 });
 
 // ==================== CROSS-REGION DELEGATION ====================
+const notifyPreviousDelegate = async (before, placement, user) => {
+    const previous = before.delegate?._id || before.delegate;
+    if (!previous || previous.toString() === placement.delegate?.toString()) return;
+    await notifyUsers({ recipientIds: [previous.toString()], sender: user._id, type: 'visit',
+        title: 'Delegation ended', message: `Your monitoring assignment at ${placement.companyName} has ended.`,
+        link: '/placements?view=delegated' });
+};
 
 // Assign or remove a delegate on a placement
 router.put('/placements/:id/delegate', async (req, res) => {
@@ -9630,7 +9644,7 @@ router.put('/placements/:id/delegate', async (req, res) => {
         if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for placement delegation.' });
         }
-        const filter = await getPlacementScope(req.user);
+        const filter = await getFilter(req.user);
         const placement = await Placement.findOne({ _id: req.params.id, ...filter })
             .populate('learner', 'name trackingId')
             .populate('owner', 'name institution');
@@ -9645,6 +9659,7 @@ router.put('/placements/:id/delegate', async (req, res) => {
 
         const { delegateId } = req.body;
         const before = placement.toObject();
+        if (delegateId && placement.status !== 'Active') return res.status(400).json({ message: 'Only active placements can be delegated.' });
 
         if (!delegateId) {
             // Remove delegate
@@ -9665,6 +9680,7 @@ router.put('/placements/:id/delegate', async (req, res) => {
                 changedFields: ['delegate', 'delegatedAt', 'delegatedBy', 'delegateInstitution'],
             });
 
+            await notifyPreviousDelegate(before, placement, req.user);
             return res.json(placement);
         }
 
@@ -9706,6 +9722,7 @@ router.put('/placements/:id/delegate', async (req, res) => {
         });
 
         // Notify the delegate
+        await notifyPreviousDelegate(before, placement, req.user);
         await notifyUsers({
             recipientIds: [delegateUser._id.toString()],
             sender: req.user._id,
@@ -9729,8 +9746,20 @@ router.put('/placements/:id/delegate', async (req, res) => {
 });
 
 // Get placements delegated to the current user
+router.get('/placements/:id/delegated-learner', async (req, res) => {
+    try {
+        if (!canLogMonitoringVisit(req.user)) return res.status(403).json({ message: 'Access denied' });
+        const placement = await Placement.findOne({ _id: req.params.id, delegate: req.user._id, status: 'Active' })
+            .select('learner companyName location startDate endDate institution coordinates')
+            .populate('learner', 'firstName middleName lastName trackingId program year institution');
+        if (!placement?.learner) return res.status(404).json({ message: 'Active delegation not found' });
+        res.json({ placement, learner: { ...placement.learner.toObject(), name: buildLearnerDisplayName(placement.learner) } });
+    } catch (error) { res.status(500).json({ message: 'Unable to load delegated learner' }); }
+});
+
 router.get('/placements/delegated-to-me', async (req, res) => {
     try {
+        if (!canLogMonitoringVisit(req.user)) return res.json([]);
         const placements = await Placement.find({
             delegate: req.user._id,
             status: 'Active',
@@ -9772,11 +9801,13 @@ router.get('/users/by-region/:region', async (req, res) => {
 
 router.delete('/placements/:id', async (req, res) => {
     try {
+        if (!['Admin', 'Manager'].includes(req.user.role)) return res.status(403).json({ message: 'Only originating institution administrators and managers can delete placements.' });
         if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
         }
-        const filter = await getPlacementScope(req.user);
+        const filter = await getFilter(req.user);
         const deletedPlacement = await Placement.findOneAndDelete({ _id: req.params.id, ...filter });
+        if (!deletedPlacement) return res.status(404).json({ message: 'Placement not found or unauthorized' });
         if (deletedPlacement) {
             await logAuditEvent({
                 req,
