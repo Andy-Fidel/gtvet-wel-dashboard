@@ -22,6 +22,9 @@ curl --fail http://127.0.0.1:5001/health
 
 The fixed bridge lets the application reach a host-installed MongoDB bound to
 `172.29.0.1` without exposing MongoDB on a public interface. Create it only once.
+Install `systemd/mongod.service.d/gtvet-wel.conf` under
+`/etc/systemd/system/mongod.service.d/` so MongoDB starts after Docker has
+restored the bridge during boot.
 
 ## Database backups
 
