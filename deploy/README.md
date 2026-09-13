@@ -35,6 +35,14 @@ archive every day and retains 14 days. The root-only
 URI. Copy these archives off-server as well; local retention alone does not
 protect against loss of the host or disk.
 
+## DNS on TCP-only networks
+
+Some hosting networks block outbound UDP/53. In that case install Unbound,
+install `unbound/gtvet-forward-tcp.conf` under `/etc/unbound/unbound.conf.d/`,
+and install `systemd/resolved.conf.d/gtvet-local-dns.conf` under
+`/etc/systemd/resolved.conf.d/`. This keeps applications on the standard local
+resolver while forwarding upstream DNS over TCP.
+
 ## Enable HTTPS
 
 Create a DNS A record pointing the production hostname to the server's public
