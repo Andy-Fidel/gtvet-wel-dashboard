@@ -52,6 +52,12 @@ services:
 
 networks:
   web:
+    name: gtvet-wel-web
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+          gateway: 172.29.0.1
 
 volumes:
   local_uploads:
