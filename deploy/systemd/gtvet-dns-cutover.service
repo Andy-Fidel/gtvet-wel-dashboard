@@ -1,0 +1,12 @@
+[Unit]
+Description=Cut over GTVET WEL when production DNS becomes active
+After=network-online.target docker.service mongod.service unbound.service systemd-resolved.service
+Wants=network-online.target
+Requires=docker.service mongod.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gtvet-dns-cutover
+User=root
+Group=root
+

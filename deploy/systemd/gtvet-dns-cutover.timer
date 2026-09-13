@@ -1,0 +1,13 @@
+[Unit]
+Description=Check whether GTVET WEL production DNS is ready
+
+[Timer]
+OnBootSec=2m
+OnUnitInactiveSec=1m
+AccuracySec=10s
+Persistent=true
+Unit=gtvet-dns-cutover.service
+
+[Install]
+WantedBy=timers.target
+

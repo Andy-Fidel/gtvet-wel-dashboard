@@ -57,6 +57,12 @@ APP_DOMAIN=hostname docker compose --profile public up -d
 Do not enable `NODE_ENV=production` over plain HTTP: authentication and CSRF
 cookies are intentionally marked `Secure` in production.
 
+For a delayed DNS handoff, install `dns-cutover.sh` as
+`/usr/local/sbin/gtvet-dns-cutover` and the matching systemd service and timer.
+The timer waits until the production hostname resolves to the configured server,
+takes a final Atlas dump, restores `test.*` as `gtvet-wel.*`, verifies the local
+application, and starts Caddy. It marks a successful cutover so it runs only once.
+
 ## Update and rollback
 
 Pull and rebuild only after recording the current commit. To roll back, check out
