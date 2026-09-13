@@ -1,5 +1,6 @@
 import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import { canLogMonitoringVisit, monitoringScope } from '../utils/monitoringAccess.js';
+import { canReadAssessment, canWriteAssessment, assessmentLearnerFields, serializeAssessment, assessmentInput, validateAssessmentInput, safeAssessmentCsvCell } from '../utils/assessmentAccess.js';
 import express from 'express';
 import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
@@ -28,6 +29,8 @@ import { Vacancy } from '../models/Vacancy.js';
 import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
+import { PartnerImport } from '../models/PartnerImport.js';
+import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { hasCoordinates, normalizeCoordinates, locationCheck } from '../utils/workplaceCoordinates.js';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
@@ -6568,9 +6571,45 @@ router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin'
 
 // ==================== COMPETENCY ASSESSMENTS ====================
 
+const getAssessmentFilter = async (user, query = {}) => {
+    const filter = await getFilter(user);
+    const search = String(query.search || '').trim();
+    if (search) {
+        const regex = new RegExp(escapeRegex(search), 'i');
+        const learners = await Learner.find({ ...filter, $or: ['trackingId', 'firstName', 'middleName', 'lastName'].map(field => ({ [field]: regex })) }).select('_id').lean();
+        filter.learner = { $in: learners.map(learner => learner._id) };
+    }
+    if (query.assessmentType) filter.assessmentType = String(query.assessmentType);
+    if (query.scoreBand === 'low') filter.overallScore = { $lt: 40 };
+    if (query.scoreBand === 'mid') filter.overallScore = { $gte: 40, $lt: 70 };
+    if (query.scoreBand === 'high') filter.overallScore = { $gte: 70 };
+    return filter;
+};
+
+router.get('/assessments/export', async (req, res) => {
+    if (!canReadAssessment(req.user)) return res.status(403).json({ message: 'Access denied' });
+    try {
+        const filter = await getAssessmentFilter(req.user, req.query);
+        const assessments = await CompetencyAssessment.find(filter).populate('learner', assessmentLearnerFields).sort({ assessmentDate: -1, createdAt: -1 }).lean();
+        const fields = ['Learner', 'Tracking ID', 'Institution', 'Program', 'Date', 'Type', 'Score', 'Assessor', 'Technical Skills', 'Soft Skills', 'Professionalism', 'Problem Solving', 'Recommendations'];
+        const rows = assessments.map(serializeAssessment).map(a => Object.fromEntries(Object.entries({
+            Learner: a.learner?.name || 'Learner unavailable', 'Tracking ID': a.trackingId, Institution: a.institution,
+            Program: a.learner?.program || '', Date: a.assessmentDate ? new Date(a.assessmentDate).toISOString().slice(0, 10) : '',
+            Type: a.assessmentType, Score: a.overallScore, Assessor: a.assessorName,
+            'Technical Skills': a.technicalSkills, 'Soft Skills': a.softSkills,
+            Professionalism: a.professionalism, 'Problem Solving': a.problemSolving, Recommendations: a.recommendations || '',
+        }).map(([key, value]) => [key, safeAssessmentCsvCell(value)])));
+        res.type('text/csv');
+        res.attachment('competency-assessments.csv');
+        return res.send(new Parser({ fields }).parse(rows));
+    } catch (error) {
+        return res.status(500).json({ message: 'Failed to export assessments' });
+    }
+});
+
 router.get('/assessments', async (req, res) => {
     try {
-        const filter = await getFilter(req.user);
+        if (!canReadAssessment(req.user)) return res.status(403).json({ message: 'Access denied' });
         const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
         const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
         const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
@@ -6579,27 +6618,10 @@ router.get('/assessments', async (req, res) => {
             ? Math.min(parsedPageSize, 100)
             : 25;
 
-        // Search by learner name/trackingId
-        const search = (req.query.search || '').toString().trim();
-        let learnerIds = null;
-        if (search) {
-            const regex = new RegExp(search, 'i');
-            const matchingLearners = await Learner.find({
-                ...filter.institution ? { institution: filter.institution } : {},
-                $or: [{ name: regex }, { trackingId: regex }, { firstName: regex }, { lastName: regex }],
-            }).select('_id').lean();
-            learnerIds = matchingLearners.map(l => l._id);
-        }
-
-        const assessmentFilter = { ...filter };
-        if (learnerIds) assessmentFilter.learner = { $in: learnerIds };
-        if (req.query.assessmentType) assessmentFilter.assessmentType = req.query.assessmentType;
-        if (req.query.scoreBand === 'low') assessmentFilter.overallScore = { $lt: 40 };
-        if (req.query.scoreBand === 'mid') assessmentFilter.overallScore = { $gte: 40, $lt: 70 };
-        if (req.query.scoreBand === 'high') assessmentFilter.overallScore = { $gte: 70 };
+        const assessmentFilter = await getAssessmentFilter(req.user, req.query);
 
         const query = CompetencyAssessment.find(assessmentFilter)
-            .populate('learner', 'name trackingId program')
+            .populate('learner', assessmentLearnerFields)
             .sort(req.query.scoreBand === 'low'
                 ? { overallScore: 1, assessmentDate: -1, createdAt: -1 }
                 : { assessmentDate: -1, createdAt: -1 });
@@ -6620,6 +6642,7 @@ router.get('/assessments', async (req, res) => {
                     totalTheoretical: { $sum: { $cond: [{ $eq: ['$assessmentType', 'Theoretical'] }, 1, 0] } },
                     totalCombined: { $sum: { $cond: [{ $eq: ['$assessmentType', 'Combined'] }, 1, 0] } },
                     totalOnTheJob: { $sum: { $cond: [{ $eq: ['$assessmentType', 'On-the-job'] }, 1, 0] } },
+                    totalOral: { $sum: { $cond: [{ $eq: ['$assessmentType', 'Oral'] }, 1, 0] } },
                     scoreHigh: { $sum: { $cond: [{ $gte: ['$overallScore', 70] }, 1, 0] } },
                     scoreMid: { $sum: { $cond: [{ $and: [{ $gte: ['$overallScore', 40] }, { $lt: ['$overallScore', 70] }] }, 1, 0] } },
                     scoreLow: { $sum: { $cond: [{ $lt: ['$overallScore', 40] }, 1, 0] } },
@@ -6660,14 +6683,14 @@ router.get('/assessments', async (req, res) => {
             const safeTotal = total || 0;
             const s = stats?.[0] || {};
             return res.json({
-                items: assessments,
+                items: assessments.map(serializeAssessment),
                 total: safeTotal,
                 page,
                 pageSize,
                 totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
                 stats: {
                     avgScore: s.avgScore ? Number(s.avgScore.toFixed(1)) : 0,
-                    byType: { Practical: s.totalPractical || 0, Theoretical: s.totalTheoretical || 0, Combined: s.totalCombined || 0, 'On-the-job': s.totalOnTheJob || 0 },
+                    byType: { Practical: s.totalPractical || 0, Theoretical: s.totalTheoretical || 0, Combined: s.totalCombined || 0, 'On-the-job': s.totalOnTheJob || 0, Oral: s.totalOral || 0 },
                     scoreHigh: s.scoreHigh || 0,
                     scoreMid: s.scoreMid || 0,
                     scoreLow: s.scoreLow || 0,
@@ -6683,7 +6706,7 @@ router.get('/assessments', async (req, res) => {
             });
         }
 
-        res.json(assessments);
+        res.json(assessments.map(serializeAssessment));
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
@@ -6691,29 +6714,23 @@ router.get('/assessments', async (req, res) => {
 
 router.post('/assessments', async (req, res) => {
     try {
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Oversight portal access is read-only for competency assessments.' });
+        if (!canWriteAssessment(req.user)) {
+            return res.status(403).json({ message: 'Only institution staff can record assessments.' });
         }
-        // Auto-populate trackingId from learner if not provided
-        let trackingId = req.body.trackingId;
-        if (!trackingId && req.body.learner) {
-            const learner = await Learner.findById(req.body.learner);
-            if (learner) trackingId = learner.trackingId;
-        }
-
+        if (!mongoose.isObjectIdOrHexString(req.body?.learner)) return res.status(400).json({ message: 'A valid learner is required' });
+        const inputError = validateAssessmentInput(req.body);
+        if (inputError) return res.status(400).json({ message: inputError });
+        const learner = await Learner.findOne({ _id: req.body.learner, institution: req.user.institution }).select(assessmentLearnerFields);
+        if (!learner) return res.status(404).json({ message: 'Learner not found in your institution' });
         const newAssessment = new CompetencyAssessment({
-            ...req.body,
-            trackingId,
+            ...assessmentInput(req.body),
+            learner: learner._id,
+            trackingId: learner.trackingId,
             institution: req.user.institution,
         });
         await newAssessment.save();
-
-        // Automatically graduate learner
-        let learnerName = 'A learner';
-        if (req.body.learner) {
-            const updatedLearner = await Learner.findByIdAndUpdate(req.body.learner, { status: 'Completed' }, { returnDocument: 'after' });
-            if (updatedLearner) learnerName = updatedLearner.name;
-        }
+        // Recording evidence does not complete a learner or their placement.
+        const learnerName = learner.name || learner.trackingId || 'A learner';
 
         await logAuditEvent({
             req,
@@ -6734,24 +6751,36 @@ router.post('/assessments', async (req, res) => {
             link: '/assessments'
         });
 
-        res.status(201).json(newAssessment);
+        res.status(201).json(serializeAssessment({ ...newAssessment.toObject(), learner: learner.toObject() }));
     } catch (error) {
         console.error("Error creating assessment:", error);
-        res.status(500).json({ message: 'Error creating assessment', detail: error.message });
+        const invalid = ['ValidationError', 'CastError'].includes(error.name);
+        res.status(invalid ? 400 : 500).json({ message: invalid ? error.message : 'Error creating assessment' });
     }
 });
 
 router.put('/assessments/:id', async (req, res) => {
     try {
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Oversight portal access is read-only for competency assessments.' });
+        if (!canWriteAssessment(req.user)) {
+            return res.status(403).json({ message: 'Only institution staff can edit assessments.' });
         }
+        if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid assessment ID' });
+        const inputError = validateAssessmentInput(req.body);
+        if (inputError) return res.status(400).json({ message: inputError });
         const filter = await getFilter(req.user);
         const existingAssessment = await CompetencyAssessment.findOne({ _id: req.params.id, ...filter });
+        if (!existingAssessment) return res.status(404).json({ message: 'Assessment not found or unauthorized' });
+        if ((req.body.learner !== undefined && String(req.body.learner) !== String(existingAssessment.learner))
+            || (req.body.institution !== undefined && req.body.institution !== existingAssessment.institution)
+            || (req.body.trackingId !== undefined && req.body.trackingId !== existingAssessment.trackingId)) {
+            return res.status(400).json({ message: 'Assessment learner, tracking ID and institution cannot be changed' });
+        }
+        const learner = await Learner.findOne({ _id: existingAssessment.learner, institution: req.user.institution }).select(assessmentLearnerFields).lean();
+        if (!learner) return res.status(404).json({ message: 'Learner not found in your institution' });
         const updatedAssessment = await CompetencyAssessment.findOneAndUpdate(
             { _id: req.params.id, ...filter }, 
-            req.body, 
-            { returnDocument: 'after' }
+            { $set: assessmentInput(req.body) },
+            { returnDocument: 'after', runValidators: true }
         );
         if (!updatedAssessment) return res.status(404).json({ message: 'Assessment not found or unauthorized' });
         if (existingAssessment) {
@@ -6765,17 +6794,19 @@ router.put('/assessments/:id', async (req, res) => {
                 after: updatedAssessment,
             });
         }
-        res.json(updatedAssessment);
+        res.json(serializeAssessment({ ...updatedAssessment.toObject(), learner }));
     } catch (error) {
-        res.status(500).json({ message: 'Error updating assessment' });
+        const invalid = ['ValidationError', 'CastError'].includes(error.name);
+        res.status(invalid ? 400 : 500).json({ message: invalid ? error.message : 'Error updating assessment' });
     }
 });
 
 router.delete('/assessments/:id', async (req, res) => {
     try {
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Oversight portal access is read-only for competency assessments.' });
+        if (!canWriteAssessment(req.user) || !['Admin', 'Manager'].includes(req.user.role)) {
+            return res.status(403).json({ message: 'Only institution administrators and managers can delete assessments.' });
         }
+        if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid assessment ID' });
         const filter = await getFilter(req.user);
         const deletedAssessment = await CompetencyAssessment.findOneAndDelete({ _id: req.params.id, ...filter });
         if (!deletedAssessment) return res.status(404).json({ message: 'Assessment not found or unauthorized' });
@@ -12879,44 +12910,44 @@ router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), asyn
 
 router.post('/industry-partners/import-csv', requireRole('SuperAdmin'), async (req, res) => {
     let rows;
-    try { rows = parsePartnerCsv(req.body.csv); }
+    try { rows = parsePartnerCsv(req.body?.csv); }
     catch (error) { return res.status(400).json({ message: error.message }); }
     try {
-        const results = [];
-        for (let offset = 0; offset < rows.length; offset += 10) {
-          if (req.timedout) break;
-          const batch = await Promise.all(rows.slice(offset, offset + 10).map(async (entry) => {
-            const { row, data, errors } = entry;
-            if (!errors.length && await IndustryPartner.exists({ name: { $regex: `^${escapeRegex(data.name)}$`, $options: 'i' } })) {
-                errors.push('Company name already exists; existing partner was not changed');
-            }
-            if (errors.length) {
-                return { row, name: data.name, status: 'Skipped', message: errors.join('; ') };
-            }
-            if (req.body.preview !== false) {
-                return { row, name: data.name, status: 'Ready', message: `${data.region} · ${data.totalSlots} slots` };
-            }
-            let partner;
-            try {
-                partner = await IndustryPartner.create({ ...data, usedSlots: 0, linkedInstitutions: [],
-                    approvalStatus: 'Approved', approvalRequestedAt: new Date(), approvalReviewedAt: new Date(),
-                    approvalReviewedBy: req.user._id, approvalComment: 'Bulk registered by HQ', addedBy: req.user._id });
-            } catch (error) {
-                return { row, name: data.name, status: 'Skipped', message: error.code === 11000 ? 'Company name already exists' : 'Registration failed; retry this row' };
-            }
-            await logAuditEvent({ req, action: 'CREATE', entityType: 'IndustryPartner', entityId: partner._id,
-                summary: `Bulk registered and approved industry partner ${partner.name}`, after: partner,
-                metadata: { source: 'csv', row } });
-            return { row, name: data.name, status: 'Created', message: 'Registered and approved' };
-          }));
-          results.push(...batch);
-        }
-        if (req.timedout) return;
-        return res.json({ results, created: results.filter(row => row.status === 'Created').length,
-            ready: results.filter(row => row.status === 'Ready').length, skipped: results.filter(row => row.status === 'Skipped').length });
+        const prepared = await preparePartnerImport(rows);
+        if (req.body.preview !== false) return res.json(importSummary({ rows: prepared }));
+        const job = await startPartnerImport(req.body.csv, req.user, prepared);
+        return res.json(importSummary(job));
     } catch (error) {
         console.error('Partner CSV import failed:', error);
-        return res.status(500).json({ message: 'Import interrupted. Preview the file again before retrying; existing companies will be skipped.' });
+        return res.status(500).json({ message: 'Unable to prepare import. Retry the same file to recover any saved batch.' });
+    }
+});
+
+router.get('/industry-partners/imports', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const jobs = await PartnerImport.find({ addedBy: req.user._id }).sort({ createdAt: -1 }).limit(20).lean();
+        return res.json(jobs.map(importSummary));
+    } catch { return res.status(500).json({ message: 'Unable to load saved imports' }); }
+});
+
+router.get('/industry-partners/imports/:id', requireRole('SuperAdmin'), async (req, res) => {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid import ID' });
+    try {
+        const job = await PartnerImport.findOne({ _id: req.params.id, addedBy: req.user._id });
+        if (!job) return res.status(404).json({ message: 'Import not found' });
+        return res.json(importSummary(job));
+    } catch { return res.status(500).json({ message: 'Unable to load import' }); }
+});
+
+router.post('/industry-partners/imports/:id/resume', requireRole('SuperAdmin'), async (req, res) => {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid import ID' });
+    try {
+        const job = await PartnerImport.findOne({ _id: req.params.id, addedBy: req.user._id });
+        if (!job) return res.status(404).json({ message: 'Import not found' });
+        const updated = await advancePartnerImport(job, req);
+        if (!req.timedout) return res.json(importSummary(updated));
+    } catch {
+        if (!req.timedout) return res.status(503).json({ message: 'Import paused. Saved progress is retained; use Resume to retry.' });
     }
 });
 
@@ -13060,6 +13091,7 @@ router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'),
         }
         res.json(updatedPartner);
     } catch (error) {
+        if (error.code === 11000) return res.status(409).json({ message: 'Company name already exists. Choose a different name or use the existing partner.' });
         res.status(500).json({ message: 'Error updating partner' });
     }
 });

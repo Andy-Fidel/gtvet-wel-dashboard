@@ -21,30 +21,40 @@ const competencyAssessmentSchema = new mongoose.Schema({
   },
   technicalSkills: {
     type: String,
+    trim: true,
+    minlength: 5,
     required: true
   },
   softSkills: {
     type: String,
+    trim: true,
+    minlength: 5,
     required: true
   },
   professionalism: {
     type: Number,
+    validate: Number.isInteger,
     required: true,
     min: 1,
     max: 5
   },
   problemSolving: {
     type: Number,
+    validate: Number.isInteger,
     required: true,
     min: 1,
     max: 5
   },
   overallScore: {
     type: Number,
+    min: 0,
+    max: 100,
     required: true
   },
   assessorName: {
     type: String,
+    trim: true,
+    minlength: 2,
     required: true
   },
   recommendations: {

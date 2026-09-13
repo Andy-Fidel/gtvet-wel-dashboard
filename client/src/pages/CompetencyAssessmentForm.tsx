@@ -32,7 +32,7 @@ import { safeDateString } from "@/lib/dateUtils"
 const formSchema = z.object({
   learner: z.string().min(1, "Learner is required"),
   assessmentDate: z.date(),
-  assessmentType: z.enum(["Practical", "Theoretical", "Combined", "On-the-job"]),
+  assessmentType: z.enum(["Practical", "Theoretical", "Combined", "On-the-job", "Oral"]),
   technicalSkills: z.string().min(5, "Please describe the technical skills assessed"),
   softSkills: z.string().min(5, "Please describe the soft skills assessed"),
   professionalism: z.number().min(1).max(5).int(),
@@ -48,23 +48,30 @@ type AssessmentFormValues = z.infer<typeof formSchema>
 
 interface CompetencyAssessmentFormProps {
     onSuccess: (data: unknown) => void;
-    initialData?: Partial<AssessmentFormValues> & { 
+    initialData?: Omit<Partial<AssessmentFormValues>, 'learner'> & {
         _id?: string;
-        learner?: string | { _id: string; name: string; trackingId: string };
+        learner?: string | { _id: string; name: string; trackingId?: string } | null;
     };
 }
 
 export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyAssessmentFormProps) {
   const [loading, setLoading] = useState(false)
   const [learners, setLearners] = useState<Learner[]>([])
+  const [learnerError, setLearnerError] = useState('')
   const { authFetch } = useAuth()
   const normalizeNumberInput = (value: string) => (value === "" ? 0 : Number(value))
 
   useEffect(() => {
+    let cancelled = false
     authFetch('/api/learners/options')
-        .then(res => res.json())
-        .then(data => setLearners(data))
-        .catch(err => console.error("Error fetching learners:", err))
+        .then(async res => {
+          if (!res.ok) throw new Error('Unable to load learners. Please reopen this form to retry.')
+          const data = await res.json()
+          if (!Array.isArray(data)) throw new Error('Invalid learner response. Please reopen this form to retry.')
+          if (!cancelled) { setLearners(data); setLearnerError('') }
+        })
+        .catch(err => { if (!cancelled) setLearnerError(err.message) })
+    return () => { cancelled = true }
   }, [authFetch])
 
   const form = useForm<AssessmentFormValues>({
@@ -131,14 +138,18 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
         <FormField control={form.control} name="learner" render={({ field }) => (
             <FormItem>
               <FormLabel className="text-sm font-semibold text-gray-700">Learner / Trainee</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value} disabled={!!initialData?.learner}>
+              <Select onValueChange={field.onChange} value={field.value} disabled={!!initialData?.learner || !!initialData?._id}>
                 <FormControl><SelectTrigger><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
                 <SelectContent>
+                    {field.value && !learners.some(learner => learner._id === field.value) && (
+                      <SelectItem value={field.value}>{typeof initialData?.learner === 'object' && initialData.learner?.name || 'Selected learner'}</SelectItem>
+                    )}
                     {learners.map((learner) => (
                         <SelectItem key={learner._id} value={learner._id}>{learner.name}</SelectItem>
                     ))}
                 </SelectContent>
               </Select>
+              {learnerError && <p role="alert" className="text-sm text-red-600">{learnerError}</p>}
               <FormMessage />
             </FormItem>
         )} />
@@ -180,6 +191,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
                         <SelectItem value="Theoretical">Theoretical</SelectItem>
                         <SelectItem value="Combined">Combined</SelectItem>
                         <SelectItem value="On-the-job">On-the-job</SelectItem>
+                        <SelectItem value="Oral">Oral</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />

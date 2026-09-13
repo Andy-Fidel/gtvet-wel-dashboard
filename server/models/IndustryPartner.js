@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const industryPartnerSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true },
+  name: { type: String, required: true, unique: true, trim: true },
   sector: { type: String, required: true },
   region: { type: String, required: true },
   district: { type: String },
@@ -36,6 +36,8 @@ const industryPartnerSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 industryPartnerSchema.index({ region: 1 });
+// Enforces case-insensitive uniqueness atomically across all registration paths.
+industryPartnerSchema.index({ name: 1 }, { name: 'partner_name_ci_unique', unique: true, collation: { locale: 'en', strength: 2 } });
 industryPartnerSchema.index({ sector: 1 });
 industryPartnerSchema.index({ status: 1 });
 industryPartnerSchema.index({ approvalStatus: 1 });

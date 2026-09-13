@@ -28,3 +28,10 @@ test('retains source row numbers and validates column count and fractional capac
   assert.match(rows[0].errors.join(), /whole number/);
   assert.match(rows[1].errors.join(), /Column count/);
 });
+
+test('invalid rows do not reserve names but later valid duplicates are rejected', () => {
+  const rows = parsePartnerCsv('name,sector,region\nAcme,IT,Invalid\nAcme,IT,Ashanti\nACME,IT,Ashanti');
+  assert.ok(rows[0].errors.length);
+  assert.deepEqual(rows[1].errors, []);
+  assert.match(rows[2].errors.join(), /Duplicate/);
+});

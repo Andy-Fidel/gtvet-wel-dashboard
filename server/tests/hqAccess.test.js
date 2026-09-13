@@ -6,6 +6,7 @@ import { SemesterReport } from '../models/SemesterReport.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { Institution } from '../models/Institution.js';
 import { AuditLog } from '../models/AuditLog.js';
+import { PartnerImport } from '../models/PartnerImport.js';
 import router, { getFilter, normalizeUserPayloadForRole } from '../routes/api.js';
 
 const response = () => ({
@@ -35,22 +36,23 @@ test('partner bulk registration enforces permissions, previews without writes an
   for (const role of ['HQManager', 'HQStaff', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner', 'Guardian']) {
     assert.equal((await dispatch(role, 'POST', path)).statusCode, 403);
   }
-  const created = [], audits = [];
-  t.mock.method(IndustryPartner, 'exists', async filter => filter.name.$regex === '^Existing$');
+  const created = [], jobs = [];
+  t.mock.method(IndustryPartner, 'find', () => ({ collation() { return this; }, select() { return this; }, lean: async () => [{ name: 'Existing' }] }));
   t.mock.method(IndustryPartner, 'create', async data => { created.push(data); return { ...data, _id: 'new-partner' }; });
-  t.mock.method(AuditLog, 'create', async data => { audits.push(data); });
+  t.mock.method(PartnerImport, 'findOneAndUpdate', async (filter, update) => { jobs.push(update.$setOnInsert); return { _id: filter._id, ...update.$setOnInsert }; });
   const csv = 'name,sector,region\nNew company,IT,Ashanti\nExisting,IT,Ashanti\nInvalid,IT,Unknown';
   const preview = await dispatch('SuperAdmin', 'POST', path, path, {}, { csv, preview: true });
   assert.equal(preview.body.ready, 1);
   assert.equal(preview.body.skipped, 2);
   assert.equal(created.length, 0);
+  assert.equal(jobs.length, 0);
   const result = await dispatch('SuperAdmin', 'POST', path, path, {}, { csv, preview: false });
-  assert.equal(result.body.created, 1);
+  assert.equal(result.body.created, 0);
+  assert.equal(result.body.ready, 1);
   assert.equal(result.body.skipped, 2);
-  assert.equal(created[0].approvalStatus, 'Approved');
-  assert.equal(created[0].addedBy, 'hq-user');
-  assert.equal(created[0].usedSlots, 0);
-  assert.equal(audits.length, 1);
+  assert.ok(result.body.importId);
+  assert.equal(jobs[0].addedBy, 'hq-user');
+  assert.equal(created.length, 0);
 });
 
 test('HQ roles require no institution; institution roles still do', () => {

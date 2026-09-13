@@ -57,7 +57,7 @@ export function parsePartnerCsv(csv) {
     delete data.latitude;
     delete data.longitude;
     if (seen.has(key)) errors.push('Duplicate company name in this file');
-    seen.add(key);
+    if (!errors.length) seen.add(key);
     return { row, data, errors };
   });
 }

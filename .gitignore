@@ -35,5 +35,5 @@ migrate_*.js
 *revertData.js
 *seedAllData.js
 *seedAhafoBono.js
-
+!server/scripts/migrate_partner_name_uniqueness.js
 

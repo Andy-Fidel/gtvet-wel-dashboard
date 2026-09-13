@@ -38,7 +38,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 
-const ASSESSMENT_TYPE_COLORS = ['#f59e0b', '#4f46e5', '#10b981', '#8b5cf6']
+const ASSESSMENT_TYPE_COLORS = ['#f59e0b', '#4f46e5', '#10b981', '#8b5cf6', '#0284c7']
 const ASSESSMENT_SCORE_COLORS = ['#10b981', '#f59e0b', '#ef4444']
 type OversightSection = 'overview' | 'exceptions' | 'records'
 
@@ -47,7 +47,7 @@ export type CompetencyAssessment = {
     institution?: string
     assessmentDate: string
     trackingId: string
-    assessmentType: 'Practical' | 'Theoretical' | 'Combined' | 'On-the-job'
+    assessmentType: 'Practical' | 'Theoretical' | 'Combined' | 'On-the-job' | 'Oral'
     technicalSkills: string
     softSkills: string
     professionalism: number
@@ -59,7 +59,7 @@ export type CompetencyAssessment = {
         _id: string
         name: string
         program?: string
-    }
+    } | null
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -81,11 +81,12 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
   {
     accessorKey: "learner.program",
     header: "Program",
-    cell: ({ row }) => row.original.learner.program || "N/A",
+    cell: ({ row }) => row.original.learner?.program || "N/A",
   },
   {
     accessorKey: "learner.name",
     header: "Learner Name",
+    cell: ({ row }) => row.original.learner?.name || row.original.trackingId || 'Learner unavailable',
   },
   {
     accessorKey: "assessmentType",
@@ -119,7 +120,8 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
         role?: string
       }
 
-      const isOversightUser = isHQRole(meta?.role) || meta?.role === 'RegionalAdmin'
+      const canEdit = ['Admin', 'Manager', 'Staff'].includes(meta?.role || '')
+      const canDelete = ['Admin', 'Manager'].includes(meta?.role || '')
 
       return (
         <DropdownMenu>
@@ -138,11 +140,11 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
             <DropdownMenuItem onClick={() => navigator.clipboard.writeText(assessment._id)}>
               Copy ID
             </DropdownMenuItem>
-            {!isOversightUser && (
+            {canEdit && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => meta?.onEdit(assessment)}>Edit Assessment</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => meta?.onDelete(assessment._id)} className="text-red-600">Delete Record</DropdownMenuItem>
+                <DropdownMenuItem disabled={!assessment.learner} onClick={() => meta?.onEdit(assessment)}>Edit Assessment</DropdownMenuItem>
+                {canDelete && <DropdownMenuItem onClick={() => meta?.onDelete(assessment._id)} className="text-red-600">Delete Record</DropdownMenuItem>}
               </>
             )}
           </DropdownMenuContent>
@@ -154,7 +156,7 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
 
 type AssessmentStats = {
     avgScore: number
-    byType: { Practical: number; Theoretical: number; Combined: number; 'On-the-job': number }
+    byType: { Practical: number; Theoretical: number; Combined: number; 'On-the-job': number; Oral: number }
     scoreHigh: number
     scoreMid: number
     scoreLow: number
@@ -333,7 +335,9 @@ export default function CompetencyAssessments() {
     const handleExport = async () => {
         try {
             toast.info("Preparing export...")
-            const res = await authFetch('/api/assessments/export')
+            const params = new URLSearchParams(searchParams)
+            if (isOversightPortal && hqSection === 'exceptions') params.set('scoreBand', 'low')
+            const res = await authFetch(`/api/assessments/export?${params.toString()}`)
             if (!res.ok) throw new Error("Failed to export")
             const blob = await res.blob()
             const url = window.URL.createObjectURL(blob)
@@ -442,13 +446,13 @@ export default function CompetencyAssessments() {
                 </div>
             ) : null}
 
-            {/* Auto-graduation warning */}
+            {/* Completion policy */}
             {!isOversightPortal ? (
                 <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 rounded-2xl border border-amber-200 mx-4 sm:mx-0">
                     <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
                     <div>
-                        <p className="text-sm font-bold text-amber-900">Auto-graduation notice</p>
-                        <p className="text-xs text-amber-700 mt-0.5">Creating a new assessment automatically sets the learner's WEL status to "Completed". Ensure the learner is ready for completion before submitting.</p>
+                        <p className="text-sm font-bold text-amber-900">Learner completion is a separate step</p>
+                        <p className="text-xs text-amber-700 mt-0.5">Saving an assessment does not change learner or placement status. Review all completion requirements before explicitly updating the learner's WEL status.</p>
                     </div>
                 </div>
             ) : null}
@@ -658,6 +662,7 @@ export default function CompetencyAssessments() {
                         <SelectItem value="Theoretical">Theoretical</SelectItem>
                         <SelectItem value="Combined">Combined</SelectItem>
                         <SelectItem value="On-the-job">On-the-job</SelectItem>
+                        <SelectItem value="Oral">Oral</SelectItem>
                     </SelectContent>
                 </Select>
                 {isOversightPortal && hqSection === 'records' ? (
@@ -765,12 +770,12 @@ export default function CompetencyAssessments() {
                                     <CardContent className="p-5">
                                         <div className="flex items-center gap-3">
                                             <div className="w-12 h-12 rounded-xl bg-[#FFB800] flex items-center justify-center text-white font-black text-lg">
-                                                {viewingAssessment.learner.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+                                                {(viewingAssessment.learner?.name || '?').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
                                             </div>
                                             <div className="flex-1">
                                                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Learner</p>
-                                                <p className="text-lg font-bold text-gray-900">{viewingAssessment.learner.name}</p>
-                                                <p className="mt-1 text-xs font-semibold text-gray-500">{viewingAssessment.institution || 'No institution'} · {viewingAssessment.learner.program || 'No program'}</p>
+                                                <p className="text-lg font-bold text-gray-900">{viewingAssessment.learner?.name || viewingAssessment.trackingId || 'Learner unavailable'}</p>
+                                                <p className="mt-1 text-xs font-semibold text-gray-500">{viewingAssessment.institution || 'No institution'} · {viewingAssessment.learner?.program || 'No program'}</p>
                                             </div>
                                             <Badge variant="outline" className="font-bold border-amber-500 text-amber-600 bg-amber-50">
                                                 {viewingAssessment.assessmentType}

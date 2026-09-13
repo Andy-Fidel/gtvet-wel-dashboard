@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { toast } from 'sonner'
 
 type Result = { row: number; name: string; status: 'Ready' | 'Created' | 'Skipped'; message: string }
-type Summary = { results: Result[]; created: number; ready: number; skipped: number }
+type Summary = { importId?: string; createdAt?: string; results: Result[]; created: number; ready: number; skipped: number }
 const template = 'name,sector,region,totalSlots,district,tradeArea,town,location,contactPerson,contactPhone,contactEmail,website,status,latitude,longitude\r\n';
 
 function download(text: string, filename: string) {
@@ -26,6 +26,42 @@ export function PartnerBulkRegistration({ onImported }: { onImported: () => Prom
   const [busy, setBusy] = useState(false)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [imported, setImported] = useState(false)
+  const [history, setHistory] = useState<Summary[]>([])
+  const [historyError, setHistoryError] = useState('')
+
+  useEffect(() => {
+    if (!open || busy) return
+    let cancelled = false
+    authFetch('/api/industry-partners/imports').then(async response => {
+      if (!response.ok) throw new Error('Unable to load saved imports. Close and reopen to retry.')
+      const jobs = await response.json()
+      if (!Array.isArray(jobs)) throw new Error('Invalid import history response')
+      if (!cancelled) { setHistory(jobs); setHistoryError('') }
+    }).catch(error => { if (!cancelled) setHistoryError(error.message) })
+    return () => { cancelled = true }
+  }, [authFetch, open, busy])
+
+  const processBatch = async (initial: Summary) => {
+    let current = initial
+    while (current.ready > 0) {
+      const response = await authFetch(`/api/industry-partners/imports/${current.importId}/resume`, { method: 'POST' })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || 'Import paused. Use Resume to recover saved progress.')
+      setSummary(payload)
+      if (payload.ready >= current.ready) throw new Error('Import paused without progress. Use Resume to retry.')
+      current = payload
+    }
+    toast.success(`${current.created} partners registered; ${current.skipped} rows skipped`)
+    await onImported()
+  }
+
+  const resume = async () => {
+    if (!summary?.importId) return
+    setBusy(true)
+    try { await processBatch(summary) }
+    catch (error) { toast.error(error instanceof Error ? error.message : 'Import paused; saved progress is retained') }
+    finally { setBusy(false) }
+  }
 
   const run = async (preview: boolean) => {
     setBusy(true)
@@ -37,23 +73,21 @@ export function PartnerBulkRegistration({ onImported }: { onImported: () => Prom
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ csv: content, preview }),
       })
-      const payload = await response.json()
+      const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.message || 'Bulk registration failed')
       setCsv(content)
       setSummary(payload)
       setImported(!preview)
       if (!preview) {
-        toast.success(`${payload.created} partners registered; ${payload.skipped} rows skipped`)
-        await onImported()
+        await processBatch(payload)
       }
     } catch (error) {
-      setSummary(null)
       toast.error(error instanceof Error ? error.message : 'Bulk registration failed')
     } finally { setBusy(false) }
   }
 
   const exportResults = () => {
-    const escape = (value: string | number) => `"${String(value).replace(/^[=+@\-\t\r]/, "'$&").replace(/"/g, '""')}"`
+    const escape = (value: string | number) => `"${String(value).replace(/^(\s*[=+@-])/, "'$1").replace(/"/g, '""')}"`
     download(['Row,Company,Status,Details', ...(summary?.results || []).map(row =>
       [row.row, row.name, row.status, row.message].map(escape).join(','))].join('\r\n'), 'partner-registration-results.csv')
   }
@@ -67,6 +101,14 @@ export function PartnerBulkRegistration({ onImported }: { onImported: () => Prom
           <DialogDescription>Upload a CSV containing up to 500 partners (1 MB maximum). Valid partners are approved immediately. Existing companies and invalid rows are skipped.</DialogDescription>
         </DialogHeader>
         <p className="text-sm text-gray-600">Required columns: name, sector, region. Capacity defaults to 0 and status to Active. Use a Ghana region name and keep phone numbers as text in Excel. Portal accounts can be created separately after registration.</p>
+        <p className="text-sm text-gray-600">Progress is saved after each row. If interrupted, reopen a saved batch below and select Resume. Uploading the same file recovers its previous batch.</p>
+        {historyError && <p role="alert" className="text-sm text-red-600">{historyError}</p>}
+        {history.length > 0 && <div className="space-y-2">
+          <p className="text-sm font-semibold">Recent saved batches</p>
+          <div className="max-h-32 overflow-y-auto space-y-1">{history.map(job => <Button key={job.importId} variant="outline" disabled={busy} onClick={() => { setSummary(job); setImported(true) }}>
+            {job.createdAt ? new Date(job.createdAt).toLocaleString() : job.importId} · {job.created} registered · {job.ready} pending
+          </Button>)}</div>
+        </div>}
         <Button variant="outline" onClick={() => download(template, 'industry-partners-template.csv')}>Download CSV Template</Button>
         <label htmlFor="partner-import-file" className="text-sm font-semibold">Partners CSV file</label>
         <Input id="partner-import-file" type="file" accept=".csv,text/csv" disabled={busy} onChange={event => {
@@ -75,10 +117,11 @@ export function PartnerBulkRegistration({ onImported }: { onImported: () => Prom
         <div className="flex flex-wrap gap-3">
           <Button variant="outline" disabled={busy || !file} onClick={() => void run(true)}>{busy ? 'Processing…' : 'Preview and Validate'}</Button>
           {summary && !imported && <Button disabled={busy || !summary.ready} onClick={() => void run(false)}>Register {summary.ready} Valid Partners</Button>}
+          {summary?.importId && summary.ready > 0 && <Button disabled={busy} onClick={() => void resume()}>{busy ? 'Registering…' : `Resume ${summary.ready} Pending Rows`}</Button>}
           {summary && <Button variant="outline" disabled={busy} onClick={exportResults}>Download Results</Button>}
         </div>
         {summary && <div aria-live="polite" className="space-y-3">
-          <p className="font-semibold">{imported ? `${summary.created} registered` : `${summary.ready} ready`} · {summary.skipped} skipped · {summary.results.length} total</p>
+          <p className="font-semibold">{imported ? `${summary.created} registered · ${summary.ready} pending` : `${summary.ready} ready`} · {summary.skipped} skipped · {summary.results.length} total</p>
           <div className="max-h-80 overflow-auto rounded-lg border">
             <table className="w-full text-left text-sm">
               <thead className="sticky top-0 bg-gray-100"><tr>{['Row', 'Company', 'Status', 'Details'].map(label => <th key={label} className="p-3">{label}</th>)}</tr></thead>
