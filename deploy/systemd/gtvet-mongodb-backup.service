@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up the GTVET WEL MongoDB database
+After=mongod.service
+Requires=mongod.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gtvet-mongodb-backup
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+

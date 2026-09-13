@@ -23,6 +23,15 @@ curl --fail http://127.0.0.1:5001/health
 The fixed bridge lets the application reach a host-installed MongoDB bound to
 `172.29.0.1` without exposing MongoDB on a public interface. Create it only once.
 
+## Database backups
+
+Install `mongodb-backup.sh` as `/usr/local/sbin/gtvet-mongodb-backup` and the two
+units in `systemd/` under `/etc/systemd/system/`. The timer creates a compressed
+archive every day and retains 14 days. The root-only
+`/etc/gtvet-wel/mongodump.yml` file must contain the authenticated local MongoDB
+URI. Copy these archives off-server as well; local retention alone does not
+protect against loss of the host or disk.
+
 ## Enable HTTPS
 
 Create a DNS A record pointing the production hostname to the server's public

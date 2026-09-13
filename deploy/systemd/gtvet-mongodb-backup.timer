@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the GTVET WEL MongoDB backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Africa/Accra
+Persistent=true
+RandomizedDelaySec=10m
+Unit=gtvet-mongodb-backup.service
+
+[Install]
+WantedBy=timers.target
