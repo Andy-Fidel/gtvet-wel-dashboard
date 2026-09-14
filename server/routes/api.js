@@ -30,6 +30,7 @@ import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
 import { partnerRegionMatch, partnerVisibilityFilter } from '../utils/partnerVisibility.js';
+import { academicError, academicErrorStatus, pickFields, termFields, calendarFields, validAcademicYear, getAcademicState, effectiveTerm, currentAcademicTerm, withAcademicLock, activateTerm, validateWindowTerm, validateTermWindows, termCalendarEvents } from '../utils/academicGovernance.js';
 import { PartnerImport } from '../models/PartnerImport.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { hasCoordinates, normalizeCoordinates, locationCheck } from '../utils/workplaceCoordinates.js';
@@ -325,25 +326,21 @@ const getAccessApprovalScope = async (user) => {
 };
 
 const resolveCurrentAcademicYear = async () => {
-  const activeTerm = await AcademicTerm.findOne({ $or: [{ isCurrent: true }, { status: 'Active' }] })
-    .sort({ isCurrent: -1, startDate: -1 })
-    .select('academicYear')
-    .lean();
+  const activeTerm = await currentAcademicTerm();
 
   if (activeTerm?.academicYear) {
     return activeTerm.academicYear;
   }
+
+  const settings = await SystemSetting.findOne({ key: 'global' }).select('defaultAcademicYear').lean();
+  if (validAcademicYear(settings?.defaultAcademicYear)) return settings.defaultAcademicYear;
 
   const now = new Date();
   const startYear = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
   return `${startYear}/${startYear + 1}`;
 };
 
-const resolveCurrentAcademicTerm = async () => AcademicTerm.findOne({
-  $or: [{ isCurrent: true }, { status: 'Active' }],
-})
-  .sort({ isCurrent: -1, startDate: -1 })
-  .lean();
+const resolveCurrentAcademicTerm = currentAcademicTerm;
 
 const resolveAcademicYearFromDate = (value) => {
   if (!value) return '';
@@ -363,11 +360,9 @@ const resolveNextAcademicYearLabel = (academicYear = '') => {
 const resolveLatestEligibleProgressionTerm = async () => {
   const now = new Date();
   return AcademicTerm.findOne({
+    archived: { $ne: true },
     termType: 'Semester 2',
-    $or: [
-      { status: 'Completed' },
-      { endDate: { $lte: now } },
-    ],
+    endDate: { $lte: now },
   })
     .sort({ endDate: -1, startDate: -1 })
     .select('_id academicYear termType endDate status')
@@ -560,12 +555,13 @@ const findNextTermForRollover = async (currentTerm, preferredNextTermId = '') =>
 
   if (preferredNextTermId) {
     if (String(preferredNextTermId) === String(currentTerm._id)) return null;
-    return AcademicTerm.findById(preferredNextTermId).lean();
+    return AcademicTerm.findOne({ _id: preferredNextTermId, archived: { $ne: true }, startDate: { $gt: currentTerm.endDate }, status: { $in: ['Planned', 'Active'] } }).lean();
   }
 
   return AcademicTerm.findOne({
     _id: { $ne: currentTerm._id },
-    startDate: { $gte: currentTerm.endDate },
+    archived: { $ne: true },
+    startDate: { $gt: currentTerm.endDate },
     status: { $in: ['Planned', 'Active'] },
   })
     .sort({ startDate: 1, createdAt: 1 })
@@ -2370,7 +2366,8 @@ router.post('/settings/notifications/test-whatsapp', requireRole(...ADMIN_ROLES)
 router.get('/settings/system', requireRole('SuperAdmin'), async (req, res) => {
     try {
         const settings = await getOrCreateSystemSettings();
-        res.json(settings);
+        const current = await currentAcademicTerm();
+        res.json({ ...settings.toObject(), defaultAcademicYear: current?.academicYear || settings.defaultAcademicYear });
     } catch (error) {
         console.error('Error fetching system settings:', error);
         res.status(500).json({ message: 'Error fetching system settings' });
@@ -2381,6 +2378,10 @@ router.put('/settings/system', requireRole('SuperAdmin'), async (req, res) => {
     try {
         const settings = await getOrCreateSystemSettings();
         const before = settings.toObject();
+
+        const current = await currentAcademicTerm();
+        if (req.body.defaultAcademicYear && !validAcademicYear(req.body.defaultAcademicYear)) return res.status(400).json({ message: 'Use consecutive academic years, for example 2026/2027' });
+        if (current && req.body.defaultAcademicYear !== undefined && req.body.defaultAcademicYear !== current.academicYear) return res.status(409).json({ message: 'The active term controls the academic year. Use semester rollover to change it.' });
 
         settings.organizationName = req.body.organizationName?.trim?.() || settings.organizationName;
         settings.supportEmail = req.body.supportEmail ?? settings.supportEmail;
@@ -2429,7 +2430,7 @@ router.post('/settings/rollover/semester', requireRole('SuperAdmin'), async (req
             return res.status(400).json({ message: 'The current academic term has an invalid end date.' });
         }
 
-        if (currentEndDate > now && currentTerm.status !== 'Completed') {
+        if (currentEndDate > now) {
             return res.status(409).json({
                 message: `The current term cannot be rolled over before ${currentEndDate.toLocaleDateString()}.`,
             });
@@ -2452,33 +2453,22 @@ router.post('/settings/rollover/semester', requireRole('SuperAdmin'), async (req
             return res.status(404).json({ message: 'No next academic term is available for activation.' });
         }
 
-        const currentBefore = await AcademicTerm.findById(currentTerm._id).lean();
+        const currentBefore = currentTerm;
         const nextBefore = await AcademicTerm.findById(nextTerm._id).lean();
         const settings = await getOrCreateSystemSettings();
-        const previousDefaultAcademicYear = settings.defaultAcademicYear;
+        const previousDefaultAcademicYear = currentTerm.academicYear || settings.defaultAcademicYear;
 
-        await AcademicTerm.findByIdAndUpdate(currentTerm._id, {
-            $set: {
-                status: 'Completed',
-                isCurrent: false,
-            },
+        const updatedNextTerm = await withAcademicLock(async state => {
+            if (String(state.currentTerm) !== String(currentTerm._id)) throw academicError('The current term changed. Refresh before rolling over.');
+            const freshCurrent = await AcademicTerm.findById(currentTerm._id);
+            const freshNext = await AcademicTerm.findById(nextTerm._id);
+            if (!freshCurrent || !freshNext || freshNext.archived || new Date(freshCurrent.endDate) > new Date()) throw academicError('The selected terms are no longer eligible for rollover.');
+            if (await SemesterReport.exists({ academicTerm: currentTerm._id, status: { $in: openReportStatuses } })) throw academicError('Resolve all in-progress closure reports before rollover.');
+            if (state.completedTerms.some(id => String(id) === String(freshNext._id))) throw academicError('A completed term cannot be reactivated.');
+            await freshNext.validate();
+            await validateTermWindows(freshNext);
+            return activateTerm(freshNext.toObject(), state, freshCurrent.toObject());
         });
-
-        await AcademicTerm.updateMany(
-            { _id: { $ne: nextTerm._id }, isCurrent: true },
-            { $set: { isCurrent: false } }
-        );
-
-        const updatedNextTerm = await AcademicTerm.findByIdAndUpdate(nextTerm._id, {
-            $set: {
-                status: 'Active',
-                isCurrent: true,
-            },
-        }, { returnDocument: 'after' }).lean();
-
-        settings.defaultAcademicYear = updatedNextTerm?.academicYear || settings.defaultAcademicYear;
-        settings.updatedBy = req.user._id;
-        await settings.save();
 
         await logAuditEvent({
             req,
@@ -2492,9 +2482,9 @@ router.post('/settings/rollover/semester', requireRole('SuperAdmin'), async (req
                 defaultAcademicYear: previousDefaultAcademicYear,
             },
             after: {
-                currentTerm: await AcademicTerm.findById(currentTerm._id).lean(),
+                currentTerm: { ...currentBefore, isCurrent: false, status: 'Completed' },
                 nextTerm: updatedNextTerm,
-                defaultAcademicYear: settings.defaultAcademicYear,
+                defaultAcademicYear: updatedNextTerm.academicYear,
             },
             metadata: {
                 outgoingTermId: String(currentTerm._id),
@@ -2516,12 +2506,12 @@ router.post('/settings/rollover/semester', requireRole('SuperAdmin'), async (req
                     name: updatedNextTerm?.name || nextTerm.name,
                     academicYear: updatedNextTerm?.academicYear || nextTerm.academicYear,
                 },
-                defaultAcademicYear: settings.defaultAcademicYear,
+                defaultAcademicYear: updatedNextTerm.academicYear,
             },
         });
     } catch (error) {
         console.error('Error running semester rollover:', error);
-        res.status(500).json({ message: 'Error running semester rollover' });
+        res.status(academicErrorStatus(error)).json({ message: error.message });
     }
 });
 
@@ -2677,8 +2667,9 @@ router.post('/settings/rollover/academic-year', requireRole('SuperAdmin'), async
         );
 
         const settings = await getOrCreateSystemSettings();
-        const previousDefaultAcademicYear = settings.defaultAcademicYear;
-        if (nextAcademicYear) {
+        const activeTerm = await currentAcademicTerm();
+        const previousDefaultAcademicYear = activeTerm?.academicYear || settings.defaultAcademicYear;
+        if (nextAcademicYear && !activeTerm) {
             settings.defaultAcademicYear = nextAcademicYear;
         }
         settings.updatedBy = req.user._id;
@@ -2702,7 +2693,7 @@ router.post('/settings/rollover/academic-year', requireRole('SuperAdmin'), async
             carryOverSupportTickets: carryOverSupportTicketCount,
             archivedNotifications: archivedNotificationResult.modifiedCount || 0,
             previousDefaultAcademicYear,
-            defaultAcademicYear: settings.defaultAcademicYear,
+            defaultAcademicYear: activeTerm?.academicYear || settings.defaultAcademicYear,
         };
 
         await SystemSetting.create({
@@ -5693,7 +5684,9 @@ router.get('/calendar/events', async (req, res) => {
                    e.eventType === 'WEL Window' ? '#2563EB' : '#6B7280'
         }));
 
-        res.json([...completionEvents, ...visitEvents, ...hqEvents]);
+        const terms = await AcademicTerm.find({ archived: { $ne: true }, startDate: { $lte: rangeEnd }, endDate: { $gte: rangeStart } }).lean();
+        const boundaries = termCalendarEvents(terms).filter(event => new Date(event.start) >= rangeStart && new Date(event.start) <= rangeEnd);
+        res.json([...completionEvents, ...visitEvents, ...hqEvents, ...boundaries]);
     } catch (error) {
         console.error("Calendar fetch error:", error);
         res.status(500).json({ message: 'Failed to fetch calendar events' });
@@ -5704,114 +5697,72 @@ router.get('/calendar/events', async (req, res) => {
 
 router.get('/academic-terms', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'), async (req, res) => {
     try {
-        const terms = await AcademicTerm.find()
+        const state = await getAcademicState();
+        const terms = await AcademicTerm.find({ archived: { $ne: true } })
             .populate('createdBy', 'name email')
             .sort({ startDate: -1 });
-        res.json(terms);
+        res.json(terms.map(term => effectiveTerm(term, state)));
     } catch (error) {
         console.error('Error fetching academic terms:', error);
         res.status(500).json({ message: 'Error fetching academic terms' });
     }
 });
 
+async function saveAcademicTerm(req, id = null) {
+    return withAcademicLock(async state => {
+        const term = id ? await AcademicTerm.findById(id) : new AcademicTerm({ createdBy: req.user._id });
+        if (!term || term.archived) throw academicError('Academic term not found', 404);
+        const before = id ? effectiveTerm(term, state) : null;
+        const fields = pickFields(req.body, termFields);
+        if (Object.hasOwn(fields, 'isCurrent') && typeof fields.isCurrent !== 'boolean') throw academicError('Current term must be true or false.', 400);
+        const wantsCurrent = fields.isCurrent === true || fields.status === 'Active';
+        if ((fields.isCurrent === true && fields.status && fields.status !== 'Active') || (fields.isCurrent === false && fields.status === 'Active')) throw academicError('Active status and current term must agree.', 400);
+        if (before?.isCurrent && (fields.isCurrent === false || (fields.status && fields.status !== 'Active'))) throw academicError('Use semester rollover to complete or replace the current term.');
+        if (wantsCurrent && state.currentTerm && !before?.isCurrent) throw academicError('Use semester rollover to activate the next term.');
+        if (before?.status === 'Completed' && wantsCurrent) throw academicError('A completed term cannot be reactivated.');
+        if (id) {
+            const changed = keys => keys.some(key => Object.hasOwn(fields, key) && String(key.endsWith('Date') ? new Date(fields[key]).getTime() : fields[key]) !== String(key.endsWith('Date') ? new Date(before[key]).getTime() : before[key]));
+            if (changed(['academicYear', 'termType']) && await AcademicCalendar.exists({ academicYear: before.academicYear, semester: before.termType })) throw academicError('This term is linked to calendar events; its year and type cannot be changed.');
+            if (changed(['academicYear', 'termType', 'startDate', 'endDate']) && await SemesterReport.exists({ academicTerm: id })) throw academicError('Term dates, year and type are locked once closure reports exist.');
+        }
+        term.set(fields);
+        // The singleton pointer is authoritative; never persist a second active flag.
+        term.isCurrent = false;
+        term.status = before?.status === 'Completed' ? 'Completed' : term.status === 'Active' ? 'Planned' : term.status;
+        await term.validate();
+        if (term.termType !== 'Custom' && await AcademicTerm.exists({ _id: { $ne: term._id }, archived: { $ne: true }, academicYear: term.academicYear, termType: term.termType })) throw academicError('This academic year already has that term type.');
+        await validateTermWindows(term);
+        await term.save();
+        const after = wantsCurrent && !before?.isCurrent ? await activateTerm(term.toObject(), state) : effectiveTerm(term, state);
+        await logAuditEvent({ req, action: id ? 'UPDATE' : 'CREATE', entityType: 'AcademicTerm', entityId: term._id, summary: `Saved academic term ${term.name}`, before, after });
+        return after;
+    });
+}
+
 router.post('/academic-terms', requireRole('SuperAdmin'), async (req, res) => {
-    try {
-        const { name, academicYear, termType, startDate, endDate, status, isCurrent, notes } = req.body;
-
-        if (!name || !academicYear || !startDate || !endDate) {
-            return res.status(400).json({ message: 'Name, academic year, start date, and end date are required' });
-        }
-
-        if (new Date(endDate) < new Date(startDate)) {
-            return res.status(400).json({ message: 'End date cannot be before start date' });
-        }
-
-        if (isCurrent) {
-            await AcademicTerm.updateMany({ isCurrent: true }, { $set: { isCurrent: false } });
-        }
-
-        const term = await AcademicTerm.create({
-            name,
-            academicYear,
-            termType,
-            startDate,
-            endDate,
-            status,
-            isCurrent: Boolean(isCurrent),
-            notes: notes || '',
-            createdBy: req.user._id,
-        });
-
-        await logAuditEvent({
-            req,
-            action: 'CREATE',
-            entityType: 'AcademicTerm',
-            entityId: term._id,
-            summary: `Created academic term ${term.name}`,
-            after: term,
-        });
-
-        const populatedTerm = await AcademicTerm.findById(term._id).populate('createdBy', 'name email');
-        res.status(201).json(populatedTerm);
-    } catch (error) {
-        console.error('Error creating academic term:', error);
-        res.status(500).json({ message: 'Error creating academic term' });
-    }
+    try { res.status(201).json(await saveAcademicTerm(req)); }
+    catch (error) { res.status(academicErrorStatus(error)).json({ message: error.message }); }
 });
 
 router.put('/academic-terms/:id', requireRole('SuperAdmin'), async (req, res) => {
-    try {
-        const existingTerm = await AcademicTerm.findById(req.params.id);
-        if (!existingTerm) return res.status(404).json({ message: 'Academic term not found' });
-
-        if (req.body.startDate && req.body.endDate && new Date(req.body.endDate) < new Date(req.body.startDate)) {
-            return res.status(400).json({ message: 'End date cannot be before start date' });
-        }
-
-        if (req.body.isCurrent) {
-            await AcademicTerm.updateMany({ _id: { $ne: req.params.id }, isCurrent: true }, { $set: { isCurrent: false } });
-        }
-
-        const { name, academicYear, termType, startDate, endDate, status, isCurrent, notes } = req.body;
-        const updatedTerm = await AcademicTerm.findByIdAndUpdate(req.params.id, { name, academicYear, termType, startDate, endDate, status, isCurrent, notes }, { returnDocument: 'after' })
-            .populate('createdBy', 'name email');
-
-        await logAuditEvent({
-            req,
-            action: 'UPDATE',
-            entityType: 'AcademicTerm',
-            entityId: req.params.id,
-            summary: `Updated academic term ${updatedTerm?.name || req.params.id}`,
-            before: existingTerm,
-            after: updatedTerm,
-        });
-
-        res.json(updatedTerm);
-    } catch (error) {
-        console.error('Error updating academic term:', error);
-        res.status(500).json({ message: 'Error updating academic term' });
-    }
+    try { res.json(await saveAcademicTerm(req, req.params.id)); }
+    catch (error) { res.status(academicErrorStatus(error)).json({ message: error.message }); }
 });
 
 router.delete('/academic-terms/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        const deletedTerm = await AcademicTerm.findByIdAndDelete(req.params.id);
-        if (!deletedTerm) return res.status(404).json({ message: 'Academic term not found' });
-
-        await logAuditEvent({
-            req,
-            action: 'DELETE',
-            entityType: 'AcademicTerm',
-            entityId: deletedTerm._id,
-            summary: `Deleted academic term ${deletedTerm.name}`,
-            before: deletedTerm,
+        await withAcademicLock(async state => {
+            const term = await AcademicTerm.findById(req.params.id);
+            if (!term || term.archived) throw academicError('Academic term not found', 404);
+            if (effectiveTerm(term, state).isCurrent) throw academicError('The current term cannot be deleted. Use semester rollover.');
+            if (await SemesterReport.exists({ academicTerm: term._id }) || await AcademicCalendar.exists({ academicYear: term.academicYear, semester: term.termType })) throw academicError('This term is used by closure reports or calendar events and cannot be deleted.');
+            const before = term.toObject();
+            term.archived = true;
+            await term.save();
+            await logAuditEvent({ req, action: 'DELETE', entityType: 'AcademicTerm', entityId: term._id, summary: `Archived academic term ${term.name}`, before });
         });
-
-        res.json({ message: 'Academic term deleted' });
-    } catch (error) {
-        console.error('Error deleting academic term:', error);
-        res.status(500).json({ message: 'Error deleting academic term' });
-    }
+        res.json({ message: 'Academic term archived' });
+    } catch (error) { res.status(academicErrorStatus(error)).json({ message: error.message }); }
 });
 
 // List all academic calendar events
@@ -5820,7 +5771,7 @@ router.get('/academic-calendar', async (req, res) => {
         const institutionCalendarType = req.user?.institution
           ? await getInstitutionCalendarType(req.user.institution)
           : null;
-        const events = await AcademicCalendar.find()
+        const events = await AcademicCalendar.find(isHQRole(req.user.role) ? {} : { isActive: true })
             .populate('createdBy', 'name email')
             .sort({ startDate: 1 });
         if (isHQRole(req.user.role) || req.user.role === 'RegionalAdmin' || !institutionCalendarType) {
@@ -5838,48 +5789,63 @@ router.get('/academic-calendar', async (req, res) => {
 });
 
 // Create academic calendar event
-router.post('/academic-calendar', async (req, res) => {
+router.post('/academic-calendar', requireRole('SuperAdmin'), async (req, res) => {
     try {
         const event = new AcademicCalendar({
-            ...req.body,
+            ...pickFields(req.body, calendarFields),
             createdBy: req.user._id,
         });
-        await event.save();
+        await withAcademicLock(async () => {
+            await event.validate();
+            await validateWindowTerm(event);
+            await event.save();
+        });
+        await logAuditEvent({ req, action: 'CREATE', entityType: 'AcademicCalendar', entityId: event._id, summary: `Created calendar event ${event.title}`, after: event });
         res.status(201).json(event);
     } catch (error) {
         console.error('Error creating academic event:', error);
-        res.status(500).json({ message: 'Failed to create event' });
+        res.status(academicErrorStatus(error)).json({ message: error.message });
     }
 });
 
 // Update academic calendar event
-router.put('/academic-calendar/:id', async (req, res) => {
+router.put('/academic-calendar/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        const event = await AcademicCalendar.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { returnDocument: 'after' }
-        );
-        if (!event) return res.status(404).json({ message: 'Event not found' });
+        const event = await withAcademicLock(async () => {
+            const record = await AcademicCalendar.findById(req.params.id);
+            if (!record) throw academicError('Event not found', 404);
+            const before = record.toObject();
+            record.set(pickFields(req.body, calendarFields));
+            await record.validate();
+            await validateWindowTerm(record);
+            await record.save();
+            await logAuditEvent({ req, action: 'UPDATE', entityType: 'AcademicCalendar', entityId: record._id, summary: `Updated calendar event ${record.title}`, before, after: record });
+            return record;
+        });
         res.json(event);
     } catch (error) {
-        res.status(500).json({ message: 'Failed to update event' });
+        res.status(academicErrorStatus(error)).json({ message: error.message });
     }
 });
 
 // Delete academic calendar event
-router.delete('/academic-calendar/:id', async (req, res) => {
+router.delete('/academic-calendar/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        await AcademicCalendar.findByIdAndDelete(req.params.id);
+        await withAcademicLock(async () => {
+            const event = await AcademicCalendar.findByIdAndDelete(req.params.id);
+            if (!event) throw academicError('Event not found', 404);
+            await logAuditEvent({ req, action: 'DELETE', entityType: 'AcademicCalendar', entityId: event._id, summary: `Deleted calendar event ${event.title}`, before: event });
+        });
         res.json({ message: 'Event deleted' });
     } catch (error) {
-        res.status(500).json({ message: 'Failed to delete event' });
+        res.status(academicErrorStatus(error)).json({ message: error.message });
     }
 });
 
 router.post('/academic-calendar/bootstrap-wel-template', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        const academicYear = req.body.academicYear || '2025/2026';
+        const academicYear = req.body.academicYear || await resolveCurrentAcademicYear();
+        if (!validAcademicYear(academicYear)) return res.status(400).json({ message: 'Use consecutive academic years, for example 2026/2027.' });
         const templateWindows = [
             {
                 title: 'Single Track Year 3 WEL Window',
@@ -5967,7 +5933,14 @@ router.post('/academic-calendar/bootstrap-wel-template', requireRole('SuperAdmin
             },
         ];
 
-        const savedEvents = await Promise.all(templateWindows.map(async (window) => AcademicCalendar.findOneAndUpdate(
+        const offset = Number(academicYear.slice(0, 4)) - 2025;
+        for (const window of templateWindows) {
+            window.startDate.setUTCFullYear(window.startDate.getUTCFullYear() + offset);
+            window.endDate.setUTCFullYear(window.endDate.getUTCFullYear() + offset);
+            window.description = 'Draft based on the 2025/2026 template. Review dates and duration against the approved calendar before activating.';
+            window.sourceLabel = 'Draft template — dates require HQ review';
+        }
+        const savedEvents = await withAcademicLock(async () => Promise.all(templateWindows.map(async (window) => AcademicCalendar.findOneAndUpdate(
             {
                 academicYear: window.academicYear,
                 eventType: window.eventType,
@@ -5975,20 +5948,20 @@ router.post('/academic-calendar/bootstrap-wel-template', requireRole('SuperAdmin
                 targetYearGroup: window.targetYearGroup,
             },
             {
-                ...window,
-                createdBy: req.user._id,
-                isActive: true,
+                $setOnInsert: { ...window, createdBy: req.user._id, isActive: false },
             },
             { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-        )));
+        ))));
+
+        await logAuditEvent({ req, action: 'CREATE', entityType: 'AcademicCalendar', summary: `Prepared WEL drafts for ${academicYear}; existing windows preserved`, metadata: { academicYear } });
 
         res.json({
-            message: `Seeded ${savedEvents.length} WEL schedule windows for ${academicYear}.`,
+            message: `Prepared WEL drafts for ${academicYear}. Existing windows were preserved. Review new drafts before activating.`,
             events: savedEvents,
         });
     } catch (error) {
         console.error('Error seeding WEL calendar template:', error);
-        res.status(500).json({ message: 'Failed to seed WEL calendar template' });
+        res.status(academicErrorStatus(error)).json({ message: error.message });
     }
 });
 
@@ -6125,7 +6098,7 @@ router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_
         }
 
         const term = await AcademicTerm.findById(termId);
-        if (!term) {
+        if (!term || term.archived) {
             return res.status(404).json({ message: 'Academic term not found.' });
         }
 

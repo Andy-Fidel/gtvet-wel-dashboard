@@ -45,13 +45,15 @@ academicCalendarSchema.index({ eventType: 1 });
 academicCalendarSchema.index({ academicYear: 1, semester: 1 });
 academicCalendarSchema.index({ academicYear: 1, eventType: 1, institutionCalendarType: 1, targetYearGroup: 1 });
 
-academicCalendarSchema.pre('validate', function (next) {
+academicCalendarSchema.pre('validate', function () {
+  if (this.startDate && this.endDate && this.endDate < this.startDate) this.invalidate('endDate', 'End date cannot be before start date');
   if (this.eventType === 'WEL Window') {
-    if (!this.semester) {
+    if (!['Semester 1', 'Semester 2'].includes(this.semester)) {
       this.invalidate('semester', 'Semester is required for WEL windows');
     }
-    if (!this.academicYear) {
-      this.invalidate('academicYear', 'Academic year is required for WEL windows');
+    const year = /^(\d{4})\/(\d{4})$/.exec(this.academicYear || '');
+    if (!year || Number(year[2]) !== Number(year[1]) + 1) {
+      this.invalidate('academicYear', 'Use consecutive academic years for WEL windows');
     }
     if (!this.institutionCalendarType || this.institutionCalendarType === 'All') {
       this.invalidate('institutionCalendarType', 'Institution calendar type is required for WEL windows');
@@ -60,7 +62,6 @@ academicCalendarSchema.pre('validate', function (next) {
       this.invalidate('targetYearGroup', 'Target year group is required for WEL windows');
     }
   }
-  next();
 });
 
 export const AcademicCalendar = mongoose.model('AcademicCalendar', academicCalendarSchema);

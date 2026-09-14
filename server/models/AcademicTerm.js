@@ -17,11 +17,18 @@ const academicTermSchema = new mongoose.Schema({
   },
   isCurrent: { type: Boolean, default: false },
   notes: { type: String, default: '' },
+  archived: { type: Boolean, default: false },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });
 
 academicTermSchema.index({ academicYear: 1, termType: 1 });
 academicTermSchema.index({ startDate: 1, endDate: 1 });
 academicTermSchema.index({ isCurrent: 1 });
+
+academicTermSchema.pre('validate', function () {
+  if (this.startDate && this.endDate && this.endDate < this.startDate) this.invalidate('endDate', 'End date cannot be before start date');
+  const year = /^(\d{4})\/(\d{4})$/.exec(this.academicYear || '');
+  if (!year || Number(year[2]) !== Number(year[1]) + 1) this.invalidate('academicYear', 'Use consecutive years, for example 2026/2027');
+});
 
 export const AcademicTerm = mongoose.model('AcademicTerm', academicTermSchema);

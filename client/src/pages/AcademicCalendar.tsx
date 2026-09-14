@@ -27,6 +27,7 @@ import {
   BriefcaseBusiness,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import {
   Dialog,
@@ -106,6 +107,12 @@ const buildWelWindowTitle = (formData: typeof emptyForm) => {
 }
 
 export default function AcademicCalendarPage() {
+  const [templateYear, setTemplateYear] = useState(() => {
+    const now = new Date()
+    const year = now.getFullYear() - (now.getMonth() < 7 ? 1 : 0)
+    return `${year}/${year + 1}`
+  })
+  const [seeding, setSeeding] = useState(false)
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [events, setEvents] = useState<AcademicEvent[]>([])
   const [showForm, setShowForm] = useState(false)
@@ -176,11 +183,12 @@ export default function AcademicCalendarPage() {
   }
 
   const handleSeedTemplate = async () => {
+    setSeeding(true)
     try {
       const res = await authFetch('/api/academic-calendar/bootstrap-wel-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ academicYear: '2025/2026' }),
+        body: JSON.stringify({ academicYear: templateYear }),
       })
       const payload = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(payload.message || 'Failed to seed WEL template')
@@ -188,6 +196,8 @@ export default function AcademicCalendarPage() {
       fetchEvents()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to seed WEL template')
+    } finally {
+      setSeeding(false)
     }
   }
 
@@ -332,13 +342,15 @@ export default function AcademicCalendarPage() {
           >
             <Plus className="h-4 w-4 mr-2" /> Add Event
           </Button>
+          <Input aria-label="WEL template academic year" value={templateYear} onChange={event => setTemplateYear(event.target.value)} placeholder="2026/2027" className="w-36" />
           <Button
             type="button"
             variant="outline"
             onClick={handleSeedTemplate}
+            disabled={seeding}
             className="rounded-xl border-blue-200 text-blue-700 hover:bg-blue-50 font-bold"
           >
-            <BriefcaseBusiness className="h-4 w-4 mr-2" /> Load 2025/2026 WEL Template
+            <BriefcaseBusiness className="h-4 w-4 mr-2" /> {seeding ? 'Creating drafts…' : 'Create WEL Drafts'}
           </Button>
         </div>
       </div>

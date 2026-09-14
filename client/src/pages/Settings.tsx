@@ -299,13 +299,13 @@ export default function SettingsPage() {
           employerEvaluationOffsetDays: Number(systemSettings.employerEvaluationOffsetDays),
         }),
       })
-      if (!res.ok) throw new Error("Failed to save system settings")
       const data = await res.json()
+      if (!res.ok) throw new Error(data.message || "Failed to save system settings")
       setSystemSettings({ ...defaultSystemSettings, ...data })
       toast.success("System settings updated")
     } catch (error) {
       console.error(error)
-      toast.error("Failed to save system settings")
+      toast.error(error instanceof Error ? error.message : "Failed to save system settings")
     } finally {
       setSavingSystem(false)
     }
@@ -326,13 +326,7 @@ export default function SettingsPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.message || "Failed to save academic term")
 
-      setTerms((current) => {
-        if (editingTermId) {
-          return current.map((term) => (term._id === editingTermId ? data : data.isCurrent ? { ...term, isCurrent: false } : term))
-        }
-        const next = data.isCurrent ? current.map((term) => ({ ...term, isCurrent: false })) : current
-        return [data, ...next]
-      })
+      await refreshGlobalSettings()
 
       resetTermForm()
       toast.success(editingTermId ? "Academic term updated" : "Academic term created")
@@ -362,13 +356,14 @@ export default function SettingsPage() {
   const deleteTerm = async (termId: string) => {
     try {
       const res = await authFetch(`/api/academic-terms/${termId}`, { method: "DELETE" })
-      if (!res.ok) throw new Error("Failed to delete academic term")
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message || "Failed to delete academic term")
       setTerms((current) => current.filter((term) => term._id !== termId))
       if (editingTermId === termId) resetTermForm()
-      toast.success("Academic term deleted")
+      toast.success("Academic term archived")
     } catch (error) {
       console.error(error)
-      toast.error("Failed to delete academic term")
+      toast.error(error instanceof Error ? error.message : "Failed to delete academic term")
     }
   }
 
@@ -636,7 +631,8 @@ export default function SettingsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label>Default Academic Year</Label>
-                  <Input value={systemSettings.defaultAcademicYear} onChange={(e) => setSystemSettings((current) => ({ ...current, defaultAcademicYear: e.target.value }))} placeholder="2026/2027" />
+                  <Input disabled={terms.some(term => term.isCurrent)} value={systemSettings.defaultAcademicYear} onChange={(e) => setSystemSettings((current) => ({ ...current, defaultAcademicYear: e.target.value }))} placeholder="2026/2027" />
+                  <p className="text-xs text-slate-500">The current term controls this year. Change it through semester rollover.</p>
                 </div>
                 <div className="space-y-2">
                   <Label>Support Email</Label>
@@ -887,7 +883,7 @@ export default function SettingsPage() {
                   </div>
                   <div className="space-y-2">
                     <Label>Status</Label>
-                    <Select value={termForm.status} onValueChange={(value) => setTermForm((current) => ({ ...current, status: value }))}>
+                    <Select value={termForm.status} onValueChange={(value) => setTermForm((current) => ({ ...current, status: value, isCurrent: value === "Active" }))}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="Planned">Planned</SelectItem>
@@ -903,9 +899,9 @@ export default function SettingsPage() {
                   <div className="flex items-center justify-between rounded-2xl border border-gray-100 bg-slate-50 px-4 py-3">
                     <div>
                       <p className="font-bold text-slate-900">Mark as current term</p>
-                      <p className="text-sm text-slate-500">Only one term can be current at a time.</p>
+                      <p className="text-sm text-slate-500">Only one term can be current. Use semester rollover to replace it. Term dates also appear on institution calendars.</p>
                     </div>
-                    <Checkbox checked={termForm.isCurrent} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, isCurrent: checked === true }))} />
+                    <Checkbox aria-label="Mark as current term" checked={termForm.isCurrent} onCheckedChange={(checked) => setTermForm((current) => ({ ...current, isCurrent: checked === true, status: checked === true ? "Active" : "Planned" }))} />
                   </div>
                   <div className="flex justify-between gap-3">
                     <Button variant="outline" onClick={resetTermForm} className="rounded-xl">Clear</Button>
