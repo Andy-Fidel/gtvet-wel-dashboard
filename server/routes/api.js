@@ -29,6 +29,7 @@ import { Vacancy } from '../models/Vacancy.js';
 import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
+import { partnerRegionMatch, partnerVisibilityFilter } from '../utils/partnerVisibility.js';
 import { PartnerImport } from '../models/PartnerImport.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { hasCoordinates, normalizeCoordinates, locationCheck } from '../utils/workplaceCoordinates.js';
@@ -110,7 +111,7 @@ const getMonitoringFilter = async (user, learnerOptions = false) => {
 const getHQPartnerFilter = async (user) => {
   if (!isScopedHQRole(user.role) || (user.hqScopeType || 'National') === 'National') return {};
   if (user.hqScopeType === 'Institution') return { linkedInstitutions: user.institution };
-  return { region: user.region };
+  return { region: partnerRegionMatch(user.region) };
 };
 
 // Helper: Notify Institution Admins
@@ -5508,7 +5509,7 @@ router.get('/institutions/:id/summary', requireRole('HQManager', 'HQStaff', 'Sup
                     {
                         $or: [
                             { linkedInstitutions: institutionName },
-                            { region: institution.region },
+                            { region: partnerRegionMatch(institution.region) },
                         ],
                     },
                     {
@@ -11591,13 +11592,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         const reportFilter = Object.keys(filter).length > 0 ? { institution: filter.institution } : {};
         const totalReports = await SemesterReport.countDocuments(reportFilter);
         const institutions = await Institution.find(instFilter).sort({ name: 1 });
-        const partnerFilter = req.user.role === 'RegionalAdmin'
-          ? { region: req.user.region }
-          : isScopedHQRole(req.user.role)
-            ? req.user.hqScopeType === 'Institution'
-              ? { linkedInstitutions: req.user.institution }
-              : await getHQRegionFilter(req.user)
-            : {};
+        const partnerFilter = await partnerVisibilityFilter(req.user);
         const totalPartners = await IndustryPartner.countDocuments(partnerFilter);
         const partnersDetails = await IndustryPartner.find(partnerFilter).sort({ createdAt: -1 });
 
@@ -12709,30 +12704,7 @@ router.get('/industry-partners', async (req, res) => {
         const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
             ? Math.min(parsedPageSize, 100)
             : 24;
-        const scopeClauses = [];
-        if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
-            scopeClauses.push({ linkedInstitutions: req.user.institution });
-        } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
-            scopeClauses.push({ region: req.user.region });
-        } else if (req.user.role === 'RegionalAdmin') {
-            scopeClauses.push({ region: req.user.region });
-        } else if (['Admin', 'Manager', 'Staff'].includes(req.user.role)) {
-            const institution = await Institution.findOne({ name: req.user.institution }).select('region').lean();
-            const institutionRegion = institution?.region || req.user.region;
-            const institutionScope = [{ linkedInstitutions: req.user.institution }];
-
-            if (institutionRegion) {
-                institutionScope.push({
-                    region: institutionRegion,
-                    $or: [
-                        { approvalStatus: 'Approved' },
-                        { approvalStatus: { $exists: false } },
-                    ],
-                });
-            }
-
-            scopeClauses.push({ $or: institutionScope });
-        }
+        const scopeClauses = [await partnerVisibilityFilter(req.user)];
 
         const filter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
         const summaryFilter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
@@ -12857,17 +12829,7 @@ router.get('/industry-partners/search', async (req, res) => {
         const query = req.query.q;
         if (!query) return res.json([]);
         
-        const filter = { name: { $regex: query, $options: 'i' } };
-        // Optional: constrain query to user's region if they are RegionalAdmin/Admin
-        if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
-             filter.linkedInstitutions = req.user.institution;
-        } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
-             filter.region = req.user.region;
-        } else if (req.user.role === 'RegionalAdmin' || req.user.role === 'Admin' || req.user.role === 'Manager') {
-             if (req.user.region) {
-                 filter.region = req.user.region;
-             }
-        }
+        const filter = { $and: [await partnerVisibilityFilter(req.user), { name: { $regex: escapeRegex(String(query)), $options: 'i' } }] };
         
         const partners = await IndustryPartner.find(filter)
             .select('name sector region status approvalStatus totalSlots usedSlots')

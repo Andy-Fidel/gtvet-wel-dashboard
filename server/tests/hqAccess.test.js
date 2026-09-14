@@ -138,7 +138,9 @@ test('manager reaches partner decisions; staff cannot', async (t) => {
     const path = `/industry-partners/record-id/${action}`;
     const routePath = `/industry-partners/:id/${action}`;
     assert.equal((await dispatch('HQManager', 'PUT', path, routePath, { hqScopeType: 'Region', region: 'Ashanti' })).statusCode, 404);
-    assert.deepEqual(filters.at(-1), { _id: 'record-id', region: 'Ashanti' });
+    assert.equal(filters.at(-1)._id, 'record-id');
+    assert.ok(filters.at(-1).region.test('Ashanti'));
+    assert.equal(filters.at(-1).region.test('Greater Accra'), false);
     assert.equal((await dispatch('HQStaff', 'PUT', path, routePath)).statusCode, 403);
   }
 });
