@@ -20,26 +20,48 @@ export default function IndustryPartners() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [editingPartner, setEditingPartner] = useState<IndustryPartner | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(24)
+  const [total, setTotal] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+  const [loadError, setLoadError] = useState(false)
   const { authFetch, user } = useAuth()
   const isApprovedPartner = (partner: IndustryPartner) => !partner.approvalStatus || partner.approvalStatus === 'Approved'
 
   useEffect(() => {
+    let cancelled = false
     const fetchPartners = async () => {
+      setLoading(true)
+      setLoadError(false)
       try {
         const includeAll = ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'].includes(user?.role || '')
-        const res = await authFetch(`/api/industry-partners${includeAll ? '?includeAll=1' : ''}`)
+        const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+        if (includeAll) params.set('includeAll', '1')
+        const res = await authFetch(`/api/industry-partners?${params}`)
         if (!res.ok) throw new Error("Failed to fetch")
         const data = await res.json()
-        setPartners(data)
+        if (cancelled) return
+        if (!Array.isArray(data.items)) throw new Error('Invalid partner response')
+        if (page > Math.max(data.totalPages, 1)) {
+          setPage(Math.max(data.totalPages, 1))
+          return
+        }
+        setPartners(data.items)
+        setTotal(data.total)
+        setTotalPages(data.totalPages)
       } catch (err) {
+        if (cancelled) return
+        setLoadError(true)
+        setPartners([])
         console.error("Error fetching partners:", err)
         toast.error("Failed to load industry partners")
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
     fetchPartners()
-  }, [refreshKey, authFetch, user?.role])
+    return () => { cancelled = true }
+  }, [refreshKey, authFetch, user?.role, user?.institution, user?.region, page, pageSize])
 
   const handleSuccess = () => {
     setOpen(false)
@@ -133,6 +155,11 @@ export default function IndustryPartners() {
 
       {loading ? (
         <div className="w-full text-center p-12 text-gray-400 font-bold animate-pulse">Loading partners...</div>
+      ) : loadError ? (
+        <div role="alert" className="w-full text-center p-12">
+          <p>Unable to load partners.</p>
+          <Button variant="outline" className="mt-3" onClick={() => setRefreshKey(value => value + 1)}>Retry</Button>
+        </div>
       ) : partners.length === 0 ? (
         <div className="w-full text-center p-16 bg-white/50 border border-dashed border-gray-300 rounded-[2.5rem]">
           <Building2 className="h-16 w-16 text-gray-300 mx-auto mb-4" />
@@ -239,6 +266,20 @@ export default function IndustryPartners() {
           ))}
         </div>
       )}
+      <nav aria-label="Industry partners pagination" className="flex flex-wrap items-center justify-between gap-4 w-full border-t border-gray-200 pt-5">
+        <p className="text-sm text-gray-600" aria-live="polite">
+          {loading ? 'Loading partners…' : loadError ? 'Partners unavailable' : total === 0 ? '0 partners' : `Showing ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total} partners`}
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="partners-page-size" className="text-sm">Per page</label>
+          <select id="partners-page-size" className="rounded-lg border border-gray-300 bg-white px-2 py-2 text-sm" value={pageSize} disabled={loading} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}>
+            {[12, 24, 48, 96].map(size => <option key={size} value={size}>{size}</option>)}
+          </select>
+          <Button variant="outline" disabled={loading || loadError || page <= 1} onClick={() => setPage(value => value - 1)}>Previous</Button>
+          <span className="text-sm">Page {page} of {Math.max(totalPages, 1)}</span>
+          <Button variant="outline" disabled={loading || loadError || page >= totalPages} onClick={() => setPage(value => value + 1)}>Next</Button>
+        </div>
+      </nav>
     </div>
   )
 }
