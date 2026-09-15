@@ -11,11 +11,11 @@ async function call(path, method, role = 'Admin', body = {}) {
 }
 
 test('delegate cannot delete another institution placement', async t => {
-  t.mock.method(Placement, 'findOneAndDelete', async query => {
+  t.mock.method(Placement, 'findOne', async query => {
     assert.deepEqual(query, { _id: 'placement', institution: 'Receiving' });
     return null;
   });
-  await call('/placements/:id', 'delete');
+  assert.equal((await call('/placements/:id', 'delete')).statusCode, 404);
   assert.equal((await call('/placements/:id', 'delete', 'Staff')).statusCode, 403);
 });
 

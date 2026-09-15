@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 
 const industryPartnerSchema = new mongoose.Schema({
+  workflowVersion: { type: Number, default: 0 },
   name: { type: String, required: true, unique: true, trim: true },
   sector: { type: String, required: true },
   region: { type: String, required: true },

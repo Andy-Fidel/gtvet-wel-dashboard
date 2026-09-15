@@ -2,10 +2,12 @@ import mongoose from 'mongoose';
 
 const placementRequestSchema = new mongoose.Schema({
   institution: { type: String, required: true },
+  academicYear: { type: String, default: '' },
+  workflowVersion: { type: Number, default: 0 },
   partner: { type: mongoose.Schema.Types.ObjectId, ref: 'IndustryPartner' },
   learners: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Learner' }],
   program: { type: String, required: true },
-  requestedSlots: { type: Number, required: true },
+  requestedSlots: { type: Number, required: true, min: 1, validate: Number.isInteger },
   placementRegion: { type: String, trim: true },
   coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
   sourceType: {
@@ -49,6 +51,11 @@ const placementRequestSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 placementRequestSchema.index({ institution: 1 });
+placementRequestSchema.pre('validate', function () {
+  if (!this.learners?.length || new Set(this.learners.map(String)).size !== this.learners.length) this.invalidate('learners', 'Select unique learners');
+  if (this.requestedSlots !== this.learners?.length) this.invalidate('requestedSlots', 'Slots must equal the number of selected learners');
+  if (this.startDate && this.endDate && this.endDate < this.startDate) this.invalidate('endDate', 'Placement end date cannot be before start date');
+});
 placementRequestSchema.index({ status: 1 });
 placementRequestSchema.index({ partner: 1 });
 placementRequestSchema.index({ createdAt: -1 });

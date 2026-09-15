@@ -94,7 +94,13 @@ test('active WEL windows require exactly one enclosing term while drafts remain 
   await assert.rejects(validateWindowTerm({ ...eventData(), isActive: true }), /exactly one/);
   terms = [termData()];
   await validateWindowTerm({ ...eventData(), isActive: true });
-  await assert.rejects(validateWindowTerm({ ...eventData(), isActive: true, endDate: '2027-03-01' }), /within its academic term/);
+  await assert.rejects(validateWindowTerm({ ...eventData(), isActive: true, endDate: '2027-03-01' }), error => {
+    assert.equal(error.status, 409);
+    assert.match(error.message, /2026-09-01 to 2027-02-28/);
+    assert.match(error.message, /2027-03-01/);
+    assert.match(error.message, /save as a draft/);
+    return true;
+  });
   t.mock.method(AcademicCalendar, 'find', () => ({ lean: async () => [eventData()] }));
   await assert.rejects(validateTermWindows({ ...termData(), startDate: '2026-10-01' }), /include the active WEL/);
 });

@@ -107,6 +107,8 @@ const buildWelWindowTitle = (formData: typeof emptyForm) => {
 }
 
 export default function AcademicCalendarPage() {
+  const [terms, setTerms] = useState<Array<{ _id: string; name: string; academicYear: string; termType: string; startDate: string; endDate: string }>>([])
+  const [termLoadError, setTermLoadError] = useState(false)
   const [templateYear, setTemplateYear] = useState(() => {
     const now = new Date()
     const year = now.getFullYear() - (now.getMonth() < 7 ? 1 : 0)
@@ -121,6 +123,29 @@ export default function AcademicCalendarPage() {
   const [formData, setFormData] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const { authFetch } = useAuth()
+
+  const refreshTerms = async () => {
+    try {
+      const response = await authFetch('/api/academic-terms')
+      if (!response.ok) throw new Error('Unable to load academic terms')
+      const data = await response.json()
+      if (!Array.isArray(data)) throw new Error('Invalid academic terms response')
+      setTerms(data)
+      setTermLoadError(false)
+    } catch {
+      setTermLoadError(true)
+    }
+  }
+  const matchingTerms = terms.filter(term => term.academicYear === formData.academicYear && term.termType === formData.semester)
+  const matchingTerm = matchingTerms.length === 1 ? matchingTerms[0] : undefined
+  const termStart = matchingTerm?.startDate.slice(0, 10) || ''
+  const termEnd = matchingTerm?.endDate.slice(0, 10) || ''
+  const windowConflict = formData.eventType === 'WEL Window' && (
+    termLoadError ? 'Academic terms could not be loaded. Retry before publishing.' :
+    !matchingTerm ? 'Select a matching academic term, or create one in Settings. You can still save a draft.' :
+    formData.startDate && formData.endDate && (formData.startDate < termStart || formData.endDate > termEnd)
+      ? `This window extends outside ${matchingTerm.name}: ${termStart} to ${termEnd}. Adjust the window, review the term in Settings, or save a draft.` : ''
+  )
 
   const fetchEvents = async () => {
     try {
@@ -137,9 +162,22 @@ export default function AcademicCalendarPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authFetch])
 
-  const handleSave = async () => {
+  useEffect(() => {
+    if (showForm) void refreshTerms()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showForm, authFetch])
+
+  const handleSave = async (asDraft = false) => {
     if (!formData.title || !formData.startDate || !formData.endDate) {
       toast.error("Title, start date, and end date are required")
+      return
+    }
+    if (formData.endDate < formData.startDate) {
+      toast.error('End date cannot be before start date')
+      return
+    }
+    if (!asDraft && formData.isActive && windowConflict) {
+      toast.error(windowConflict)
       return
     }
     if (formData.eventType === 'WEL Window') {
@@ -156,6 +194,7 @@ export default function AcademicCalendarPage() {
       const method = editing ? 'PUT' : 'POST'
       const payload = {
         ...formData,
+        isActive: asDraft ? false : formData.isActive,
         totalWeeks: formData.totalWeeks ? Number(formData.totalWeeks) : null,
         hoursPerDay: formData.hoursPerDay ? Number(formData.hoursPerDay) : null,
       }
@@ -565,7 +604,7 @@ export default function AcademicCalendarPage() {
                   <select
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/50"
                     value={formData.eventType}
-                    onChange={(e) => setFormData({ ...formData, eventType: e.target.value })}
+                    onChange={(e) => setFormData({ ...formData, eventType: e.target.value, isActive: e.target.value === 'WEL Window' ? false : formData.isActive })}
                   >
                     {eventTypeOptions.map((option) => (
                       <option key={option} value={option}>{option}</option>
@@ -583,7 +622,7 @@ export default function AcademicCalendarPage() {
                     onChange={(e) => setFormData({ ...formData, isActive: e.target.value === 'Active' })}
                   >
                     <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
+                    <option value="Inactive">Draft / Inactive</option>
                   </select>
                   <p className="mt-2 text-xs font-medium text-slate-500">
                     Inactive templates remain on record but stop driving operational scheduling.
@@ -646,6 +685,22 @@ export default function AcademicCalendarPage() {
 
               {formData.eventType === 'WEL Window' ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                  <label htmlFor="wel-academic-term" className="block text-sm font-bold text-slate-700">Academic term from Settings</label>
+                  <select id="wel-academic-term" className="mt-2 w-full rounded-xl border border-gray-200 p-3" value={matchingTerm?._id || ''} onChange={event => {
+                    const term = terms.find(item => item._id === event.target.value)
+                    if (term) setFormData(current => ({ ...current, academicYear: term.academicYear, semester: term.termType, startDate: current.startDate || term.startDate.slice(0, 10), endDate: current.endDate || term.endDate.slice(0, 10) }))
+                  }}>
+                    <option value="">Select a configured semester…</option>
+                    {terms.filter(term => semesterOptions.includes(term.termType)).map(term => <option key={term._id} value={term._id}>{term.name} · {term.academicYear} · {term.startDate.slice(0, 10)} – {term.endDate.slice(0, 10)}</option>)}
+                  </select>
+                  <p className="mt-2 text-sm text-slate-600">Selecting a term fills the year and semester, and supplies dates when empty. Existing window dates are preserved. Review duration whenever you change dates; official term dates are never changed here.</p>
+                  {matchingTerm && <p className="mt-2 text-sm font-semibold">Allowed period: {termStart} to {termEnd}</p>}
+                  {windowConflict && <p role="status" className="mt-2 text-sm text-amber-800">{windowConflict}</p>}
+                  <div className="my-3 flex flex-wrap gap-3">
+                    <Button type="button" variant="outline" onClick={() => void refreshTerms()}>Refresh terms</Button>
+                    {matchingTerm && <Button type="button" variant="outline" onClick={() => setFormData(current => ({ ...current, startDate: termStart, endDate: termEnd }))}>Use term dates</Button>}
+                    <a href="/settings" target="_blank" rel="noopener noreferrer" className="self-center text-sm text-blue-700 underline">Review terms in Settings (new tab)</a>
+                  </div>
                   <p className="text-xs font-black uppercase tracking-wider text-slate-500">WEL Targeting</p>
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
@@ -769,7 +824,8 @@ export default function AcademicCalendarPage() {
             <Button variant="outline" onClick={() => { setShowForm(false); setEditing(null); setFormData(emptyForm) }} className="rounded-xl border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800">
               Cancel
             </Button>
-            <Button onClick={handleSave} disabled={saving} className="rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold">
+            {formData.eventType === 'WEL Window' && <Button type="button" variant="outline" onClick={() => void handleSave(true)} disabled={saving}>Save draft</Button>}
+            <Button onClick={() => void handleSave()} disabled={saving || Boolean(formData.isActive && windowConflict)} className="rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold">
               {saving ? 'Saving...' : editing ? 'Update Event' : 'Create Event'}
             </Button>
           </DialogFooter>

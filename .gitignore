@@ -26,6 +26,7 @@ dist-ssr
 
 # Scripts
 server/scripts/*
+!server/scripts/audit_placement_integrity.js
 seed_*.js
 fix_*.js
 migrate_*.js
@@ -36,4 +37,3 @@ migrate_*.js
 *seedAllData.js
 *seedAhafoBono.js
 !server/scripts/migrate_partner_name_uniqueness.js
-

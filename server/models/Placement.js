@@ -24,6 +24,9 @@ const placementSchema = new mongoose.Schema({
   closedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   closureReason: { type: String, trim: true },
   closureNote: { type: String, trim: true },
+  archivedAt: { type: Date, default: null },
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  workflowVersion: { type: Number, default: 0 },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   institution: { type: String, required: true },
   coordinates: {
@@ -37,15 +40,18 @@ const placementSchema = new mongoose.Schema({
   delegatedAt: { type: Date },
   delegatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   delegateInstitution: { type: String },
-}, { timestamps: true });
+}, { timestamps: true, autoIndex: false });
 
 // Add indexes for quick querying and trend aggregation
 placementSchema.pre('validate', function () {
+  if (this.startDate && this.endDate && this.endDate < this.startDate) this.invalidate('endDate', 'Placement end date cannot be before start date');
   try {
     normalizeCoordinates(this.coordinates, this.status === 'Active' && (this.isNew || this.isModified('status') || this.isModified('coordinates')));
   } catch (error) { this.invalidate('coordinates', error.message); }
 });
 placementSchema.index({ learner: 1 });
+// Installed explicitly after the read-only duplicate audit, never on app startup.
+placementSchema.index({ learner: 1 }, { name: 'one_active_placement_per_learner', unique: true, partialFilterExpression: { status: 'Active' } });
 placementSchema.index({ learner: 1, academicYear: 1 });
 placementSchema.index({ institution: 1 });
 placementSchema.index({ owner: 1 });

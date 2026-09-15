@@ -468,7 +468,7 @@ export const columns: ColumnDef<Placement>[] = [
                 {['Admin', 'Manager'].includes(meta?.role || '') && <DropdownMenuItem onClick={() => meta?.onAssignDelegate?.(placement)}>
                   <Handshake className="mr-2 h-4 w-4" /> Assign Delegate
                 </DropdownMenuItem>}
-                {['Admin', 'Manager'].includes(meta?.role || '') && <DropdownMenuItem onClick={() => meta?.onDelete(placement._id)} className="text-red-600 focus:text-red-600">Delete Placement</DropdownMenuItem>}
+                {['Admin', 'Manager'].includes(meta?.role || '') && <DropdownMenuItem disabled={placement.status === 'Active'} onClick={() => meta?.onDelete(placement._id)} className="text-red-600 focus:text-red-600">Archive Placement</DropdownMenuItem>}
               </>
             )}
           </DropdownMenuContent>

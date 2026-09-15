@@ -49,6 +49,7 @@ const formSchema = z.object({
   startDate: z.string().min(1, "Start date is required"),
   endDate: z.string().min(1, "End date is required"),
 }).superRefine((data, ctx) => {
+    if (data.endDate < data.startDate) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'End date cannot be before start date.', path: ['endDate'] });
     if (data.placementType === 'registered' && !data.partner) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -234,7 +235,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           })
           const resData = await res.json()
           if (!res.ok) throw new Error(resData.message || "Failed to submit request")
-      } else if (data.placementType === 'custom' && coordinates) {
+      } else if (data.placementType === 'custom' && coordinates && ['Admin', 'Manager'].includes(user?.role || '')) {
           // Send to bulk placements endpoint
           const res = await authFetch('/api/placements', {
             method: 'POST',
@@ -287,7 +288,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           if (!res.ok) throw new Error(resData.message || "Failed to submit learner-sourced placement")
       }
 
-      toast.success(data.placementType === "learner_sourced" ? "Learner-sourced placement submitted for verification" : !coordinates ? "Request saved. Add workplace coordinates under Placement Requests to activate." : "Learners placed successfully")
+      toast.success(data.placementType === 'custom' && coordinates && ['Admin', 'Manager'].includes(user?.role || '') ? 'Learners placed successfully' : 'Request submitted. Institution management must review and activate it under Placement Requests.')
       onSuccess()
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Something went wrong";

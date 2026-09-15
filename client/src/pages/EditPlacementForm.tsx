@@ -51,6 +51,7 @@ const formSchema = z.object({
   startDate: z.date(),
   endDate: z.date(),
 }).superRefine((data, ctx) => {
+  if (data.endDate < data.startDate) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'End date cannot be before start date.', path: ['endDate'] })
   if (data.status !== "Active" && !data.closureReason?.trim()) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -78,7 +79,8 @@ interface EditPlacementFormProps {
 
 export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormProps) {
   const [loading, setLoading] = useState(false)
-  const { authFetch } = useAuth()
+  const { authFetch, user } = useAuth()
+  const [overrideWelWindow, setOverrideWelWindow] = useState(false)
 
   // GPS coordinates for the placement site
   const [coordLat, setCoordLat] = useState(String(initialData.coordinates?.lat ?? ''))
@@ -112,6 +114,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ...values,
+                overrideWelWindow: user?.role === 'Admin' && overrideWelWindow,
                 closureReason: values.status === "Active" ? "" : values.closureReason?.trim() || "",
                 closureNote: values.status === "Active" ? "" : values.closureNote?.trim() || "",
                 coordinates,
@@ -219,7 +222,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
           <FormField control={form.control} name="status" render={({ field }) => (
               <FormItem>
                 <FormLabel className="text-sm font-semibold text-gray-900">Placement Status</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <Select disabled={user?.role === 'Staff'} onValueChange={field.onChange} defaultValue={field.value}>
                   <FormControl>
                     <SelectTrigger className="h-12 rounded-xl border-transparent bg-white text-gray-900">
                       <SelectValue placeholder="Select placement status" />
@@ -234,6 +237,8 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
                 <FormMessage />
               </FormItem>
           )} />
+
+          {placementStatus === 'Active' && user?.role === 'Admin' && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={overrideWelWindow} onChange={event => setOverrideWelWindow(event.target.checked)} />Explicitly override WEL calendar timing when reopening or changing placement dates. Other activation checks still apply.</label>}
 
           {placementStatus !== "Active" ? (
             <div className="grid grid-cols-1 gap-5">

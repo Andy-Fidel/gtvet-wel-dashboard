@@ -73,7 +73,8 @@ export async function validateWindowTerm(event) {
   if (terms.length !== 1) throw academicError('Configure exactly one matching academic term in Settings before activating this WEL window.');
   const term = terms[0];
   if (new Date(event.startDate) < new Date(term.startDate) || new Date(event.endDate) > new Date(term.endDate)) {
-    throw academicError('The WEL window must fall within its academic term dates. Adjust the window or term before activating it.');
+    const date = value => new Date(value).toISOString().slice(0, 10);
+    throw academicError(`The WEL window must fall within its academic term dates (${term.name || term.termType}, ${event.academicYear}: ${date(term.startDate)} to ${date(term.endDate)}). Your window is ${date(event.startDate)} to ${date(event.endDate)}. Use term dates, review the term in Settings, or save as a draft.`);
   }
 }
 

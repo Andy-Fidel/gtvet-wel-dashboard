@@ -6,6 +6,8 @@ import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
 import { Learner } from '../models/Learner.js';
 import { Placement } from '../models/Placement.js';
+import { PlacementOperation } from '../models/PlacementOperation.js';
+import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
 import { MonitoringVisit } from '../models/MonitoringVisit.js';
 import { SemesterReport } from '../models/SemesterReport.js';
 import { User } from '../models/User.js';
@@ -53,6 +55,10 @@ const INSTITUTION_MANAGEMENT_ROLES = ['Admin', 'Manager'];
 // All routes below require authentication
 router.use(auth);
 router.use(enforceHQAccess);
+router.use((req, res, next) => {
+  if (Object.hasOwn(req.body || {}, 'workflowVersion')) return res.status(400).json({ message: 'Workflow version is managed by the server.' });
+  next();
+});
 
 const DASHBOARD_CACHE_TTL_MS = Number(process.env.DASHBOARD_CACHE_TTL_MS || 60 * 1000);
 const dashboardCache = new LRUCache({ max: 500, ttl: DASHBOARD_CACHE_TTL_MS });
@@ -516,7 +522,7 @@ const runAutomaticLearnerProgression = async (user) => {
   return summary;
 };
 
-const recalculatePartnerUsedSlots = async () => {
+const summarizePartnerUsedSlots = async () => {
   const activeCounts = await Placement.aggregate([
     {
       $match: {
@@ -531,18 +537,6 @@ const recalculatePartnerUsedSlots = async () => {
       },
     },
   ]);
-
-  const bulkOps = activeCounts.map((entry) => ({
-    updateOne: {
-      filter: { _id: entry._id },
-      update: { $set: { usedSlots: entry.usedSlots } },
-    },
-  }));
-
-  await IndustryPartner.updateMany({}, { $set: { usedSlots: 0 } });
-  if (bulkOps.length) {
-    await IndustryPartner.bulkWrite(bulkOps);
-  }
 
   return {
     partnersWithActivePlacements: activeCounts.length,
@@ -2549,40 +2543,21 @@ router.post('/settings/rollover/academic-year', requireRole('SuperAdmin'), async
         const academicYearBounds = getAcademicYearBounds(outgoingAcademicYear);
         const rolloverTimestamp = new Date();
 
-        const placementsToClose = await Placement.find({
-            academicYear: outgoingAcademicYear,
-            status: 'Active',
-        }).select('_id learner partner').lean();
+        const closurePlan = await runPlacementOperation(`year-close:${outgoingAcademicYear}`, async () => {
+            const placements = await Placement.find({ academicYear: outgoingAcademicYear, status: 'Active' }).select('_id learner partner').lean();
+            return {
+                placements: placements.map(placement => ({ id: placement._id, insert: false, values: {
+                    status: 'Completed', closedAt: rolloverTimestamp, closedBy: req.user._id,
+                    closureReason: 'Academic year rollover', closureNote: `Closed during academic year rollover for ${outgoingAcademicYear}.`,
+                } })),
+                learnerIds: placements.map(placement => placement.learner),
+                partnerIds: placements.map(placement => placement.partner).filter(Boolean),
+                actor: { id: req.user._id, role: req.user.role },
+            };
+        });
+        const closedPlacementCount = closurePlan.placements.length;
         const outgoingPlacementIds = await Placement.find({ academicYear: outgoingAcademicYear }).distinct('_id');
-
-        let closedPlacementCount = 0;
-        if (placementsToClose.length) {
-            const placementIds = placementsToClose.map((placement) => placement._id);
-            const learnerIds = [...new Set(placementsToClose.map((placement) => placement.learner?.toString()).filter(Boolean))];
-
-            const closeResult = await Placement.updateMany(
-                { _id: { $in: placementIds } },
-                {
-                    $set: {
-                        status: 'Completed',
-                        closedAt: new Date(),
-                        closedBy: req.user._id,
-                        closureReason: 'Academic year rollover',
-                        closureNote: `Closed automatically during academic year rollover for ${outgoingAcademicYear}.`,
-                    },
-                }
-            );
-            closedPlacementCount = closeResult.modifiedCount || 0;
-
-            if (learnerIds.length) {
-                await Learner.updateMany(
-                    { _id: { $in: learnerIds } },
-                    { $set: { status: 'Completed' } }
-                );
-            }
-        }
-
-        const partnerCapacitySummary = await recalculatePartnerUsedSlots();
+        const partnerCapacitySummary = await summarizePartnerUsedSlots();
 
         const archivedRequestResult = await PlacementRequest.updateMany(
             {
@@ -8792,6 +8767,7 @@ router.get('/learners/graduated/annual-report', async (req, res) => {
 router.get('/placements/export', async (req, res) => {
   try {
     const filter = await getPlacementScope(req.user);
+    filter.archivedAt = null;
     const placements = await Placement.find(filter)
         .populate('learner')
         .sort({ startDate: -1 });
@@ -8830,6 +8806,7 @@ router.get('/placements/export', async (req, res) => {
 router.get('/placements', async (req, res) => {
   try {
     const filter = await getPlacementScope(req.user);
+    filter.archivedAt = null;
     const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
     const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
     const usePagination = Number.isFinite(parsedPage) || Number.isFinite(parsedPageSize);
@@ -9327,126 +9304,72 @@ router.post('/placements/:id/messages', async (req, res) => {
   }
 });
 
+async function preparePlacementActivation(req, input, ids, excludeId = null) {
+    if (!['Admin', 'Manager'].includes(req.user.role) || !req.user.institution) throw placementError('Only institution administrators and managers can activate placements.', 403);
+    const learnerIds = placementLearnerIds(ids);
+    if (!await Placement.collection.indexExists('one_active_placement_per_learner')) throw placementError('Placement activation is awaiting the duplicate-index preflight. Contact the system administrator.', 503);
+    const data = placementInput(input);
+    validatePlacementDates(data.startDate, data.endDate);
+    data.coordinates = normalizeCoordinates(data.coordinates, true);
+    if (!data.placementRegion?.trim()) throw placementError('Placement region is required.', 400);
+    data.placementRegion = data.placementRegion.trim();
+    data.academicYear = data.academicYear || await resolveCurrentAcademicYear();
+    if (!validAcademicYear(data.academicYear)) throw placementError('Use a valid academic year.', 400);
+    if (await PlacementOperation.exists({ _id: `year-close:${data.academicYear}`, completed: true }) || await SystemSetting.exists({ key: `academic-year-rollover:${data.academicYear}` })) throw placementError('This academic year has already been closed. Select an open academic year.');
+    const readiness = await assertLearnersReadyForPlacement(learnerIds, req.user.institution);
+    if (!readiness.ok) throw placementError(`Learner readiness check failed: ${readiness.message}`, 400);
+    const activeFilter = { learner: { $in: learnerIds }, status: 'Active', ...(excludeId ? { _id: { $ne: excludeId } } : {}) };
+    if (await Placement.exists(activeFilter)) throw placementError('A selected learner already has an active placement.');
+    const windows = await getInstitutionWELWindows({ institutionName: req.user.institution, academicYear: data.academicYear });
+    const override = req.user.role === 'Admin' && input.overrideWelWindow === true;
+    for (const learner of readiness.learners) {
+        const eligible = buildPlacementEligibility({ learner, welWindows: windows });
+        if (!eligible.isEligible && !(override && eligible.windowOverrideAllowed)) throw placementError(eligible.reason, 400);
+        const containing = windows.some(window => normalizeStudyYear(window.targetYearGroup) === normalizeStudyYear(learner.year)
+          && new Date(data.startDate) >= new Date(window.startDate) && new Date(data.endDate) <= new Date(window.endDate));
+        if (!containing && !override) throw placementError('Placement dates must fit the learner’s published WEL window. An institution Admin may explicitly override the window.', 400);
+    }
+    if (data.partner) {
+        const partner = await IndustryPartner.findOne({ $and: [{ _id: data.partner, status: 'Active', approvalStatus: 'Approved' }, await partnerVisibilityFilter(req.user)] });
+        if (!partner) throw placementError('Select an approved, active partner visible to your institution.', 400);
+        const occupied = await Placement.countDocuments({ partner: partner._id, status: 'Active', ...(excludeId ? { _id: { $ne: excludeId } } : {}) });
+        if (!Number.isFinite(partner.totalSlots) || occupied + learnerIds.length > partner.totalSlots) throw placementError('Partner has insufficient available capacity.');
+        data.companyName = partner.name;
+        data.sector = partner.sector;
+        data.location = partner.location || partner.region;
+    }
+    const documents = learnerIds.map(learner => new Placement({ ...data, learner, institution: req.user.institution, status: 'Active' }));
+    await Promise.all(documents.map(doc => doc.validate()));
+    return { documents, override };
+}
+
+function notifyPlacementActivation(req, plan) {
+    if (plan.replayed) return;
+    const count = plan.placements.length;
+    for (const partnerId of [...new Set(plan.partnerIds.map(String))]) notifyUsers({ partnerId, sender: req.user._id, type: 'placement', title: 'New Learners Placed', message: `${count} learner(s) from ${req.user.institution} have been placed with your organization.`, link: '/partner-dashboard?view=mine' });
+    notifyUsers({ institution: req.user.institution, roles: ['Admin', 'Manager'], sender: req.user._id, type: 'placement', title: 'Placement Activated', message: `${count} learner placement(s) activated successfully.`, link: '/placements' });
+    if (plan.request) notifyInstitutionAdmins(req.user.institution, sendPlacementApprovalEmail, `${count} selected learner(s)`, plan.placements[0]?.values?.companyName || 'Host organization', 'See Placement Requests');
+}
+
 router.post('/placements', async (req, res) => {
     try {
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
-        }
-        if (!['Admin', 'Manager', 'Staff'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied' });
-        const { learner, learners, overrideWelWindow = false, ...placementData } = req.body;
-        try { placementData.coordinates = normalizeCoordinates(placementData.coordinates, true); }
+        if (!['Admin', 'Manager'].includes(req.user.role)) return res.status(403).json({ message: 'Only institution management can activate placements. Staff may submit placement requests.' });
+        try { normalizeCoordinates(req.body.coordinates, true); }
         catch (error) { return res.status(400).json({ message: error.message }); }
-        const learnerIds = learners || (learner ? [learner] : []);
-        const placementAcademicYear = placementData.academicYear || await resolveCurrentAcademicYear();
-
-        if (!placementData.placementRegion?.trim()) {
-            return res.status(400).json({ message: 'Placement region is required' });
-        }
-        placementData.placementRegion = placementData.placementRegion.trim();
-
-        if (learnerIds.length === 0) {
-            return res.status(400).json({ message: 'At least one learner must be selected' });
-        }
-
-        const selectedLearners = await Learner.find({ _id: { $in: learnerIds } }).select('name year academicStatus institution');
-        if (selectedLearners.length !== learnerIds.length) {
-            return res.status(404).json({ message: 'One or more selected learners could not be found.' });
-        }
-
-        const activePlacements = await Placement.find({
-            learner: { $in: learnerIds },
-            status: 'Active',
-        }).select('learner');
-        const activePlacementLearnerIds = new Set(activePlacements.map((placement) => placement.learner.toString()));
-        const welWindowsByInstitution = new Map();
-
-        await Promise.all([...new Set(selectedLearners.map((item) => item.institution).filter(Boolean))].map(async (institutionName) => {
-            welWindowsByInstitution.set(
-                institutionName,
-                await getInstitutionWELWindows({
-                    institutionName,
-                    academicYear: placementAcademicYear,
-                })
-            );
-        }));
-
-        const blockedLearners = selectedLearners
-            .map((learnerDoc) => ({
-                learnerDoc,
-                eligibility: buildPlacementEligibility({
-                    learner: learnerDoc,
-                    hasActivePlacement: activePlacementLearnerIds.has(learnerDoc._id.toString()),
-                    welWindows: welWindowsByInstitution.get(learnerDoc.institution) || [],
-                }),
-            }))
-            .filter((entry) => !entry.eligibility.isEligible);
-
-        const canUseWindowOverride = req.user.role === 'Admin' && overrideWelWindow === true;
-        const nonOverridableLearners = blockedLearners.filter((entry) =>
-            !canUseWindowOverride || !entry.eligibility.windowOverrideAllowed
-        );
-
-        if (nonOverridableLearners.length > 0) {
-            return res.status(400).json({
-                message: nonOverridableLearners.map((entry) => `${entry.learnerDoc.name}: ${entry.eligibility.reason}`).join(' | '),
-            });
-        }
-
-        const readinessCheck = await assertLearnersReadyForPlacement(learnerIds, req.user.institution);
-        if (!readinessCheck.ok) {
-            return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
-        }
-
-        const placementDocs = learnerIds.map(id => ({
-            ...placementData,
-            academicYear: placementAcademicYear,
-            learner: id,
-            institution: req.user.institution,
-            owner: placementData.owner || undefined,
-            status: 'Active'
-        }));
-
-        const createdPlacements = await Placement.insertMany(placementDocs);
-
-        // Automatically update learner status to 'Placed'
-        for (const placement of createdPlacements) {
-            const updatedLearner = await Learner.findByIdAndUpdate(placement.learner, { 
-                status: 'Placed',
-                placement: placement._id
-            }, { returnDocument: 'after' });
-            
-            if (req.body.partner) {
-                notifyUsers({
-                    partnerId: req.body.partner,
-                    sender: req.user._id,
-                    type: 'placement',
-                    title: 'New Placement',
-                    message: `${updatedLearner?.name || 'A learner'} has been placed with your organization.`,
-                    link: '/partner-dashboard?view=mine'
-                });
-            }
-        }
-
-        await logAuditEvent({
-            req,
-            action: 'CREATE',
-            entityType: 'Placement',
-            entityId: createdPlacements.map((placement) => placement._id).join(','),
-            summary: `Created ${createdPlacements.length} placement record(s)`,
-            metadata: {
-                placementIds: createdPlacements.map((placement) => placement._id),
-                learnerIds,
-                welWindowOverride: canUseWindowOverride && blockedLearners.length > 0,
-                overriddenLearnerIds: blockedLearners.map((entry) => entry.learnerDoc._id),
-            },
-            after: createdPlacements,
+        const ids = placementLearnerIds(req.body.learners || (req.body.learner ? [req.body.learner] : []));
+        const key = placementOperationKey(req.user, 'activate', { ...placementInput(req.body), learners: ids.sort(), overrideWelWindow: req.body.overrideWelWindow === true });
+        const plan = await runPlacementOperation(key, async () => {
+            const { documents, override } = await preparePlacementActivation(req, req.body, ids);
+            return {
+                placements: documents.map(doc => ({ id: doc._id, insert: true, values: doc.toObject() })),
+                learnerIds: ids, partnerIds: documents.map(doc => doc.partner).filter(Boolean), override, actor: { id: req.user._id, institution: req.user.institution, role: req.user.role },
+            };
         });
-
-        res.status(201).json(createdPlacements);
-    } catch (error) {
-        console.error("Error creating placement:", error);
-        res.status(500).json({ message: 'Error creating placement' });
-    }
+        const placements = await Placement.find({ _id: { $in: plan.placements.map(item => item.id) }, institution: req.user.institution });
+        notifyPlacementActivation(req, plan);
+        await logAuditEvent({ req, action: 'CREATE', entityType: 'Placement', entityId: plan.placements.map(item => item.id).join(','), summary: 'Activated placement batch', metadata: { operationKey: key, replayed: !!plan.replayed, welWindowOverride: plan.override }, after: placements });
+        res.status(plan.replayed ? 200 : 201).json(placements);
+    } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 
 function applyPlacementClosureMetadata(existingPlacement, payload, user) {
@@ -9496,50 +9419,34 @@ export async function recheckPendingPlacementVisits(placement, req) {
 
 router.put('/placements/:id', async (req, res) => {
     try {
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
-        }
-        if (!['Admin', 'Manager', 'Staff'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied' });
-        const existingPlacement = await Placement.findOne({ _id: req.params.id, ...await getFilter(req.user) });
-        if (!existingPlacement) {
-            return res.status(404).json({ message: 'Placement not found' });
-        }
-        const payload = applyPlacementClosureMetadata(existingPlacement, req.body, req.user);
-        // Restrict updates to editable placement fields, including coordinates.
-        for (const key of Object.keys(payload)) if (!['companyName', 'sector', 'location', 'supervisorName', 'supervisorPhone', 'supervisorEmail', 'startDate', 'endDate', 'status', 'closureReason', 'closureNote', 'closedAt', 'closedBy', 'academicYear', 'placementRegion', 'coordinates'].includes(key)) delete payload[key];
-        try {
-            const nextCoordinates = normalizeCoordinates(payload.coordinates ?? existingPlacement.coordinates, (payload.status || existingPlacement.status) === 'Active');
-            if (Object.hasOwn(payload, 'coordinates')) payload.coordinates = nextCoordinates;
-        } catch (error) { return res.status(400).json({ message: error.message }); }
-        if (!payload.academicYear && payload.startDate) {
-            payload.academicYear = resolveAcademicYearFromDate(payload.startDate);
-        }
-        const updatedPlacement = await Placement.findByIdAndUpdate(req.params.id, payload, { returnDocument: 'after', runValidators: true });
-        if (Object.hasOwn(payload, 'coordinates') && hasCoordinates(updatedPlacement.coordinates)) {
-            await recheckPendingPlacementVisits(updatedPlacement, req);
-        }
-        if (updatedPlacement && req.body.status && req.body.status !== existingPlacement.status) {
-            if (req.body.status === 'Completed') {
-                await Learner.findByIdAndUpdate(updatedPlacement.learner, { status: 'Completed' });
-            } else if (req.body.status === 'Active') {
-                await Learner.findByIdAndUpdate(updatedPlacement.learner, { status: 'Placed' });
-            }
-        }
-        if (updatedPlacement && existingPlacement) {
-            await logAuditEvent({
-                req,
-                action: 'UPDATE',
-                entityType: 'Placement',
-                entityId: updatedPlacement._id,
-                summary: `Updated placement ${updatedPlacement._id}`,
-                before: existingPlacement,
-                after: updatedPlacement,
-            });
-        }
-        res.json(updatedPlacement);
-    } catch (error) {
-        res.status(500).json({ message: 'Error updating placement' });
-    }
+        if (!['Admin', 'Manager', 'Staff'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Access denied' });
+        const filter = { _id: req.params.id, institution: req.user.institution };
+        const initial = await Placement.findOne(filter);
+        if (!initial) return res.status(404).json({ message: 'Placement not found' });
+        try { normalizeCoordinates(req.body.coordinates ?? initial.coordinates, (req.body.status || initial.status) === 'Active'); }
+        catch (error) { return res.status(400).json({ message: error.message }); }
+        if (req.body.status && req.body.status !== initial.status && req.user.role === 'Staff') return res.status(403).json({ message: 'Only institution management may change placement status.' });
+        const key = placementOperationKey(req.user, 'edit', { id: req.params.id, command: crypto.randomUUID() });
+        const plan = await runPlacementOperation(key, async () => {
+            const existing = await Placement.findOne(filter);
+            if (!existing || existing.archivedAt) throw placementError('Archived or missing placements cannot be edited.');
+            if (req.user.role === 'Staff' && req.body.status && req.body.status !== existing.status) throw placementError('Only institution management may change placement status.', 403);
+            const fields = { ...placementInput(req.body) };
+            delete fields.partner;
+            for (const field of ['status', 'closureReason', 'closureNote']) if (Object.hasOwn(req.body, field)) fields[field] = req.body[field];
+            const payload = applyPlacementClosureMetadata(existing, fields, req.user);
+            const merged = new Placement({ ...existing.toObject(), ...payload });
+            validatePlacementDates(merged.startDate, merged.endDate);
+            await merged.validate();
+            const activatesOrReschedules = merged.status === 'Active' && (existing.status !== 'Active' || ['startDate', 'endDate', 'academicYear'].some(field => Object.hasOwn(req.body, field) && (field.endsWith('Date') ? new Date(req.body[field]).getTime() !== new Date(existing[field]).getTime() : req.body[field] !== existing[field])));
+            if (activatesOrReschedules) await preparePlacementActivation(req, { ...merged.toObject(), overrideWelWindow: req.body.overrideWelWindow }, [String(existing.learner)], existing._id);
+            return { placements: [{ id: existing._id, insert: false, values: payload }], learnerIds: [existing.learner], partnerIds: [existing.partner].filter(Boolean), before: existing.toObject(), actor: { id: req.user._id, institution: req.user.institution, role: req.user.role }, override: req.user.role === 'Admin' && req.body.overrideWelWindow === true };
+        });
+        const updated = await Placement.findOne(filter);
+        if (Object.hasOwn(req.body, 'coordinates') && hasCoordinates(updated.coordinates)) await recheckPendingPlacementVisits(updated, req);
+        await logAuditEvent({ req, action: 'UPDATE', entityType: 'Placement', entityId: req.params.id, summary: 'Updated placement and reconciled operational links', before: plan.before, after: updated, metadata: { operationKey: key } });
+        res.json(updated);
+    } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 
 router.put('/placements/:id/owner', async (req, res) => {
@@ -9806,27 +9713,18 @@ router.get('/users/by-region/:region', async (req, res) => {
 
 router.delete('/placements/:id', async (req, res) => {
     try {
-        if (!['Admin', 'Manager'].includes(req.user.role)) return res.status(403).json({ message: 'Only originating institution administrators and managers can delete placements.' });
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Oversight portal access is read-only for placements.' });
-        }
-        const filter = await getFilter(req.user);
-        const deletedPlacement = await Placement.findOneAndDelete({ _id: req.params.id, ...filter });
-        if (!deletedPlacement) return res.status(404).json({ message: 'Placement not found or unauthorized' });
-        if (deletedPlacement) {
-            await logAuditEvent({
-                req,
-                action: 'DELETE',
-                entityType: 'Placement',
-                entityId: deletedPlacement._id,
-                summary: `Deleted placement ${deletedPlacement._id}`,
-                before: deletedPlacement,
-            });
-        }
-        res.json({ message: 'Placement deleted' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error deleting placement' });
-    }
+        if (!['Admin', 'Manager'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Only originating institution administrators and managers can archive placements.' });
+        if (!await Placement.findOne({ _id: req.params.id, institution: req.user.institution })) return res.status(404).json({ message: 'Placement not found or unauthorized' });
+        const key = placementOperationKey(req.user, 'archive', { id: req.params.id, command: crypto.randomUUID() });
+        const plan = await runPlacementOperation(key, async () => {
+            const placement = await Placement.findOne({ _id: req.params.id, institution: req.user.institution });
+            if (!placement) throw placementError('Placement not found or unauthorized', 404);
+            if (placement.status === 'Active') throw placementError('Complete or terminate the placement before archiving it.');
+            return { placements: [{ id: placement._id, insert: false, values: { archivedAt: placement.archivedAt || new Date(), archivedBy: placement.archivedBy || req.user._id } }], learnerIds: [placement.learner], partnerIds: [placement.partner].filter(Boolean), before: placement.toObject() };
+        });
+        await logAuditEvent({ req, action: 'DELETE', entityType: 'Placement', entityId: req.params.id, summary: 'Archived placement; linked operational history retained', before: plan.before });
+        res.json({ message: 'Placement archived. Linked history has been retained.' });
+    } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 
 // ==================== ATTENDANCE LOGS ====================
@@ -13945,6 +13843,10 @@ router.get('/placement-requests', async (req, res) => {
 router.post('/placement-requests', async (req, res) => {
     try {
         if (!['Admin', 'Manager', 'Staff'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied' });
+        if (!req.user.institution) return res.status(403).json({ message: 'An institution is required.' });
+        const uniqueLearners = placementLearnerIds(req.body.learners);
+        validatePlacementDates(req.body.startDate, req.body.endDate);
+        req.body = { ...req.body, learners: uniqueLearners, requestedSlots: uniqueLearners.length };
         let coordinates;
         try { coordinates = normalizeCoordinates(req.body.coordinates); }
         catch (error) { return res.status(400).json({ message: error.message }); }
@@ -13968,9 +13870,7 @@ router.post('/placement-requests', async (req, res) => {
             return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
         }
 
-        const placementAcademicYear = startDate
-          ? resolveAcademicYearFromDate(startDate)
-          : await resolveCurrentAcademicYear();
+        const placementAcademicYear = await resolveCurrentAcademicYear();
         const activePlacements = await Placement.find({ learner: { $in: learners }, status: 'Active' }).select('learner');
         const activePlacementLearnerIds = new Set(activePlacements.map((placement) => placement.learner.toString()));
         const welWindowsByInstitution = new Map();
@@ -14017,6 +13917,7 @@ router.post('/placement-requests', async (req, res) => {
                 endDate,
                 submittedBy: req.user._id,
                 sourceType: normalizedSourceType,
+                academicYear: placementAcademicYear,
                 coordinates,
                 selfSourcedHost: {
                     companyName: selfSourcedHost.companyName?.trim() || '',
@@ -14050,272 +13951,89 @@ router.post('/placement-requests', async (req, res) => {
             return res.status(201).json(newRequest);
         }
 
-        // Prevent requesting more slots than available
-        const partnerDoc = await IndustryPartner.findById(partner);
-        if (!partnerDoc) return res.status(404).json({ message: 'Partner not found' });
+        const partnerDoc = await IndustryPartner.findOne({ $and: [{ _id: partner, status: 'Active', approvalStatus: 'Approved' }, await partnerVisibilityFilter(req.user)] });
+        if (!partnerDoc) return res.status(400).json({ message: 'Select an approved, active partner visible to your institution.' });
         if (!coordinates && hasCoordinates(partnerDoc.coordinates)) coordinates = normalizeCoordinates(partnerDoc.coordinates);
-        if (!coordinates) {
-            const pending = await PlacementRequest.create({ institution: req.user.institution, partner, learners, program,
-                requestedSlots, placementRegion: placementRegion.trim(), startDate, endDate, submittedBy: req.user._id,
-                sourceType: 'InstitutionFound', status: 'Submitted' });
-            await logAuditEvent({ req, action: 'CREATE', entityType: 'PlacementRequest', entityId: pending._id,
-                summary: 'Saved placement request awaiting workplace coordinates', after: pending });
-            return res.status(201).json(pending);
-        }
-        if (partnerDoc.totalSlots - partnerDoc.usedSlots < requestedSlots) {
-            return res.status(400).json({ message: 'Requested slots exceed available capacity' });
-        }
-
-        // Check capacity again to be safe
-        const pDoc = await IndustryPartner.findById(partner);
-        if (pDoc.totalSlots - pDoc.usedSlots < requestedSlots) {
-            return res.status(400).json({ message: 'Partner no longer has enough capacity' });
-        }
-
-        try {
-            const newRequest = new PlacementRequest({
-                institution: req.user.institution,
-                partner,
-                learners,
-                program,
-                requestedSlots,
-                placementRegion: placementRegion.trim(),
-                startDate,
-                endDate,
-                submittedBy: req.user._id,
-                sourceType: 'InstitutionFound',
-                coordinates,
-                status: 'Placed'
-            });
-            await newRequest.save();
-            await logAuditEvent({
-                req,
-                action: 'CREATE',
-                entityType: 'PlacementRequest',
-                entityId: newRequest._id,
-                summary: `Processed placement request for ${requestedSlots} learner(s)`,
-                after: newRequest,
-                metadata: {
-                    welWindowOverride: canUseWindowOverride && blockedLearners.length > 0,
-                    overriddenLearnerIds: blockedLearners.map((entry) => entry.learnerDoc._id),
-                },
-            });
-
-            // Update partner slot capacity
-            await IndustryPartner.findByIdAndUpdate(partner, {
-                $inc: { usedSlots: requestedSlots }
-            });
-
-            // Create Placements for each learner and update learner status
-            const placementDocs = learners.map(learnerId => ({
-                learner: learnerId,
-                academicYear: placementAcademicYear,
-                companyName: partnerDoc.name,
-                coordinates,
-                partner: partnerDoc._id,
-                startDate,
-                endDate,
-                sector: partnerDoc.sector,
-                location: partnerDoc.location || partnerDoc.region,
-                placementRegion: placementRegion.trim(),
-                institution: req.user.institution,
-                status: 'Active'
-            }));
-
-            const createdPlacements = await Placement.insertMany(placementDocs);
-
-            // Update each learner's status and placement ref
-            for (const placement of createdPlacements) {
-                await Learner.findByIdAndUpdate(placement.learner, {
-                    status: 'Placed',
-                    placement: placement._id
-                });
-            }
-
-            await logAuditEvent({
-                req,
-                action: 'CREATE',
-                entityType: 'Placement',
-                entityId: createdPlacements.map((placement) => placement._id).join(','),
-                summary: `Created ${createdPlacements.length} placement(s) from approved partner request`,
-                metadata: {
-                    placementRequestId: newRequest._id,
-                    learnerCount: createdPlacements.length,
-                    welWindowOverride: canUseWindowOverride && blockedLearners.length > 0,
-                    overriddenLearnerIds: blockedLearners.map((entry) => entry.learnerDoc._id),
-                },
-                after: createdPlacements,
-            });
-
-            // Notify Institution
-            const firstLearner = await Learner.findById(learners[0]);
-            const learnerName = firstLearner ? firstLearner.name : 'Multiple Learners';
-            const trackingId = firstLearner ? firstLearner.trackingId : 'N/A';
-            
-            notifyInstitutionAdmins(req.user.institution, sendPlacementApprovalEmail, learnerName, partnerDoc.name, trackingId);
-
-            notifyUsers({
-                partnerId: partnerDoc._id,
-                sender: req.user._id,
-                type: 'placement',
-                title: 'New Learners Placed',
-                message: `${requestedSlots} new learners from ${req.user.institution} have been officially placed with your organization.`,
-                link: '/partner-dashboard?view=mine'
-            });
-
-            res.status(201).json(newRequest);
-        } catch (err) {
-            return res.status(400).json({ message: err.message });
-        }
-    } catch (error) {
-        res.status(500).json({ message: 'Error processing placement' });
-    }
+        // Submission does not reserve capacity or activate learners. Management activates
+        // through the same recoverable workflow used by direct placements and reopening.
+        const pending = await PlacementRequest.create({
+            institution: req.user.institution, partner, learners, program,
+            requestedSlots: learners.length, placementRegion: placementRegion.trim(),
+            academicYear: placementAcademicYear, startDate, endDate, coordinates,
+            submittedBy: req.user._id, sourceType: 'InstitutionFound', status: 'Submitted',
+        });
+        await logAuditEvent({ req, action: 'CREATE', entityType: 'PlacementRequest', entityId: pending._id,
+            summary: 'Submitted placement request for institution management activation', after: pending });
+        res.status(201).json(pending);
+    } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 
 router.put('/placement-requests/:id/self-source-status', async (req, res) => {
     try {
-        const filter = await getFilter(req.user);
-        const request = await PlacementRequest.findOne({ _id: req.params.id, ...filter });
-        if (!request) return res.status(404).json({ message: 'Placement request not found' });
-        if (isArchivedRecord(request)) {
-            return res.status(409).json({ message: 'Archived placement requests cannot be reviewed.' });
-        }
-        if (request.sourceType !== 'LearnerFound') {
-            return res.status(400).json({ message: 'Only learner-sourced placement leads can use this review workflow' });
-        }
-        if (!['Admin', 'Manager', 'Staff', 'RegionalAdmin', 'SuperAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'You do not have permission to review learner-sourced placement leads' });
-        }
-
-        const { status, verificationNotes, rejectionReason } = req.body;
-        if (!['Under_Verification', 'Approved', 'Rejected'].includes(status)) {
-            return res.status(400).json({ message: 'Invalid learner-sourced placement status' });
-        }
-
-        request.status = status;
-        request.verificationNotes = verificationNotes?.trim?.() || request.verificationNotes || '';
-        request.reviewedByInstitution = req.user._id;
-        request.verifiedAt = new Date();
-        request.institutionComment = request.verificationNotes;
-        if (status === 'Rejected') {
-            request.rejectionReason = rejectionReason?.trim?.() || request.rejectionReason || 'Rejected during institution verification';
-        } else {
-            request.rejectionReason = '';
-        }
-
-        await request.save();
-        await logAuditEvent({
-            req,
-            action: 'UPDATE',
-            entityType: 'PlacementRequest',
-            entityId: request._id,
-            summary: `Updated learner-sourced placement lead to ${status}`,
-            after: request,
-            metadata: { sourceType: request.sourceType, status },
+        if (!['Admin', 'Manager'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Only institution management may review placement leads.' });
+        const { status } = req.body;
+        if (!['Under_Verification', 'Approved', 'Rejected'].includes(status)) return res.status(400).json({ message: 'Invalid placement review status' });
+        const key = placementOperationKey(req.user, 'review', { id: req.params.id, command: crypto.randomUUID() });
+        const plan = await runPlacementOperation(key, async () => {
+            const request = await PlacementRequest.findOne({ _id: req.params.id, institution: req.user.institution });
+            if (!request) throw placementError('Placement request not found', 404);
+            if (isArchivedRecord(request) || request.sourceType !== 'LearnerFound') throw placementError('Only unarchived learner-sourced requests can be reviewed.');
+            const transitions = { SelfSourced_Submitted: ['Under_Verification', 'Rejected'], Under_Verification: ['Approved', 'Rejected'], Approved: ['Under_Verification', 'Rejected'], Rejected: ['Under_Verification'] };
+            if (!transitions[request.status]?.includes(status)) throw placementError('Invalid placement review transition. Start verification before approving; activated requests cannot be reviewed again.');
+            const notes = req.body.verificationNotes?.trim?.() || request.verificationNotes || '';
+            return {
+                placements: [], learnerIds: [], partnerIds: [], actor: { id: req.user._id, institution: req.user.institution, role: req.user.role },
+                request: { id: request._id, values: { status, verificationNotes: notes, institutionComment: notes, reviewedByInstitution: req.user._id, verifiedAt: new Date(), rejectionReason: status === 'Rejected' ? req.body.rejectionReason?.trim?.() || 'Rejected during institution verification' : '' } },
+                before: request.toObject(),
+            };
         });
-
-        res.json(request);
-    } catch (error) {
-        console.error('Error updating learner-sourced placement lead:', error);
-        res.status(500).json({ message: 'Error updating learner-sourced placement lead' });
-    }
+        const updated = await PlacementRequest.findById(plan.request.id);
+        await logAuditEvent({ req, action: 'UPDATE', entityType: 'PlacementRequest', entityId: plan.request.id, summary: `Reviewed placement lead: ${status}`, before: plan.before, after: updated, metadata: { operationKey: key } });
+        res.json(updated);
+    } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 
 router.post('/placement-requests/:id/convert', async (req, res) => {
     try {
-        if (!['Admin', 'Manager'].includes(req.user.role)) return res.status(403).json({ message: 'Only institution management can activate placement requests' });
-        const filter = await getFilter(req.user);
-        const request = await PlacementRequest.findOne({ _id: req.params.id, ...filter })
-            .populate('learners', 'name trackingId')
-            .lean();
+        if (!['Admin', 'Manager'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Only institution management can activate placement requests' });
+        const filter = { _id: req.params.id, institution: req.user.institution };
+        const request = await PlacementRequest.findOne(filter).populate('learners', 'name trackingId').lean();
         if (!request) return res.status(404).json({ message: 'Placement request not found' });
-        if (isArchivedRecord(request)) {
-            return res.status(409).json({ message: 'Archived placement requests cannot be converted.' });
-        }
-        if (!(request.sourceType === 'LearnerFound' ? request.status === 'Approved' : request.status === 'Submitted')) {
-            return res.status(400).json({ message: 'This request is not ready for activation' });
-        }
-        const partnerDoc = request.partner ? await IndustryPartner.findById(request.partner) : null;
+        if (isArchivedRecord(request)) return res.status(409).json({ message: 'Archived requests cannot be activated.' });
+        if (request.status === 'Converted') return res.json(request);
+        const partner = request.partner ? await IndustryPartner.findById(request.partner) : null;
         let coordinates;
-        try { coordinates = normalizeCoordinates(req.body.coordinates ?? request.coordinates ?? partnerDoc?.coordinates, true); }
+        try { coordinates = normalizeCoordinates(req.body.coordinates ?? request.coordinates ?? partner?.coordinates, true); }
         catch (error) { return res.status(400).json({ message: error.message }); }
-        const learnerIds = (request.learners || []).map(learner => learner._id);
-        if (await Placement.exists({ learner: { $in: learnerIds }, status: 'Active' })) return res.status(409).json({ message: 'A learner already has an active placement' });
-        if (partnerDoc && (partnerDoc.status !== 'Active' || partnerDoc.approvalStatus !== 'Approved' || partnerDoc.totalSlots - partnerDoc.usedSlots < learnerIds.length)) {
-            return res.status(400).json({ message: 'Partner must be approved, active, and have sufficient capacity' });
-        }
-
-        const readinessCheck = await assertLearnersReadyForPlacement(
-            (request.learners || []).map((learner) => learner._id?.toString?.() || learner.toString()),
-            request.institution
-        );
-        if (!readinessCheck.ok) {
-            return res.status(400).json({ message: `Learner readiness check failed: ${readinessCheck.message}` });
-        }
-
-        const placementAcademicYear = request.startDate
-            ? resolveAcademicYearFromDate(request.startDate)
-            : await resolveCurrentAcademicYear();
-
-        const createdPlacements = await Placement.insertMany(
-            (request.learners || []).map((learner) => ({
-                learner: learner._id,
-                academicYear: placementAcademicYear,
-                coordinates,
-                partner: partnerDoc?._id,
-                companyName: partnerDoc?.name || request.selfSourcedHost?.companyName || 'Learner-Sourced Placement',
-                startDate: request.startDate,
-                endDate: request.endDate,
-                sector: partnerDoc?.sector || request.selfSourcedHost?.sector || request.program,
-                location: partnerDoc?.location || partnerDoc?.region || request.selfSourcedHost?.location || request.selfSourcedHost?.town || 'Not specified',
-                placementRegion: request.placementRegion,
-                supervisorName: request.selfSourcedHost?.contactPerson || '',
-                supervisorPhone: request.selfSourcedHost?.contactPhone || '',
-                supervisorEmail: request.selfSourcedHost?.contactEmail || '',
-                institution: request.institution,
-                status: 'Active',
-            }))
-        );
-
-        for (const placement of createdPlacements) {
-            await Learner.findByIdAndUpdate(placement.learner, {
-                status: 'Placed',
-                placement: placement._id,
-            });
-        }
-
-        if (partnerDoc) await IndustryPartner.findByIdAndUpdate(partnerDoc._id, { $inc: { usedSlots: createdPlacements.length } });
-        const updatedRequest = await PlacementRequest.findByIdAndUpdate(
-            request._id,
-            {
-                status: 'Converted',
-                coordinates,
-                convertedPlacementIds: createdPlacements.map((placement) => placement._id),
-                reviewedByInstitution: req.user._id,
-                verifiedAt: new Date(),
-            },
-            { returnDocument: 'after' }
-        )
-            .populate('partner', 'name sector region totalSlots usedSlots')
-            .populate('learners', 'firstName lastName trackingId')
-            .populate('submittedBy', 'name')
-            .populate('reviewedByInstitution', 'name');
-
-        await logAuditEvent({
-            req,
-            action: 'CREATE',
-            entityType: 'Placement',
-            entityId: createdPlacements.map((placement) => placement._id).join(','),
-            summary: `Converted learner-sourced placement lead into ${createdPlacements.length} placement(s)`,
-            metadata: { placementRequestId: request._id, learnerCount: createdPlacements.length, sourceType: 'LearnerFound' },
-            after: createdPlacements,
+        const key = placementOperationKey({ ...req.user, _id: request.submittedBy }, 'convert', { request: String(request._id) });
+        const plan = await runPlacementOperation(key, async () => {
+            const fresh = await PlacementRequest.findOne(filter).lean();
+            if (!fresh || isArchivedRecord(fresh) || !(fresh.sourceType === 'LearnerFound' ? fresh.status === 'Approved' : fresh.status === 'Submitted')) throw placementError('This request is not ready for activation.');
+            const ids = placementLearnerIds(fresh.learners.map(String));
+            const input = {
+                partner: fresh.partner,
+                companyName: fresh.selfSourcedHost?.companyName,
+                sector: fresh.selfSourcedHost?.sector || fresh.program,
+                location: fresh.selfSourcedHost?.location || fresh.selfSourcedHost?.town,
+                supervisorName: fresh.selfSourcedHost?.contactPerson,
+                supervisorPhone: fresh.selfSourcedHost?.contactPhone,
+                supervisorEmail: fresh.selfSourcedHost?.contactEmail,
+                startDate: fresh.startDate, endDate: fresh.endDate,
+                academicYear: fresh.academicYear || await resolveCurrentAcademicYear(),
+                placementRegion: fresh.placementRegion, coordinates,
+                overrideWelWindow: req.body.overrideWelWindow,
+            };
+            const { documents, override } = await preparePlacementActivation(req, input, ids);
+            return {
+                placements: documents.map(doc => ({ id: doc._id, insert: true, values: doc.toObject() })),
+                learnerIds: ids, partnerIds: fresh.partner ? [fresh.partner] : [], override, actor: { id: req.user._id, institution: req.user.institution, role: req.user.role },
+                request: { id: fresh._id, values: { status: 'Converted', coordinates, convertedPlacementIds: documents.map(doc => doc._id), reviewedByInstitution: req.user._id, verifiedAt: new Date() } },
+            };
         });
-
-        res.json(updatedRequest);
-    } catch (error) {
-        console.error('Error converting learner-sourced placement lead:', error);
-        res.status(500).json({ message: 'Error converting learner-sourced placement lead' });
-    }
+        await logAuditEvent({ req, action: 'CREATE', entityType: 'Placement', entityId: plan.placements.map(item => item.id).join(','), summary: 'Activated placement request', metadata: { operationKey: key, placementRequestId: request._id, replayed: !!plan.replayed, welWindowOverride: plan.override } });
+        notifyPlacementActivation(req, plan);
+        res.json(await PlacementRequest.findOne(filter).populate('partner', 'name sector region totalSlots usedSlots').populate('learners', 'firstName lastName trackingId'));
+    } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 
 

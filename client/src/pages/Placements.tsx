@@ -288,16 +288,17 @@ export default function Placements() {
         if (!deletingPlacementId) return
         try {
             const res = await authFetch(`/api/placements/${deletingPlacementId}`, { method: 'DELETE' })
-            if (!res.ok) throw new Error("Failed to delete")
+            const payload = await res.json()
+            if (!res.ok) throw new Error(payload.message || "Failed to archive placement")
             if (data.length === 1 && placementsPage > 1) {
                 setPlacementsPage(prev => prev - 1)
             } else {
                 setRefreshKey(prev => prev + 1)
             }
-            toast.success("Placement deleted successfully")
+            toast.success("Placement archived; linked history retained")
         } catch (error) {
             console.error("Error deleting placement:", error)
-            toast.error("Failed to delete placement")
+            toast.error(error instanceof Error ? error.message : "Failed to archive placement")
         } finally {
             setDeleteConfirmOpen(false)
             setDeletingPlacementId(null)
@@ -510,9 +511,11 @@ export default function Placements() {
     const [convertRequest, setConvertRequest] = useState<PlacementRequestData | null>(null)
     const [convertLat, setConvertLat] = useState('')
     const [convertLng, setConvertLng] = useState('')
+    const [convertWindowOverride, setConvertWindowOverride] = useState(false)
 
     const handleConvertSelfSourcedPlacement = (request: PlacementRequestData) => {
         setConvertRequest(request)
+        setConvertWindowOverride(false)
         setConvertLat(String(request.coordinates?.lat ?? ''))
         setConvertLng(String(request.coordinates?.lng ?? ''))
         setConvertConfirmOpen(true)
@@ -525,7 +528,7 @@ export default function Placements() {
             const res = await authFetch(`/api/placement-requests/${convertRequest._id}/convert`, {
                 method: "POST",
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ coordinates: readCoordinates(convertLat, convertLng, true) }),
+                body: JSON.stringify({ coordinates: readCoordinates(convertLat, convertLng, true), overrideWelWindow: user?.role === 'Admin' && convertWindowOverride }),
             })
             const payload = await res.json().catch(() => ({}))
             if (!res.ok) throw new Error(payload.message || "Failed to convert learner-sourced placement")
@@ -1102,9 +1105,9 @@ export default function Placements() {
             <ConfirmationDialog
                 open={deleteConfirmOpen && !isOversightReadOnly}
                 onOpenChange={setDeleteConfirmOpen}
-                title="Delete Placement"
-                description={`Are you sure you want to permanently delete the placement for ${deletingPlacementLabel}? This action cannot be undone.`}
-                confirmLabel="Delete Placement"
+                title="Archive Placement"
+                description={`Archive the placement for ${deletingPlacementLabel}? Complete or terminate active placements first. Attendance, visits, and other linked history will be retained.`}
+                confirmLabel="Archive Placement"
                 variant="danger"
                 onConfirm={confirmDelete}
             />
@@ -1141,6 +1144,7 @@ export default function Placements() {
                 <DialogContent className="bg-white">
                     <DialogHeader><DialogTitle>Activate Placement Request</DialogTitle><DialogDescription>Confirm the workplace coordinates before creating active placements for {convertRequest?.requestedSlots} learners.</DialogDescription></DialogHeader>
                     <WorkplaceCoordinates lat={convertLat} lng={convertLng} onChange={(a, b) => { setConvertLat(a); setConvertLng(b) }} disabled={Boolean(selfSourcedActionLoading)} />
+                    {user?.role === 'Admin' && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={convertWindowOverride} onChange={event => setConvertWindowOverride(event.target.checked)} />Explicitly override WEL calendar timing for this activation. Readiness, capacity, and duplicate-placement checks still apply.</label>}
                     <Button disabled={Boolean(selfSourcedActionLoading)} onClick={() => void confirmConvert()}>Activate Placements</Button>
                 </DialogContent>
             </Dialog>

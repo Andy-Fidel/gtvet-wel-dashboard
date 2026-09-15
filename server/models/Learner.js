@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import crypto from 'crypto';
 
 const learnerSchema = new mongoose.Schema({
+  workflowVersion: { type: Number, default: 0 },
   lastName: { type: String, required: true },
   firstName: { type: String, required: true },
   middleName: { type: String, default: '' },
