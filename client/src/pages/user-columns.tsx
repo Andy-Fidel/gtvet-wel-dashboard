@@ -213,6 +213,7 @@ export const columns: ColumnDef<User>[] = [
         onToggleStatus: (user: User) => void,
         onSendSetupLink?: (user: User) => void,
         onViewAudit?: (user: User) => void,
+        onInspect?: (user: User) => void,
         canManageUser?: (user: User) => boolean,
       }
       const canManageUser = meta?.canManageUser ? meta.canManageUser(user) : true
@@ -231,6 +232,7 @@ export const columns: ColumnDef<User>[] = [
               Copy ID
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            {meta?.onInspect && user.status === 'Active' && user.role !== 'SuperAdmin' && <DropdownMenuItem onClick={() => meta.onInspect?.(user)}>Inspect as user (read-only)</DropdownMenuItem>}
             {canManageUser ? (
               <>
                 <DropdownMenuItem onClick={() => meta?.onEdit(user)}>Edit Details</DropdownMenuItem>

@@ -2,6 +2,7 @@ import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js'
 import { canLogMonitoringVisit, monitoringScope } from '../utils/monitoringAccess.js';
 import { canReadAssessment, canWriteAssessment, assessmentLearnerFields, serializeAssessment, assessmentInput, validateAssessmentInput, safeAssessmentCsvCell } from '../utils/assessmentAccess.js';
 import express from 'express';
+import { isInspection } from '../utils/inspectionContext.js';
 import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
 import { Learner } from '../models/Learner.js';
@@ -395,6 +396,7 @@ const resolveScopedInstitutionNames = async (user) => {
 };
 
 const runAutomaticLearnerProgression = async (user) => {
+  if (isInspection()) return null;
   if (!user || user.role === 'Guardian' || user.role === 'IndustryPartner') return null;
 
   const progressionTerm = await resolveLatestEligibleProgressionTerm();
@@ -1120,6 +1122,7 @@ const findPlacementForUser = async (user, placementId) => {
 const getOrCreateSystemSettings = async () => {
   let settings = await SystemSetting.findOne({ key: 'global' });
   if (!settings) {
+    if (isInspection()) return new SystemSetting({ key: 'global' });
     settings = await SystemSetting.create({ key: 'global' });
   }
   return settings;
@@ -1764,6 +1767,7 @@ const getPlacementExceptionSignals = ({ settings, placements, attendanceByPlacem
 const INSTITUTION_NOTIFICATION_ROLES = ['Admin', 'Manager', 'Staff'];
 
 const ensureInstitutionExceptionNotifications = async (user) => {
+  if (isInspection()) return;
   if (!INSTITUTION_NOTIFICATION_ROLES.includes(user.role) || !user.institution) {
     return;
   }
@@ -1785,6 +1789,7 @@ const ensureInstitutionExceptionNotifications = async (user) => {
 };
 
 const ensurePartnerEvaluationNotifications = async (user) => {
+  if (isInspection()) return;
   if (user.role !== 'IndustryPartner') {
     return;
   }
@@ -9131,7 +9136,7 @@ router.get('/placements/:id/messages', async (req, res) => {
       return res.status(404).json({ message: 'Placement not found or unauthorized' });
     }
 
-    await PlacementMessage.updateMany(
+    if (!req.inspectionActor) await PlacementMessage.updateMany(
       {
         placement: placement._id,
         senderUser: { $ne: req.user._id },

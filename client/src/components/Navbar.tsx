@@ -16,6 +16,7 @@ import { Search } from "./Search"
 import { useNotifications } from "@/hooks/useNotifications"
 import { formatDistanceToNow } from "date-fns"
 import { HelpWizard } from "./HelpWizard"
+import { InspectionBanner } from "./InspectionBanner"
 
 export function Navbar() {
   const location = useLocation()
@@ -54,9 +55,9 @@ export function Navbar() {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   }
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
+  const handleLogout = async () => {
+    await logout();
+    if (!user?.inspection) navigate('/login');
   }
 
   const getRoleBadgeColor = (role: string) => {
@@ -71,6 +72,7 @@ export function Navbar() {
   }
 
   return (
+    <><InspectionBanner />
     <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-8 glass-panel rounded-[2rem] sticky top-0 z-30">
       <div className="flex min-w-0 items-center gap-2 pr-12 md:gap-6 lg:pr-0">
         <div className="hidden sm:flex items-center gap-2 bg-[#4ADE80] px-3 py-2 rounded-xl text-white text-[10px] md:text-xs font-black uppercase tracking-wider shadow-sm animate-pulse">
@@ -214,12 +216,12 @@ export function Navbar() {
               <DropdownMenuSeparator className="bg-white/10" />
               <DropdownMenuItem className="text-red-400 rounded-2xl p-3 focus:bg-red-500/10 focus:text-red-400 cursor-pointer transition-colors" onClick={handleLogout}>
                 <LogOut className="mr-3 h-5 w-5" />
-                <span className="font-bold">Log out</span>
+                <span className="font-bold">{user?.inspection ? 'End inspection' : 'Log out'}</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
-    </div>
+    </div></>
   )
 }

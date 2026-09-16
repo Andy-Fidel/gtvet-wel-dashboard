@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isInspection } from './inspectionContext.js';
 import { AcademicState } from '../models/AcademicState.js';
 import { AcademicTerm } from '../models/AcademicTerm.js';
 import { AcademicCalendar } from '../models/AcademicCalendar.js';
@@ -21,6 +22,7 @@ export async function getAcademicState() {
     throw academicError('Multiple legacy current/active terms need reconciliation before academic settings can be changed.');
   }
   try {
+    if (isInspection()) return { _id: 'global', currentTerm: legacy[0]?._id || null, completedTerms: [] };
     state = await AcademicState.findOneAndUpdate({ _id: 'global' }, { $setOnInsert: { currentTerm: legacy[0]?._id || null, completedTerms: [] } }, { upsert: true, returnDocument: 'after' }).lean();
   } catch (error) {
     if (error.code !== 11000) throw error;

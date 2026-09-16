@@ -4,12 +4,14 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
 import workplaceBg from '@/assets/Workplace.webp';
+import { InspectionBanner } from '@/components/InspectionBanner';
 
 export default function Login() {
   const { login, changePassword } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [step, setStep] = useState<'login' | 'change-password'>('login');
@@ -25,7 +27,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const result = await login(email, password);
+      const result = await login(email, password, mfaCode.trim());
       if (result.passwordChangeRequired) {
         setStep('change-password');
       } else {
@@ -66,6 +68,7 @@ export default function Login() {
       <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${workplaceBg})` }} />
       <div className="absolute inset-0 bg-gray-900/80 backdrop-blur-sm" />
       <div className="w-full max-w-md relative z-10">
+        <InspectionBanner />
         {/* Logo */}
         <div className="flex flex-col items-center mb-10">
           <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-lg mb-4">
@@ -97,6 +100,10 @@ export default function Login() {
 
           {step === 'login' ? (
             <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <label htmlFor="login-mfa" className="text-sm text-white/70">Authenticator or recovery code (if MFA is enabled)</label>
+                <input id="login-mfa" autoComplete="one-time-code" value={mfaCode} maxLength={64} onChange={event => setMfaCode(event.target.value)} className="mt-2 w-full h-12 px-4 bg-white/5 border border-white/10 rounded-2xl text-white" />
+              </div>
               <div className="relative">
                 <Mail className="absolute left-5 top-1/2 -translate-y-1/2 h-5 w-5 text-white/30" />
                 <input

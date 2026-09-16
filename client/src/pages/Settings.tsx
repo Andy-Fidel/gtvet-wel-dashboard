@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { BellRing, Settings2, CalendarRange, Save, Plus, Trash2, Loader2, School, ShieldCheck, Send, Smartphone } from "lucide-react"
 import { usePushNotifications } from "@/hooks/usePushNotifications"
+import { SecuritySessions } from "@/components/SecuritySessions"
 
 type SystemSettings = {
   organizationName: string
@@ -466,6 +467,7 @@ export default function SettingsPage() {
 
       <Tabs defaultValue="notifications" className="space-y-6">
         <TabsList className="h-auto flex-wrap justify-start rounded-2xl bg-white p-2 shadow-sm border border-gray-100">
+          <TabsTrigger value="security" className="rounded-xl px-4 py-2.5 font-bold">Security</TabsTrigger>
           <TabsTrigger data-help-id="settings-tab-notifications" value="notifications" className="rounded-xl px-4 py-2.5 font-bold">
             <BellRing className="mr-2 h-4 w-4" />
             Notifications
@@ -484,6 +486,7 @@ export default function SettingsPage() {
           ) : null}
         </TabsList>
 
+        <TabsContent value="security"><SecuritySessions /></TabsContent>
         <TabsContent value="notifications" className="space-y-6">
           <Card data-help-id="settings-notifications" className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
             <CardHeader>

@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { InspectUserDialog } from "@/components/InspectUserDialog"
 
 type UserFormInitialData = NonNullable<ComponentProps<typeof UserForm>["initialData"]>
 
@@ -194,6 +195,7 @@ export default function Users() {
         priority: "Medium",
     })
     const [userFormPrefill, setUserFormPrefill] = useState<UserFormInitialData | null>(null)
+    const [inspectionTarget, setInspectionTarget] = useState<User | null>(null)
     const [approvalDecisionOpen, setApprovalDecisionOpen] = useState(false)
     const [selectedApproval, setSelectedApproval] = useState<AccessApprovalQueueItem | null>(null)
     const [approvalDecision, setApprovalDecision] = useState<"Approved" | "Rejected">("Approved")
@@ -2361,6 +2363,7 @@ export default function Users() {
                     </div>
                 ) : (
                     <>
+                        {inspectionTarget && <InspectUserDialog key={inspectionTarget._id} target={inspectionTarget} onClose={() => setInspectionTarget(null)} />}
                         <DataTable 
                             exportTitle="System Users Report"
                             data={governanceFilter ? filteredData : tableData}
@@ -2371,6 +2374,7 @@ export default function Users() {
                                 onToggleStatus: handleToggleStatus,
                                 onSendSetupLink: handleSendSetupLink,
                                 onViewAudit: setAuditUser,
+                                onInspect: user?.role === 'SuperAdmin' ? setInspectionTarget : undefined,
                                 canManageUser,
                             }} 
                             sorting={sorting}

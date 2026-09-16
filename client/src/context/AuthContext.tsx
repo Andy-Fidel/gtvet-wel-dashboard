@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { AUTH_CONTEXT_KEY, endInspection, INSPECTION_KEY } from '@/lib/inspection';
 
 interface User {
   _id: string;
@@ -11,6 +12,7 @@ interface User {
   status: string;
   institution: string;
   phone?: string;
+  inspection?: { readOnly: true; actorName: string; expiresAt: string };
   region?: string;
   hqScopeType?: 'National' | 'Region' | 'Institution';
   profilePicture?: string;
@@ -65,7 +67,7 @@ interface AuthContextType {
     syncedAt?: string | null;
     lastError?: string | null;
   }>;
-  login: (email: string, password: string) => Promise<{ passwordChangeRequired: boolean }>;
+  login: (email: string, password: string, mfaCode?: string) => Promise<{ passwordChangeRequired: boolean }>;
   register: (data: RegisterData) => Promise<void>;
   logout: () => Promise<void>;
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
@@ -210,8 +212,8 @@ const isQueueableMutation = (url: string, options: RequestInit = {}) => {
   return typeof options.body === 'string';
 };
 
-const getOfflineScopeForUser = (sessionUser?: Pick<User, '_id'> | null) => (
-  sessionUser?._id ? `user:${sessionUser._id}` : null
+const getOfflineScopeForUser = (sessionUser?: Pick<User, '_id' | 'inspection'> | null) => (
+  sessionUser?._id && !sessionUser.inspection ? `user:${sessionUser._id}` : null
 );
 
 const mapOfflineQueueState = (queue: OfflineMutation[]) => (
@@ -334,6 +336,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearLegacyOfflineStorage();
   }, []);
 
+  useEffect(() => {
+    const changed = (event: StorageEvent) => { if (event.key === AUTH_CONTEXT_KEY) window.location.reload(); };
+    window.addEventListener('storage', changed);
+    return () => window.removeEventListener('storage', changed);
+  }, []);
+
   // Load user from session cookie on mount (skipped during login to avoid race conditions)
   useEffect(() => {
     if (isLoggingInRef.current) return;
@@ -365,7 +373,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { isMounted = false; };
   }, [activateOfflineScope, loadOfflineState]);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string, mfaCode?: string) => {
     const csrfToken = await ensureCsrfToken();
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
@@ -374,7 +382,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
       },
       credentials: 'include',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, mfaCode }),
     });
 
     if (!res.ok) {
@@ -439,6 +447,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [activateOfflineScope, ensureCsrfToken]);
 
   const logout = useCallback(async () => {
+    if (user?.inspection || localStorage.getItem(INSPECTION_KEY) === 'true') {
+      await endInspection();
+      return;
+    }
     const csrfToken = await ensureCsrfToken();
 
     if ('serviceWorker' in navigator && 'PushManager' in window) {
@@ -474,10 +486,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOfflineSyncHistory([]);
     setPasswordChangeRequired(false);
     setIsLoading(false);
-  }, [ensureCsrfToken, queryClient]);
+  }, [ensureCsrfToken, queryClient, user?.inspection]);
 
   const syncOfflineQueue = useCallback(async () => {
-    if (!user || typeof window === 'undefined' || !window.navigator.onLine || syncInFlightRef.current) {
+    if (!user || user.inspection || localStorage.getItem(INSPECTION_KEY) === 'true' || typeof window === 'undefined' || !window.navigator.onLine || syncInFlightRef.current) {
       return;
     }
 
@@ -503,6 +515,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           method: request.method,
           headers: {
             ...request.headers,
+            'X-Session-User': user._id,
             ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
           },
           credentials: 'include',
@@ -592,12 +605,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     const method = (options.method || 'GET').toUpperCase();
+    if ((user?.inspection || localStorage.getItem(INSPECTION_KEY) === 'true') && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      return new Response(JSON.stringify({ message: 'Inspection mode is read-only. Return to Super Admin to make changes.' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+    }
     const isFormData = options.body instanceof FormData;
     const csrfToken = !['GET', 'HEAD', 'OPTIONS'].includes(method) ? await ensureCsrfToken() : null;
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
       ...options.headers,
+      ...(user?._id ? { 'X-Session-User': user._id } : {}),
     };
 
     try {
@@ -617,10 +634,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setOfflineQueueCount(0);
         setOfflineSyncHistory([]);
       }
+      if (response.status === 409) {
+        const payload = await response.clone().json().catch(() => ({}));
+        if (payload.code === 'SESSION_CONTEXT_CHANGED') window.location.reload();
+      }
 
       return response;
     } catch (error) {
-      if (isQueueableMutation(url, options)) {
+      if (!user?.inspection && localStorage.getItem(INSPECTION_KEY) !== 'true' && isQueueableMutation(url, options)) {
         const activeScope = getActiveOfflineScope();
         if (!activeScope) {
           throw error;
@@ -660,7 +681,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       throw error;
     }
-  }, [ensureCsrfToken, queryClient]);
+  }, [ensureCsrfToken, queryClient, user]);
 
   const changePassword = useCallback(async (newPassword: string, currentPassword?: string) => {
     const res = await authFetch(`${API_BASE}/auth/change-password`, {

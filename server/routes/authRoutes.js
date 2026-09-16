@@ -6,8 +6,22 @@ import { User } from '../models/User.js';
 import { auth, JWT_SECRET, clearSessionCookies, issueCsrfToken, setSessionCookies } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { logAuditEvent } from '../utils/audit.js';
+import { createAuthSession } from '../utils/authSessions.js';
+import { AuthSession } from '../models/AuthSession.js';
+import securityRoutes from './securityRoutes.js';
+import { MfaCredential } from '../models/MfaCredential.js';
+import { consumeMfaCode } from '../utils/mfa.js';
+import inspectionRoutes from './inspectionRoutes.js';
 
 const router = express.Router();
+router.use('/inspection', inspectionRoutes);
+router.use('/security', securityRoutes);
+
+async function issueSession(user, req, res, mfaVerified = false) {
+  const session = await createAuthSession(user, req, mfaVerified);
+  const token = jwt.sign({ userId: user._id, sid: String(session._id) }, JWT_SECRET, { expiresIn: '7d', algorithm: 'HS256' });
+  setSessionCookies(res, token);
+}
 
 router.get('/csrf', (req, res) => {
   res.set('Cache-Control', 'no-store, max-age=0');
@@ -51,9 +65,7 @@ router.post('/register', auth, (req, res, next) => {
       after: newUser,
     });
 
-    // Generate token
-    const token = jwt.sign({ userId: newUser._id }, JWT_SECRET, { expiresIn: '7d' });
-    setSessionCookies(res, token);
+    // Creating an account must not replace the administrator's own session.
 
     const populatedUser = await User.findById(newUser._id)
       .populate('partnerId')
@@ -72,7 +84,7 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email })
+    const user = await User.findOne({ email }).select('+sessionVersion')
       .populate('partnerId')
       .populate('linkedLearners', 'name trackingId');
     if (!user) {
@@ -135,11 +147,14 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    setSessionCookies(res, token);
-
+    const mfa = await MfaCredential.exists({ userId: user._id, enabled: true });
+    if (mfa && !(await consumeMfaCode(user._id, req.body.mfaCode))) {
+      await logAuditEvent({ req, actor: user, action: 'AUTH', entityType: 'AuthSession', entityId: user._id, summary: 'MFA verification failed', metadata: { outcome: 'FAILED' } });
+      return res.status(401).json({ message: 'Enter a valid authenticator or recovery code. After repeated failures, wait 10 minutes.' });
+    }
     user.lastLoginAt = new Date();
     await user.save();
+    await issueSession(user, req, res, Boolean(mfa));
 
     await logAuditEvent({
       req,
@@ -167,10 +182,15 @@ router.get('/me', auth, async (req, res) => {
     .populate('partnerId')
     .populate('linkedLearners', 'name trackingId');
   if (!user) return res.status(404).json({ message: 'User not found' });
-  res.json(user.toJSON());
+  res.set('Cache-Control', 'no-store').json({ ...user.toJSON(), ...(req.inspectionActor ? {
+    passwordChangeRequired: false,
+    inspection: { readOnly: true, actorName: req.inspectionActor.name, expiresAt: req.authSession.expiresAt },
+  } : {}) });
 });
 
-router.post('/logout', (req, res) => {
+router.post('/logout', auth, async (req, res) => {
+  await AuthSession.updateOne({ _id: req.authSession._id }, { $set: { revokedAt: new Date(), reason: 'Logout' } });
+  await logAuditEvent({ req, action: 'AUTH', entityType: 'AuthSession', entityId: req.authSession._id, summary: 'Logged out; session revoked' });
   clearSessionCookies(res);
   res.json({ message: 'Logged out successfully' });
 });
@@ -184,7 +204,7 @@ router.post('/change-password', auth, async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     }
 
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.user._id).select('+sessionVersion');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -206,6 +226,9 @@ router.post('/change-password', auth, async (req, res) => {
       user.inviteAcceptedAt = new Date();
     }
     await user.save();
+
+    await AuthSession.updateMany({ userId: user._id, revokedAt: null }, { $set: { revokedAt: new Date(), reason: 'Password changed' } });
+    await issueSession(user, req, res, req.authSession.mfaVerified);
 
     await logAuditEvent({
       req,

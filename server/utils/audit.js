@@ -6,6 +6,11 @@ const SENSITIVE_KEYS = new Set([
   'resetPasswordExpires',
   'defaultPassword',
   '__v',
+  'credentialVersion',
+  'secret',
+  'recoveryHashes',
+  'recoveryCodes',
+  'mfaCode',
 ]);
 
 function isPlainObject(value) {
@@ -51,7 +56,7 @@ export async function logAuditEvent({
   changedFields = null,
 }) {
   try {
-    const currentActor = actor || req?.user;
+    const currentActor = req?.inspectionActor || actor || req?.user;
 
     const cleanBefore = before ? sanitize(before) : undefined;
     const cleanAfter = after ? sanitize(after) : undefined;

@@ -9,7 +9,7 @@ import cluster from 'node:cluster';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { csrfProtection } from './middleware/auth.js';
+import { csrfProtection, inspectionReadOnlyGuard } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -110,7 +110,7 @@ const createApp = () => {
       originCallback(new Error('Not allowed by CORS'));
       },
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Session-User'],
       credentials: true,
       optionsSuccessStatus: 200
     });
@@ -134,6 +134,7 @@ const createApp = () => {
   app.use(mongoSanitizeMiddleware);
 
   app.use(csrfProtection);
+  app.use(inspectionReadOnlyGuard);
 
   // Global Rate Limiting
   const globalLimiter = rateLimit({
@@ -189,11 +190,15 @@ import authRoutes from './routes/authRoutes.js';
 import apiRoutes from './routes/api.js';
 import uploadRoutes from './routes/uploads.js';
 import idmsRoutes from './routes/idmsRoutes.js';
+import { AuthSession } from './models/AuthSession.js';
+import { MfaCredential } from './models/MfaCredential.js';
 
 const startWorker = async () => {
   const app = createApp();
   try {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/gtvet-wel');
+    // MFA enrollment requires a unique credential per account; TTL cleanup is secondary.
+    await Promise.all([AuthSession.init(), MfaCredential.init()]);
     console.log(`MongoDB connected (worker ${process.pid})`);
   } catch (err) {
     console.error(`MongoDB connection error (worker ${process.pid}):`, err);

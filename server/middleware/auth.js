@@ -1,7 +1,11 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { LRUCache } from 'lru-cache';
 import { User } from '../models/User.js';
+import { AuthSession } from '../models/AuthSession.js';
+import { credentialVersion } from '../utils/authSessions.js';
+import { MfaCredential } from '../models/MfaCredential.js';
+import { inspectionParent } from '../utils/inspection.js';
+import { inspectionContext } from '../utils/inspectionContext.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
@@ -14,8 +18,6 @@ if (!process.env.JWT_SECRET) {
   console.warn(`Security warning: ${message}`);
 }
 
-const authCache = new LRUCache({ max: 500, ttl: 1000 * 30 }); // 30 second TTL
-
 // Verify JWT token and attach user to request
 export const auth = async (req, res, next) => {
   try {
@@ -23,25 +25,42 @@ export const auth = async (req, res, next) => {
     if (!token) {
       return res.status(401).json({ message: 'No token provided' });
     }
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
     const userId = decoded.userId;
-    
-    let user = authCache.get(userId);
-    if (!user) {
-      user = await User.findById(userId)
-        .populate('partnerId')
-        .populate('linkedLearners', 'name trackingId institution');
-        
-      if (user) {
-        authCache.set(userId, user);
-      }
+    if (typeof decoded.sid !== 'string' || !/^[a-f\d]{24}$/i.test(decoded.sid)) {
+      return res.status(401).json({ message: 'Please sign in again to establish a secure session.' });
     }
+    const [user, session, mfa] = await Promise.all([
+      User.findById(userId).select('+sessionVersion')
+        .populate('partnerId')
+        .populate('linkedLearners', 'name trackingId institution'),
+      AuthSession.findOne({ _id: decoded.sid, userId, revokedAt: null, expiresAt: { $gt: new Date() } }).select('+credentialVersion'),
+      MfaCredential.exists({ userId, enabled: true }),
+    ]);
     
-    if (!user || user.status !== 'Active') {
+    if (!user || user.status !== 'Active' || !session || (mfa && !session.mfaVerified && !session.parentSessionId) || session.credentialVersion !== credentialVersion(user)) {
       return res.status(401).json({ message: 'Invalid token or inactive user' });
     }
 
+    if (session.parentSessionId) {
+      const parent = await inspectionParent(session.parentSessionId, session.inspectorId);
+      if (!parent) return res.status(401).json({ message: 'Inspection authorization has ended.' });
+      req.inspectionActor = parent.user;
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.originalUrl?.startsWith('/api/auth/security')) {
+        return res.status(403).json({ message: 'Inspection mode is read-only. Return to Super Admin to make changes.' });
+      }
+    }
+    if (req.headers['x-session-user'] && req.headers['x-session-user'] !== String(user._id)) {
+      return res.status(409).json({ code: 'SESSION_CONTEXT_CHANGED', message: 'Your session changed in another tab. Reload this page.' });
+    }
+
     req.user = user;
+    req.authSession = session;
+    // Throttle bookkeeping only; revocation and permissions are checked on every request.
+    if (Date.now() - new Date(session.lastSeenAt).getTime() > 60000) {
+      await AuthSession.updateOne({ _id: session._id, revokedAt: null }, { $set: { lastSeenAt: new Date() } });
+    }
+    if (req.inspectionActor) return inspectionContext.run(true, next);
     next();
   } catch (error) {
     return res.status(401).json({ message: 'Token verification failed' });
@@ -59,6 +78,17 @@ export const requireRole = (...roles) => {
 };
 
 export { JWT_SECRET };
+
+// Also covers unauthenticated mutation routes (password reset/login) while inspecting.
+export const inspectionReadOnlyGuard = (req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.path === '/api/auth/inspection/stop') return next();
+  try {
+    const token = getRequestToken(req);
+    const decoded = token && jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'], ignoreExpiration: true });
+    if (decoded?.inspection === true) return res.status(403).json({ message: 'Inspection mode is read-only. Return to Super Admin first.' });
+  } catch { /* Normal authentication handles missing or invalid tokens. */ }
+  next();
+};
 
 const SESSION_COOKIE_NAME = 'gtvets_session';
 const CSRF_COOKIE_NAME = 'gtvets_csrf';
