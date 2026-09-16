@@ -23,7 +23,7 @@ interface LearnerResult {
 interface PlacementResult {
   _id: string
   companyName: string
-  address: string
+  location: string
 }
 
 interface InstitutionResult {
@@ -91,6 +91,8 @@ export function Search() {
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<SearchResults>({ learners: [], placements: [], institutions: [] })
   const [loading, setLoading] = useState(false)
+  const [searchError, setSearchError] = useState("")
+  const [resolvedQuery, setResolvedQuery] = useState("")
   const [open, setOpen] = useState(false)
   const [selectedInstitution, setSelectedInstitution] = useState<InstitutionResult | null>(null)
   const [institutionSummary, setInstitutionSummary] = useState<InstitutionSummaryResponse | null>(null)
@@ -119,26 +121,27 @@ export function Search() {
     const requestId = ++searchRequestIdRef.current
 
     const timer = setTimeout(async () => {
-      if (query.length >= 2) {
+      if (query.trim().length >= 2) {
         setLoading(true)
         try {
-          const response = await authFetch(`/api/search?q=${encodeURIComponent(query)}`, {
+          const response = await authFetch(`/api/search?q=${encodeURIComponent(query.trim())}`, {
             signal: controller.signal,
           })
           if (!response.ok) {
             throw new Error("Search failed")
           }
           const data = await response.json()
-          if (searchRequestIdRef.current === requestId) {
+          if (!controller.signal.aborted && searchRequestIdRef.current === requestId) {
             setResults(data)
-            setOpen(true)
+            setResolvedQuery(query.trim())
           }
         } catch (error) {
-          if (!(error instanceof DOMException && error.name === "AbortError")) {
+          if (!controller.signal.aborted && searchRequestIdRef.current === requestId) {
+            setSearchError("Unable to search right now. Please change your search to try again.")
             console.error("Search error:", error)
           }
         } finally {
-          if (searchRequestIdRef.current === requestId) {
+          if (!controller.signal.aborted && searchRequestIdRef.current === requestId) {
             setLoading(false)
           }
         }
@@ -240,7 +243,7 @@ export function Search() {
     const trimmedQuery = query.trim()
     if (trimmedQuery.length < 2) return
 
-    if (results.learners.length === 1) {
+    if (!loading && !searchError && resolvedQuery === trimmedQuery && results.learners.length === 1) {
       handleSelect("learner", results.learners[0]._id)
       return
     }
@@ -262,15 +265,26 @@ export function Search() {
             placeholder={isInstitutionPortal ? "Search learners by name, tracking ID, or index number..." : "Search learners, institutions..."}
             className="pl-11 h-12 bg-gray-50/50 border-gray-200 rounded-2xl focus:bg-white transition-all text-sm text-gray-900"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => query.length >= 2 && setOpen(true)}
+            aria-label={isInstitutionPortal ? "Search institution learners" : "Search"}
+            maxLength={100}
+            onChange={(e) => {
+              searchRequestIdRef.current += 1
+              setQuery(e.target.value)
+              setResults({ learners: [], placements: [], institutions: [] })
+              setResolvedQuery("")
+              setSearchError("")
+              setLoading(e.target.value.trim().length >= 2)
+              setOpen(e.target.value.trim().length >= 2)
+            }}
+            onFocus={() => query.trim().length >= 2 && setOpen(true)}
+            onKeyDown={(event) => { if (event.key === "Escape") setOpen(false) }}
           />
           {loading && (
             <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-gray-400" />
           )}
         </form>
 
-        {open && hasResults && (
+        {open && !loading && !searchError && resolvedQuery === query.trim() && hasResults && (
           <div className="absolute top-full left-0 right-0 mt-2 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-200">
             <div className="max-h-[400px] overflow-y-auto p-2">
               {results.learners.length > 0 && (
@@ -320,7 +334,7 @@ export function Search() {
                       </div>
                       <div>
                         <div className="text-sm font-bold text-gray-900">{placement.companyName}</div>
-                        <div className="text-[10px] text-gray-500">{placement.address}</div>
+                        <div className="text-[10px] text-gray-500">{placement.location}</div>
                       </div>
                     </button>
                   ))}
@@ -351,7 +365,13 @@ export function Search() {
           </div>
         )}
 
-        {open && !loading && !hasResults && query.length >= 2 && (
+        {open && (loading || searchError) && (
+          <div role="status" className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-100 rounded-3xl shadow-2xl p-6 text-sm text-gray-600 z-50">
+            {loading ? "Searching…" : searchError}
+          </div>
+        )}
+
+        {open && !loading && !searchError && !hasResults && resolvedQuery === query.trim() && query.trim().length >= 2 && (
           <div className="absolute top-full left-0 right-0 mt-2 bg-white/80 backdrop-blur-xl border border-white/20 rounded-3xl shadow-2xl p-8 text-center z-50">
             <div className="text-sm font-bold text-gray-900">No results found</div>
             <div className="text-xs text-gray-500 mt-1">Try searching for something else</div>

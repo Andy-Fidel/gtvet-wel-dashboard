@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
 import { Learner } from '../models/Learner.js';
 import { Placement } from '../models/Placement.js';
+import { learnerSearchFilter } from '../utils/learnerSearch.js';
 import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
 import { MonitoringVisit } from '../models/MonitoringVisit.js';
@@ -5317,7 +5318,11 @@ router.get('/dashboard/map-data', async (req, res) => {
 
 router.get('/search', async (req, res) => {
     try {
+        if (!['Admin', 'Manager', 'Staff', 'SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin'].includes(req.user.role)) return res.status(403).json({ message: 'Search is not available for this portal.' });
+        const institutionPortal = ['Admin', 'Manager', 'Staff'].includes(req.user.role);
+        if (institutionPortal && !req.user.institution) return res.status(403).json({ message: 'An institution is required to search.' });
         const rawQuery = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+        if (rawQuery.length > 100) return res.status(400).json({ message: 'Search must be 100 characters or fewer.' });
         if (!rawQuery || rawQuery.length < 2) {
             return res.json({ learners: [], placements: [], institutions: [] });
         }
@@ -5331,19 +5336,15 @@ router.get('/search', async (req, res) => {
 
         // Search Learners
         const learners = await Learner.find({
-            ...filter,
-            $or: [
-                { name: searchRegex },
-                { trackingId: searchRegex },
-                { indexNumber: searchRegex }
-            ]
-        }).limit(5).select('name trackingId indexNumber');
+            $and: [filter, learnerSearchFilter(rawQuery)],
+        }).sort({ lastName: 1, firstName: 1, _id: 1 }).limit(5).select('firstName middleName lastName name trackingId indexNumber').lean();
 
         // Search Placements (distinct companies or individual placements)
-        const placements = await Placement.find({
+        const placements = institutionPortal ? [] : await Placement.find({
             ...filter,
+            archivedAt: null,
             companyName: searchRegex
-        }).limit(5).select('companyName address');
+        }).limit(5).select('companyName location');
 
         // Search Institutions (SuperAdmin only)
         let institutions = [];
@@ -5359,7 +5360,7 @@ router.get('/search', async (req, res) => {
         }
 
         res.json({
-            learners,
+            learners: learners.map(learner => ({ ...learner, name: buildLearnerDisplayName(learner) || learner.name || 'Learner' })),
             placements,
             institutions
         });
@@ -6818,15 +6819,7 @@ router.get('/learners', async (req, res) => {
     if (search) {
       const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (escapedSearch) {
-        const searchRegex = new RegExp(escapedSearch, 'i');
-        query.$or = [
-          { firstName: searchRegex },
-          { lastName: searchRegex },
-          { middleName: searchRegex },
-          { trackingId: searchRegex },
-          { indexNumber: searchRegex },
-          { program: searchRegex },
-        ];
+        query.$and = [...(query.$and || []), learnerSearchFilter(search)];
       }
     }
 
