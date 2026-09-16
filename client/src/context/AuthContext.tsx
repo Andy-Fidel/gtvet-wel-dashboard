@@ -208,6 +208,7 @@ const isQueueableMutation = (url: string, options: RequestInit = {}) => {
   if (!url.startsWith('/api/')) return false;
   if (url.startsWith('/api/auth/')) return false;
   if (url.startsWith('/api/push/')) return false;
+  if (url.startsWith('/api/idms/')) return false;
   if (options.body instanceof FormData) return false;
   return typeof options.body === 'string';
 };

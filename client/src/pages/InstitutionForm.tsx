@@ -12,6 +12,7 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -34,6 +35,9 @@ const formSchema = z.object({
   status: z.enum(["Day", "Boarding"]),
   gender: z.enum(["Boys", "Girls", "Mixed"]),
   calendarType: z.enum(["Single Track", "Transitional"]),
+  idmsInstitutionId: z.string().trim().optional(),
+  idmsInstitutionName: z.string().trim().optional(),
+  idmsSyncEnabled: z.boolean(),
 })
 
 export type InstitutionFormValues = z.infer<typeof formSchema>
@@ -59,6 +63,9 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
       status: initialData?.status ?? "Day",
       gender: initialData?.gender ?? "Mixed",
       calendarType: initialData?.calendarType ?? "Single Track",
+      idmsInstitutionId: initialData?.idmsInstitutionId ?? "",
+      idmsInstitutionName: initialData?.idmsInstitutionName ?? "",
+      idmsSyncEnabled: initialData?.idmsSyncEnabled ?? false,
     },
   })
 
@@ -208,6 +215,40 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
                   <FormMessage />
                 </FormItem>
             )} />
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+          <div>
+            <p className="text-sm font-black text-sky-950">IDMS Learner Registry</p>
+            <p className="mt-1 text-xs text-sky-700">Map this institution to its permanent IDMS identifier before enabling learner synchronization.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <FormField control={form.control} name="idmsInstitutionId" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-gray-800">IDMS Institution ID</FormLabel>
+                <FormControl><Input placeholder="IDMS institution identifier" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+            <FormField control={form.control} name="idmsInstitutionName" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-gray-800">IDMS Institution Name</FormLabel>
+                <FormControl><Input placeholder="Name shown in IDMS" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+          </div>
+          <FormField control={form.control} name="idmsSyncEnabled" render={({ field }) => (
+            <FormItem className="flex items-start gap-3 rounded-xl border border-sky-200 bg-white p-3">
+              <FormControl>
+                <Checkbox checked={field.value} onCheckedChange={(checked) => field.onChange(checked === true)} />
+              </FormControl>
+              <div>
+                <FormLabel className="text-sm font-bold text-gray-900">Enable IDMS learner synchronization</FormLabel>
+                <p className="mt-1 text-xs text-gray-500">Institution administrators will be able to preview and import IDMS learner changes.</p>
+              </div>
+            </FormItem>
+          )} />
         </div>
 
         <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm mt-2">

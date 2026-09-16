@@ -79,12 +79,12 @@ Optional GTVET-IDMS integration vars:
 
 ```bash
 IDMS_API_BASE=https://gtvet-idms-api-8466d2bbdaf1.herokuapp.com
+IDMS_SYNC_ENABLED=false
 IDMS_API_TOKEN=
-IDMS_ALLOWED_PATH_PREFIXES=/
 IDMS_REQUEST_TIMEOUT_MS=15000
 ```
 
-Authenticated Admin, RegionalAdmin, and SuperAdmin users can check the IDMS connection through `GET /api/idms/status`. A controlled proxy is mounted under `/api/idms/*`; restrict `IDMS_ALLOWED_PATH_PREFIXES` if you only want to expose selected IDMS modules.
+Set an institution's IDMS identifier and enable synchronization from the institution editor before changing `IDMS_SYNC_ENABLED` to `true`. Institution Admin and Manager users can check authenticated connectivity through `GET /api/idms/status?academicYear=YYYY/YYYY`, preview changes through `GET /api/idms/learner-sync/preview`, and apply a reviewed import through `POST /api/idms/learner-sync`. The service credential remains server-side and requires read-only access to IDMS M7 learner and statistics endpoints.
 
 Deploy with the Blueprint:
 

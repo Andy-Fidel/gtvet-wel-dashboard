@@ -34,6 +34,9 @@ export type Learner = {
   graduationAcademicYear?: string
   graduatedAt?: string
   academicStatus?: "Active" | "Graduating" | "Graduated" | "Dropped"
+  idmsLearnerId?: string
+  recordSource?: "Manual" | "CSV" | "IDMS"
+  lastIdmsSyncAt?: string
   status: "Pending" | "Placed" | "Completed" | "Dropped"
   readiness?: {
     isReadyForPlacement: boolean
@@ -57,6 +60,14 @@ export const columns: ColumnDef<Learner>[] = [
           </Button>
         )
     },
+    cell: ({ row }) => (
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-gray-900">{row.original.name}</span>
+        {row.original.recordSource === "IDMS" ? (
+          <Badge className="border border-sky-200 bg-sky-50 text-sky-700">IDMS</Badge>
+        ) : null}
+      </div>
+    ),
   },
   {
     accessorKey: "trackingId",

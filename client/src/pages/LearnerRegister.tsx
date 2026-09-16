@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from "react"
 import { type Learner, columns } from "./learners/columns"
 import { DataTable } from "@/components/ui/data-table"
 import { Button } from "@/components/ui/button"
-import { Plus, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Users, GraduationCap, BookOpen, Search, X, ArrowUpRight, Building2 } from "lucide-react"
+import { Plus, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Users, GraduationCap, BookOpen, Search, X, ArrowUpRight, Building2, Database, RefreshCw, Loader2 } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -33,6 +33,44 @@ const LEARNER_DISTRIBUTION_COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444",
 
 type RegionalSection = "overview" | "exceptions" | "records"
 type DistributionItem = { name: string; value: number }
+
+type IdmsSyncStatus = {
+  enabled: boolean
+  credentialConfigured: boolean
+  institutionMapped: boolean
+  institutionEnabled: boolean
+  connected: boolean
+  lastSyncAt?: string | null
+  lastSyncAcademicYear?: string
+  message?: string
+}
+
+type IdmsSyncPreview = {
+  academicYear: string
+  institution: string
+  total: number
+  summary: {
+    new: number
+    updated: number
+    unchanged: number
+    conflict: number
+    invalid: number
+  }
+  conflicts: Array<{
+    type: "conflict" | "invalid"
+    idmsLearnerId: string
+    indexNumber: string
+    name: string
+    errors: string[]
+  }>
+  syncedAt?: string
+}
+
+const currentAcademicYear = () => {
+  const now = new Date()
+  const startYear = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1
+  return `${startYear}/${startYear + 1}`
+}
 
 type LearnerRegisterResponse = {
   items: Learner[]
@@ -79,6 +117,11 @@ export default function LearnerRegister() {
   const [csvResult, setCsvResult] = useState<{ created: number; errors: { row: number; message: string }[] } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [viewingLearner, setViewingLearner] = useState<Learner | null>(null)
+  const [idmsOpen, setIdmsOpen] = useState(false)
+  const [idmsBusy, setIdmsBusy] = useState(false)
+  const [idmsStatus, setIdmsStatus] = useState<IdmsSyncStatus | null>(null)
+  const [idmsPreview, setIdmsPreview] = useState<IdmsSyncPreview | null>(null)
+  const [idmsAcademicYear, setIdmsAcademicYear] = useState(currentAcademicYear)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { authFetch, user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -92,6 +135,11 @@ export default function LearnerRegister() {
   const requestedView = searchParams.get("view")
   const regionalSection: RegionalSection = requestedView === "exceptions" || requestedView === "records" ? requestedView : "overview"
   const effectivePageSize = isRegionalOversight && regionalSection === "exceptions" ? 10 : pageSize
+  const canSyncIdms = user?.role === "Admin" || user?.role === "Manager"
+  const idmsAcademicYearOptions = Array.from({ length: 4 }, (_, index) => {
+    const startYear = Number(idmsAcademicYear.slice(0, 4)) - index
+    return `${startYear}/${startYear + 1}`
+  })
 
   // Debounced search — URL-synced
   const learnerSearchFilter = searchParams.get("search") || ""
@@ -161,6 +209,28 @@ export default function LearnerRegister() {
   useEffect(() => {
     setPage(1)
   }, [academicStatusFilter, intakeYearFilter, programFilter, yearFilter, welStatusFilter, institutionFilter, debouncedSearch])
+
+  useEffect(() => {
+    if (!canSyncIdms) return
+    let active = true
+    authFetch(`/api/idms/status?academicYear=${encodeURIComponent(idmsAcademicYear)}`)
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({})) as IdmsSyncStatus
+        if (!response.ok) throw new Error(payload.message || "Unable to check IDMS connection")
+        if (active) setIdmsStatus(payload)
+      })
+      .catch((error) => {
+        if (active) setIdmsStatus({
+          enabled: false,
+          credentialConfigured: false,
+          institutionMapped: false,
+          institutionEnabled: false,
+          connected: false,
+          message: error instanceof Error ? error.message : "Unable to check IDMS connection",
+        })
+      })
+    return () => { active = false }
+  }, [authFetch, canSyncIdms, idmsAcademicYear])
 
   const intakeYearOptions = [...availableIntakeYears]
   if (intakeYearFilter && !intakeYearOptions.includes(intakeYearFilter)) {
@@ -295,6 +365,52 @@ export default function LearnerRegister() {
     }
   }
 
+  const previewIdmsSync = async () => {
+    setIdmsBusy(true)
+    setIdmsPreview(null)
+    try {
+      const response = await authFetch(`/api/idms/learner-sync/preview?academicYear=${encodeURIComponent(idmsAcademicYear)}`)
+      const payload = await response.json().catch(() => ({})) as IdmsSyncPreview & { message?: string }
+      if (!response.ok) throw new Error(payload.message || "Unable to preview IDMS learners")
+      setIdmsPreview(payload)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to preview IDMS learners")
+    } finally {
+      setIdmsBusy(false)
+    }
+  }
+
+  const openIdmsSync = () => {
+    setIdmsOpen(true)
+    setIdmsPreview(null)
+    if (idmsStatus?.connected) void previewIdmsSync()
+  }
+
+  const applyIdmsSync = async () => {
+    setIdmsBusy(true)
+    try {
+      const response = await authFetch('/api/idms/learner-sync', {
+        method: 'POST',
+        body: JSON.stringify({ academicYear: idmsAcademicYear }),
+      })
+      const payload = await response.json().catch(() => ({})) as IdmsSyncPreview & { message?: string }
+      if (!response.ok) throw new Error(payload.message || "IDMS learner synchronization failed")
+      setIdmsPreview(payload)
+      setRefreshKey((value) => value + 1)
+      setIdmsStatus((status) => status ? {
+        ...status,
+        connected: true,
+        lastSyncAt: payload.syncedAt || new Date().toISOString(),
+        lastSyncAcademicYear: idmsAcademicYear,
+      } : status)
+      toast.success(`${payload.summary.new} learner(s) added and ${payload.summary.updated} updated from IDMS`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "IDMS learner synchronization failed")
+    } finally {
+      setIdmsBusy(false)
+    }
+  }
+
   const lifecycleStats = [
     { label: "Year 1", value: lifecycleSummary.year1, Icon: BookOpen, detail: "Learners in this stage" },
     { label: "Year 2", value: lifecycleSummary.year2, Icon: BookOpen, detail: "Learners in this stage" },
@@ -378,6 +494,17 @@ export default function LearnerRegister() {
                >
                  <Upload className="mr-2 h-5 w-5" /> CSV Upload
                </Button>
+               {canSyncIdms ? (
+                 <Button
+                   onClick={openIdmsSync}
+                   variant="outline"
+                   className="font-black h-12 px-6 rounded-2xl border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100"
+                 >
+                   <Database className="mr-2 h-5 w-5" />
+                   Sync from IDMS
+                   <span className={`ml-2 h-2.5 w-2.5 rounded-full ${idmsStatus?.connected ? "bg-emerald-500" : "bg-gray-300"}`} aria-label={idmsStatus?.connected ? "IDMS connected" : "IDMS not connected"} />
+                 </Button>
+               ) : null}
                <Button onClick={() => { setEditingLearner(null); setOpen(true); }} className="w-full sm:w-auto bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-8 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
                  <Plus className="mr-3 h-5 w-5" /> Add Learner
                </Button>
@@ -398,6 +525,94 @@ export default function LearnerRegister() {
                   <LearnerForm onSuccess={handleSuccess} initialData={editingLearner} />
                 </div>
               </DialogContent>
+           </Dialog>
+
+           <Dialog open={idmsOpen && canSyncIdms} onOpenChange={setIdmsOpen}>
+             <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh]">
+               <DialogHeader>
+                 <DialogTitle className="flex items-center gap-2">
+                   <Database className="h-5 w-5 text-sky-600" />
+                   Synchronize Learners from IDMS
+                 </DialogTitle>
+                 <DialogDescription>
+                   Preview IDMS changes before adding or updating learner records. WEL placement information will be preserved.
+                 </DialogDescription>
+               </DialogHeader>
+
+               <div className="space-y-5">
+                 <div className="grid gap-4 sm:grid-cols-[220px_1fr]">
+                   <div>
+                     <label className="mb-2 block text-xs font-black uppercase tracking-wider text-gray-500">Academic Year</label>
+                     <Select value={idmsAcademicYear} onValueChange={(value) => { setIdmsAcademicYear(value); setIdmsPreview(null) }}>
+                       <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                       <SelectContent>
+                         {idmsAcademicYearOptions.map((year) => <SelectItem key={year} value={year}>{year}</SelectItem>)}
+                       </SelectContent>
+                     </Select>
+                   </div>
+                   <div className={`rounded-2xl border p-4 ${idmsStatus?.connected ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+                     <p className={`text-sm font-black ${idmsStatus?.connected ? "text-emerald-800" : "text-amber-800"}`}>
+                       {idmsStatus?.connected ? "IDMS connection ready" : "IDMS connection requires configuration"}
+                     </p>
+                     <p className="mt-1 text-xs text-gray-600">
+                       {idmsStatus?.message || (idmsStatus?.connected
+                         ? `Institution mapping is active${idmsStatus.lastSyncAt ? ` · Last sync ${new Date(idmsStatus.lastSyncAt).toLocaleString()}` : ""}.`
+                         : "A Super Admin must map this institution and the server must have a valid read-only IDMS credential.")}
+                     </p>
+                   </div>
+                 </div>
+
+                 {idmsBusy ? (
+                   <div className="flex items-center justify-center gap-3 rounded-2xl border border-gray-200 py-12 text-sm font-bold text-gray-500">
+                     <Loader2 className="h-5 w-5 animate-spin" /> Contacting IDMS…
+                   </div>
+                 ) : idmsPreview ? (
+                   <>
+                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                       {([
+                         ["New", idmsPreview.summary.new, "text-emerald-700 bg-emerald-50 border-emerald-200"],
+                         ["Updated", idmsPreview.summary.updated, "text-sky-700 bg-sky-50 border-sky-200"],
+                         ["Unchanged", idmsPreview.summary.unchanged, "text-gray-700 bg-gray-50 border-gray-200"],
+                         ["Conflicts", idmsPreview.summary.conflict, "text-amber-700 bg-amber-50 border-amber-200"],
+                         ["Invalid", idmsPreview.summary.invalid, "text-rose-700 bg-rose-50 border-rose-200"],
+                       ] as const).map(([label, value, color]) => (
+                         <div key={label} className={`rounded-2xl border p-3 ${color}`}>
+                           <p className="text-xs font-black uppercase tracking-wider opacity-70">{label}</p>
+                           <p className="mt-2 text-2xl font-black">{value}</p>
+                         </div>
+                       ))}
+                     </div>
+                     {idmsPreview.conflicts.length > 0 ? (
+                       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                         <p className="flex items-center gap-2 text-sm font-black text-amber-900"><AlertTriangle className="h-4 w-4" /> Records requiring review</p>
+                         <div className="mt-3 max-h-44 space-y-2 overflow-y-auto">
+                           {idmsPreview.conflicts.map((item, index) => (
+                             <div key={`${item.idmsLearnerId}-${item.indexNumber}-${index}`} className="rounded-xl bg-white p-3 text-xs">
+                               <p className="font-bold text-gray-900">{item.name || "Unnamed learner"} · {item.indexNumber || "No index number"}</p>
+                               <p className="mt-1 text-amber-700">{item.errors.join(" · ")}</p>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     ) : null}
+                   </>
+                 ) : null}
+
+                 <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                   <Button variant="outline" onClick={() => setIdmsOpen(false)} disabled={idmsBusy}>Close</Button>
+                   <Button variant="outline" onClick={() => void previewIdmsSync()} disabled={idmsBusy || !idmsStatus?.connected}>
+                     <RefreshCw className="mr-2 h-4 w-4" /> Preview Changes
+                   </Button>
+                   <Button
+                     onClick={() => void applyIdmsSync()}
+                     disabled={idmsBusy || !idmsPreview || idmsPreview.summary.new + idmsPreview.summary.updated === 0}
+                     className="bg-sky-600 text-white hover:bg-sky-700"
+                   >
+                     <Database className="mr-2 h-4 w-4" /> Apply IDMS Sync
+                   </Button>
+                 </div>
+               </div>
+             </DialogContent>
            </Dialog>
 
            {/* CSV Upload Dialog */}

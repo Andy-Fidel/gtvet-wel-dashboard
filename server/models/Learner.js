@@ -12,6 +12,20 @@ const learnerSchema = new mongoose.Schema({
   guardianContact: String,
   indexNumber: { type: String, required: true },
   trackingId: { type: String, unique: true },
+  idmsLearnerId: { type: String, trim: true, default: '' },
+  idmsProgrammeId: { type: String, trim: true, default: '' },
+  idmsAcademicStatus: { type: String, trim: true, default: '' },
+  recordSource: {
+    type: String,
+    enum: ['Manual', 'CSV', 'IDMS'],
+    default: 'Manual',
+  },
+  idmsUpdatedAt: { type: Date },
+  lastIdmsSyncAt: { type: Date },
+  idmsSyncStatus: {
+    type: String,
+    enum: ['Linked', 'Conflict', 'Error'],
+  },
   institution: { type: String, required: true },
   program: { type: String, required: true },
   year: { type: String, required: true },
@@ -71,6 +85,15 @@ learnerSchema.index({ institution: 1, intakeAcademicYear: 1 });
 learnerSchema.index({ institution: 1, year: 1 });
 learnerSchema.index({ region: 1, intakeAcademicYear: 1 });
 learnerSchema.index({ region: 1, academicStatus: 1 });
+learnerSchema.index(
+  { idmsLearnerId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idmsLearnerId: { $type: 'string', $gt: '' } },
+    name: 'unique_idms_learner_id',
+  }
+);
+learnerSchema.index({ institution: 1, indexNumber: 1 });
 
 // Auto-generate trackingId before saving
 learnerSchema.pre('save', async function() {

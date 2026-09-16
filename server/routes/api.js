@@ -427,16 +427,19 @@ const runAutomaticLearnerProgression = async (user) => {
         institution: institutionName,
         year: 'Year 1',
         academicStatus: { $in: ['Active', 'Graduating'] },
+        idmsLearnerId: { $in: [null, ''] },
       }),
       Learner.find({
         institution: institutionName,
         year: 'Year 2',
         academicStatus: { $in: ['Active', 'Graduating'] },
+        idmsLearnerId: { $in: [null, ''] },
       }),
       Learner.find({
         institution: institutionName,
         year: 'Year 3',
         academicStatus: { $ne: 'Graduated' },
+        idmsLearnerId: { $in: [null, ''] },
       }),
     ]);
 
@@ -6837,7 +6840,7 @@ router.get('/learners', async (req, res) => {
       : 25;
 
     const learnersQuery = Learner.find(query)
-      .select('trackingId indexNumber name lastName firstName middleName gender dateOfBirth phone guardianContact program region year intakeAcademicYear graduationAcademicYear graduatedAt academicStatus status institution placement owner')
+      .select('trackingId indexNumber name lastName firstName middleName gender dateOfBirth phone guardianContact program region year intakeAcademicYear graduationAcademicYear graduatedAt academicStatus status institution placement owner idmsLearnerId idmsProgrammeId idmsAcademicStatus recordSource idmsUpdatedAt lastIdmsSyncAt idmsSyncStatus')
       .sort(status === 'Pending' ? { createdAt: 1 } : { createdAt: -1 });
 
     if (usePagination) {
@@ -7171,6 +7174,13 @@ router.post('/learners', async (req, res) => {
 
     const newLearner = new Learner({
       ...req.body,
+      idmsLearnerId: '',
+      idmsProgrammeId: '',
+      idmsAcademicStatus: '',
+      recordSource: 'Manual',
+      idmsUpdatedAt: undefined,
+      lastIdmsSyncAt: undefined,
+      idmsSyncStatus: undefined,
       dateOfBirth: req.body.dateOfBirth || null,
       intakeAcademicYear: academicYear,
       academicStatus: req.body.status === 'Dropped' ? 'Dropped' : (req.body.academicStatus || 'Active'),
@@ -7234,6 +7244,7 @@ router.post('/learners/bulk', async (req, res) => {
           intakeAcademicYear: row.intakeAcademicYear || row['Intake Academic Year'] || academicYear,
           institution: req.user.institution,
           region: region,
+          recordSource: 'CSV',
           status: 'Pending',
           academicStatus: 'Active',
           progressionHistory: [{
@@ -7307,6 +7318,8 @@ router.put('/learners/:id', async (req, res) => {
         }
 
         const payload = { ...req.body };
+        ['idmsLearnerId', 'idmsProgrammeId', 'idmsAcademicStatus', 'recordSource', 'idmsUpdatedAt', 'lastIdmsSyncAt', 'idmsSyncStatus']
+            .forEach((field) => delete payload[field]);
         if (payload.dateOfBirth === '') {
             payload.dateOfBirth = null;
         }
@@ -11150,8 +11163,8 @@ router.post('/institutions/import-csv', requireRole('SuperAdmin'), async (req, r
 router.put('/institutions/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
         const existingInstitution = await Institution.findById(req.params.id);
-        const { name, code, region, district, location, category, status, gender, calendarType, programs } = req.body;
-        const updatedInstitution = await Institution.findByIdAndUpdate(req.params.id, { name, code, region, district, location, category, status, gender, calendarType, programs }, { returnDocument: 'after' });
+        const { name, code, region, district, location, category, status, gender, calendarType, programs, idmsInstitutionId, idmsInstitutionName, idmsSyncEnabled } = req.body;
+        const updatedInstitution = await Institution.findByIdAndUpdate(req.params.id, { name, code, region, district, location, category, status, gender, calendarType, programs, idmsInstitutionId, idmsInstitutionName, idmsSyncEnabled }, { returnDocument: 'after', runValidators: true });
         if (updatedInstitution && existingInstitution) {
             await logAuditEvent({
                 req,
@@ -11165,6 +11178,9 @@ router.put('/institutions/:id', requireRole('SuperAdmin'), async (req, res) => {
         }
         res.json(updatedInstitution);
     } catch (error) {
+        if (error.code === 11000) {
+            return res.status(400).json({ message: 'Institution code, name, or IDMS mapping is already in use' });
+        }
         res.status(500).json({ message: 'Error updating institution' });
     }
 });

@@ -26,6 +26,20 @@ const institutionSchema = new mongoose.Schema({
     default: 'Single Track',
   },
   programs: [{ type: String }],
+  idmsInstitutionId: { type: String, trim: true, default: '' },
+  idmsInstitutionName: { type: String, trim: true, default: '' },
+  idmsSyncEnabled: { type: Boolean, default: false },
+  lastIdmsSyncAt: { type: Date },
+  lastIdmsSyncAcademicYear: { type: String, default: '' },
 }, { timestamps: true });
+
+institutionSchema.index(
+  { idmsInstitutionId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idmsInstitutionId: { $type: 'string', $gt: '' } },
+    name: 'unique_idms_institution_id',
+  }
+);
 
 export const Institution = mongoose.model('Institution', institutionSchema);

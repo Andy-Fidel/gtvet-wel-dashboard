@@ -1851,7 +1851,7 @@ export default function SuperAdminDashboard() {
             })()}
 
             {canManageSystem ? <Dialog open={instOpen} onOpenChange={setInstOpen}>
-                <DialogContent className="sm:max-w-[600px] rounded-[2rem] border-0 shadow-2xl p-0 overflow-hidden">
+                <DialogContent className="sm:max-w-[600px] max-h-[90vh] rounded-[2rem] border-0 shadow-2xl p-0 overflow-y-auto">
                     <div className="p-8">
                         <DialogHeader className="mb-6">
                             <div className="flex items-center gap-4">

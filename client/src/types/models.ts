@@ -18,6 +18,12 @@ export interface Learner {
   year?: string;
   status?: string;
   academicStatus?: string;
+  idmsLearnerId?: string;
+  idmsProgrammeId?: string;
+  idmsAcademicStatus?: string;
+  recordSource?: 'Manual' | 'CSV' | 'IDMS';
+  lastIdmsSyncAt?: string;
+  idmsSyncStatus?: 'Linked' | 'Conflict' | 'Error';
   region?: string;
   hasActivePlacement?: boolean;
   readiness?: {
@@ -103,6 +109,10 @@ export interface Institution {
   address?: string;
   contactEmail?: string;
   contactPhone?: string;
+  idmsInstitutionId?: string;
+  idmsInstitutionName?: string;
+  idmsSyncEnabled?: boolean;
+  lastIdmsSyncAt?: string;
 }
 
 /** Populated learner object in initialData (when the backend populates the reference) */
