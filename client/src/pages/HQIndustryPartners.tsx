@@ -1,3 +1,4 @@
+import { PartnerInsights } from '@/components/PartnerInsights'
 import { canApproveHQ } from '@/lib/rbac'
 import { useCallback, useEffect, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
@@ -174,6 +175,8 @@ export default function HQIndustryPartners() {
           <Plus className="mr-2 h-5 w-5" /> Register Partner
         </Button></div>}
       </div>
+
+      <PartnerInsights />
 
       <div className="grid gap-4 md:grid-cols-4">
         <Card className="rounded-[2rem] border-gray-100 shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Total</p><p className="text-3xl font-black text-gray-900 mt-1">{summary.total}</p></CardContent></Card>

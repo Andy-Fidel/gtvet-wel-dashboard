@@ -4695,6 +4695,51 @@ router.delete('/monitoring-visits/:id', async (req, res) => {
 
 // ==================== DASHBOARD STATS ====================
 
+// Aggregated HQ partner intelligence; all operational counts retain the user's scope.
+router.get('/hq/partner-insights', requireRole('SuperAdmin', 'HQManager', 'HQStaff'), async (req, res) => {
+  try {
+    if (isScopedHQRole(req.user.role) &&
+        ((req.user.hqScopeType === 'Region' && !req.user.region) ||
+         (req.user.hqScopeType === 'Institution' && !req.user.institution))) {
+      return res.status(403).json({ message: 'Your HQ scope is incomplete.' });
+    }
+    const partnerScope = await getHQPartnerFilter(req.user);
+    const operationalScope = await getFilter(req.user);
+    const countIf = expression => ({ $sum: { $cond: [expression, 1, 0] } });
+    const missing = field => ({ $eq: [{ $ifNull: [`$${field}`, ''] }, ''] });
+    const [partners, placements, requests] = await Promise.all([
+      IndustryPartner.aggregate([{ $match: partnerScope }, { $facet: {
+        summary: [{ $group: { _id: null, total: { $sum: 1 },
+          reportedSlots: { $sum: '$totalSlots' }, recordedUsedSlots: { $sum: '$usedSlots' },
+          missingEmail: countIf(missing('contactEmail')), missingDistrict: countIf(missing('district')),
+          missingMou: countIf(missing('mouDocumentUrl')),
+          missingPrograms: countIf({ $eq: [{ $size: { $ifNull: ['$programs', []] } }, 0] }),
+          pendingApproval: countIf({ $eq: ['$approvalStatus', 'PendingHQApproval'] })
+        } }],
+        engagement: [{ $lookup: { from: 'placements', let: { partnerId: '$_id' }, pipeline: [{ $match: { ...operationalScope, archivedAt: null, $expr: { $eq: ['$partner', '$$partnerId'] } } }, { $limit: 1 }], as: 'activity' } }, { $match: { 'activity.0': { $exists: true } } }, { $count: 'count' }],
+        regions: [{ $group: { _id: '$region', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }],
+        sectors: [{ $group: { _id: '$sector', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }]
+      } }]),
+      Placement.aggregate([{ $match: { ...operationalScope, archivedAt: null } }, { $group: {
+        _id: '$status', count: { $sum: 1 }
+      } }]),
+      PlacementRequest.aggregate([{ $match: { ...operationalScope, archivedAt: null } }, { $group: {
+        _id: '$status', count: { $sum: 1 }, requestedSlots: { $sum: '$requestedSlots' },
+        oldestCreatedAt: { $min: '$createdAt' }
+      } }, { $sort: { count: -1, _id: 1 } }])
+    ]);
+    res.set('Cache-Control', 'no-store').json({ generatedAt: new Date(),
+      scope: req.user.role === 'SuperAdmin' ? 'National' : (req.user.hqScopeType || 'National'),
+      scopeName: req.user.hqScopeType === 'Region' ? req.user.region : req.user.hqScopeType === 'Institution' ? req.user.institution : '',
+      summary: { ...(partners[0]?.summary[0] || {}), partnersWithPlacements: partners[0]?.engagement?.[0]?.count || 0 }, regions: partners[0]?.regions || [],
+      sectors: partners[0]?.sectors || [], placements, requests
+    });
+  } catch (error) {
+    console.error('Partner insights failed:', error);
+    res.status(500).json({ message: 'Unable to load partner insights' });
+  }
+});
+
 router.get('/dashboard/stats', async (req, res) => {
   try {
     await runAutomaticLearnerProgression(req.user);
