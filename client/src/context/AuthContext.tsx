@@ -67,7 +67,10 @@ interface AuthContextType {
     syncedAt?: string | null;
     lastError?: string | null;
   }>;
-  login: (email: string, password: string, mfaCode?: string) => Promise<{ passwordChangeRequired: boolean }>;
+  login: (email: string, password: string, mfaCode?: string) => Promise<{
+    passwordChangeRequired: boolean;
+    mfaRequired?: boolean;
+  }>;
   register: (data: RegisterData) => Promise<void>;
   logout: () => Promise<void>;
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
@@ -386,12 +389,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify({ email, password, mfaCode }),
     });
 
-    if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.message || 'Login failed');
-    }
-
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || 'Login failed');
+    if (data.mfaRequired) return { passwordChangeRequired: false, mfaRequired: true };
+    if (!data.user) throw new Error('Login failed');
 
     // Prevent the token useEffect from racing with login hydration
     isLoggingInRef.current = true;
@@ -422,7 +423,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoggingInRef.current = false;
     }
 
-    return { passwordChangeRequired: data.passwordChangeRequired || false };
+    return { passwordChangeRequired: data.passwordChangeRequired || false, mfaRequired: false };
   }, [activateOfflineScope, ensureCsrfToken, hydrateSessionUser, queryClient]);
 
   const register = useCallback(async (registerData: RegisterData) => {

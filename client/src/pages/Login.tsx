@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Mail, Lock, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
 import workplaceBg from '@/assets/Workplace.webp';
 import { InspectionBanner } from '@/components/InspectionBanner';
@@ -14,7 +14,7 @@ export default function Login() {
   const [mfaCode, setMfaCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [step, setStep] = useState<'login' | 'change-password'>('login');
+  const [step, setStep] = useState<'login' | 'mfa' | 'change-password'>('login');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -27,8 +27,10 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const result = await login(email, password, mfaCode.trim());
-      if (result.passwordChangeRequired) {
+      const result = await login(email, password, step === 'mfa' ? mfaCode.trim() : undefined);
+      if (result.mfaRequired) {
+        setStep('mfa');
+      } else if (result.passwordChangeRequired) {
         setStep('change-password');
       } else {
         navigate('/');
@@ -85,6 +87,14 @@ export default function Login() {
               <h2 className="text-2xl font-black text-white text-center mb-2">Welcome Back</h2>
               <p className="text-white/40 text-center text-sm mb-8">Sign in to your institution portal</p>
             </>
+          ) : step === 'mfa' ? (
+            <>
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFB800]/15 text-[#FFB800]">
+                <ShieldCheck className="h-6 w-6" />
+              </div>
+              <h2 className="text-2xl font-black text-white text-center mb-2">Verify Your Identity</h2>
+              <p className="text-white/40 text-center text-sm mb-8">Enter the code from your authenticator app or use a recovery code.</p>
+            </>
           ) : (
             <>
               <h2 className="text-2xl font-black text-white text-center mb-2">Change Password</h2>
@@ -100,10 +110,6 @@ export default function Login() {
 
           {step === 'login' ? (
             <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label htmlFor="login-mfa" className="text-sm text-white/70">Authenticator or recovery code (if MFA is enabled)</label>
-                <input id="login-mfa" autoComplete="one-time-code" value={mfaCode} maxLength={64} onChange={event => setMfaCode(event.target.value)} className="mt-2 w-full h-12 px-4 bg-white/5 border border-white/10 rounded-2xl text-white" />
-              </div>
               <div className="relative">
                 <Mail className="absolute left-5 top-1/2 -translate-y-1/2 h-5 w-5 text-white/30" />
                 <input
@@ -152,6 +158,43 @@ export default function Login() {
                   Forgot your password?
                 </button>
               </div>
+            </form>
+          ) : step === 'mfa' ? (
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <label htmlFor="login-mfa" className="text-sm font-medium text-white/70">Authenticator or recovery code</label>
+                <input
+                  id="login-mfa"
+                  autoFocus
+                  autoComplete="one-time-code"
+                  placeholder="Enter your 6-digit code"
+                  value={mfaCode}
+                  maxLength={64}
+                  required
+                  onChange={(event) => setMfaCode(event.target.value)}
+                  className="mt-2 h-14 w-full rounded-2xl border border-white/10 bg-white/5 px-5 text-center text-lg font-bold tracking-[0.25em] text-white placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-white/30 focus:border-[#FFB800]/50 focus:outline-none focus:ring-2 focus:ring-[#FFB800]/20"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !mfaCode.trim()}
+                className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#FFB800] font-black text-gray-900 shadow-xl shadow-[#FFB800]/20 transition-all hover:-translate-y-0.5 hover:bg-[#FFD700] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loading && <Loader2 className="h-5 w-5 animate-spin" />}
+                Verify & Sign In
+              </button>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => {
+                  setMfaCode('');
+                  setError('');
+                  setStep('login');
+                }}
+                className="w-full text-sm font-medium text-white/60 transition-colors hover:text-white disabled:opacity-50"
+              >
+                Use a different account
+              </button>
             </form>
           ) : (
             <form onSubmit={handleChangePassword} className="space-y-5">

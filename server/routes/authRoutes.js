@@ -148,7 +148,14 @@ router.post('/login', async (req, res) => {
     }
 
     const mfa = await MfaCredential.exists({ userId: user._id, enabled: true });
-    if (mfa && !(await consumeMfaCode(user._id, req.body.mfaCode))) {
+    const mfaCode = String(req.body.mfaCode || '').trim();
+    if (mfa && !mfaCode) {
+      return res.status(202).json({
+        mfaRequired: true,
+        message: 'Enter your authenticator or recovery code to continue.',
+      });
+    }
+    if (mfa && !(await consumeMfaCode(user._id, mfaCode))) {
       await logAuditEvent({ req, actor: user, action: 'AUTH', entityType: 'AuthSession', entityId: user._id, summary: 'MFA verification failed', metadata: { outcome: 'FAILED' } });
       return res.status(401).json({ message: 'Enter a valid authenticator or recovery code. After repeated failures, wait 10 minutes.' });
     }

@@ -57,7 +57,9 @@ test('real MongoDB and HTTP: login, revoke, MFA enrollment/replay/recovery, pass
     const enrollment = await first('/security/mfa/enable', 'POST', { code: token });
     assert.equal(enrollment.status, 200);
     assert.equal(enrollment.data.recoveryCodes.length, 8);
-    assert.equal((await second('/login', 'POST', login)).status, 401);
+    const prompt = await second('/login', 'POST', login);
+    assert.equal(prompt.status, 202, 'Valid credentials prompt for MFA without creating a session');
+    assert.equal(prompt.data.mfaRequired, true);
     assert.equal((await second('/login', 'POST', { ...login, mfaCode: token })).status, 401, 'Enrollment code cannot be replayed');
     const nextToken = totp.generate({ timestamp: Date.now() + 30000 });
     assert.equal((await second('/login', 'POST', { ...login, mfaCode: nextToken })).status, 200, 'A fresh authenticator code is accepted');
