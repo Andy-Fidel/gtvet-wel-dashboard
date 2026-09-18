@@ -7038,7 +7038,7 @@ router.get('/learners', async (req, res) => {
         ]),
         Learner.distinct('intakeAcademicYear', {
           ...filter,
-          ...(search ? { $or: query.$or } : {}),
+          ...(query.$and ? { $and: query.$and } : {}),
           ...(status ? { status } : {}),
           ...(academicStatus === 'CurrentEnrolled'
             ? { academicStatus: { $in: ['Active', 'Graduating'] } }
