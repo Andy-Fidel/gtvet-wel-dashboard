@@ -32,7 +32,7 @@ export function PartnerInsights() {
   const donut = (title: string, rows: Group[]) => {
     const chartData = rows.map(row => ({ name: row._id || 'Unspecified', value: row.count }))
     return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>
-      {!chartData.length ? <p className="text-muted-foreground">No partners in this scope.</p> : <div className="h-[290px] w-full" aria-label={`${title} donut chart`}>
+      {!chartData.length ? <p className="text-muted-foreground">No partners in this scope.</p> : <div className="h-[380px] w-full" aria-label={`${title} donut chart`}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="43%" innerRadius={58} outerRadius={92} paddingAngle={2} strokeWidth={1}>
