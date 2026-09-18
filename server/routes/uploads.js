@@ -20,7 +20,7 @@ import { logAuditEvent } from '../utils/audit.js';
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const localUploadRoot = path.resolve(__dirname, '../local-uploads');
+const localUploadRoot = path.resolve(process.env.LOCAL_UPLOAD_DIR || path.resolve(__dirname, '../local-uploads'));
 const canManageInstitutionRecord = (user, institution) => {
   if (!institution) return false;
   if (isHQRole(user.role)) return true;
@@ -124,6 +124,47 @@ const deleteLocalProfileImage = async (url) => {
   await fs.unlink(targetPath).catch(() => {});
 };
 
+const saveLocalDocument = async ({ file, documentId, institution }) => {
+  const folder = sanitizeBaseName(institution || 'general') || 'general';
+  const fileName = `${crypto.randomBytes(16).toString('hex')}${getFileExtension(file)}`;
+  const relativePath = path.join('documents', folder, documentId.toString(), fileName);
+  const filePath = path.join(localUploadRoot, relativePath);
+  await ensureDirectory(path.dirname(filePath));
+  await fs.writeFile(filePath, file.buffer);
+  return {
+    fileName,
+    filePath,
+    publicId: `local:${relativePath}`,
+    url: `/api/documents/local-file/document/${documentId}/${encodeURIComponent(fileName)}`,
+  };
+};
+
+const deleteLocalDocument = async (publicId) => {
+  if (!publicId?.startsWith('local:')) return;
+  const relativePath = publicId.slice('local:'.length);
+  const targetPath = path.resolve(localUploadRoot, relativePath);
+  if (!targetPath.startsWith(`${localUploadRoot}${path.sep}`)) return;
+  await fs.unlink(targetPath).catch(() => {});
+  await fs.rm(path.dirname(targetPath), { recursive: true, force: true }).catch(() => {});
+};
+
+const canAccessDocument = async (user, document) => {
+  if (isHQRole(user.role)) {
+    if (isScopedHQRole(user.role) && user.hqScopeType === 'Institution') return document.institution === user.institution;
+    if (isScopedHQRole(user.role) && user.hqScopeType === 'Region') {
+      const institutions = await Institution.find({ region: user.region }).distinct('name');
+      return institutions.includes(document.institution);
+    }
+    return true;
+  }
+  if (user.role === 'IndustryPartner') return document.partnerId?.toString?.() === getUserPartnerId(user);
+  if (user.role === 'RegionalAdmin') {
+    const institutions = await Institution.find({ region: user.region }).distinct('name');
+    return institutions.includes(document.institution);
+  }
+  return document.institution === user.institution;
+};
+
 // Multer for images only (profile pictures)
 const imageUpload = multer({
   storage: multer.memoryStorage(),
@@ -185,6 +226,25 @@ router.get('/local-file/:folder/:fileName', async (req, res) => {
 router.use(auth);
 router.use(enforceHQAccess);
 
+router.get('/local-file/document/:documentId/:fileName', async (req, res) => {
+  try {
+    const document = await Document.findById(req.params.documentId).select('publicId institution partnerId');
+    if (!document || !document.publicId?.startsWith('local:') || !(await canAccessDocument(req.user, document))) {
+      return res.status(404).json({ message: 'File not found' });
+    }
+    const relativePath = document.publicId.slice('local:'.length);
+    const expectedName = path.basename(relativePath);
+    if (expectedName !== req.params.fileName) return res.status(404).json({ message: 'File not found' });
+    const resolvedPath = path.resolve(localUploadRoot, relativePath);
+    if (!resolvedPath.startsWith(`${localUploadRoot}${path.sep}`)) return res.status(400).json({ message: 'Invalid file path' });
+    res.sendFile(resolvedPath, error => {
+      if (error && !res.headersSent) res.status(error.statusCode || 404).json({ message: 'File not found' });
+    });
+  } catch {
+    res.status(404).json({ message: 'File not found' });
+  }
+});
+
 // ==================== PROFILE PICTURE ====================
 router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (req, res) => {
   try {
@@ -219,33 +279,8 @@ router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (re
       }
     }
 
-    let profilePictureUrl = '';
-    if (isCloudinaryConfigured()) {
-      const result = await new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          {
-            folder: 'gtvet-wel/profile-pictures',
-            resource_type: 'image',
-            transformation: [
-              { width: 400, height: 400, crop: 'fill', gravity: 'face' }
-            ],
-          },
-          (error, result) => {
-            if (error) reject(error);
-            else resolve(result);
-          }
-        );
-        uploadStream.end(req.file.buffer);
-      });
-      profilePictureUrl = result.secure_url;
-    } else {
-      const localFile = await saveLocalProfileImage({
-        file: req.file,
-        folder: 'profile-pictures',
-        prefix: learner._id.toString(),
-      });
-      profilePictureUrl = localFile.url;
-    }
+    const localFile = await saveLocalProfileImage({ file: req.file, folder: 'profile-pictures', prefix: learner._id.toString() });
+    const profilePictureUrl = localFile.url;
 
     // Update learner with new profile picture URL
     const before = learner.toObject();
@@ -263,7 +298,7 @@ router.post('/profile-picture/:learnerId', imageUpload.single('file'), async (re
       changedFields: ['profilePicture'],
     });
 
-    res.json({ url: profilePictureUrl, storage: isCloudinaryConfigured() ? 'cloudinary' : 'local' });
+    res.json({ url: profilePictureUrl, storage: 'local' });
   } catch (error) {
     console.error('Profile picture upload error:', error);
     res.status(500).json({ message: error.message || 'Upload failed' });
@@ -298,33 +333,8 @@ router.post('/user-profile-picture', imageUpload.single('file'), async (req, res
       }
     }
 
-    let profilePictureUrl = '';
-    if (isCloudinaryConfigured()) {
-      const result = await new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          {
-            folder: 'gtvet-wel/user-avatars',
-            resource_type: 'image',
-            transformation: [
-              { width: 400, height: 400, crop: 'fill', gravity: 'face' }
-            ],
-          },
-          (error, result) => {
-            if (error) reject(error);
-            else resolve(result);
-          }
-        );
-        uploadStream.end(req.file.buffer);
-      });
-      profilePictureUrl = result.secure_url;
-    } else {
-      const localFile = await saveLocalProfileImage({
-        file: req.file,
-        folder: 'user-avatars',
-        prefix: user._id.toString(),
-      });
-      profilePictureUrl = localFile.url;
-    }
+    const localFile = await saveLocalProfileImage({ file: req.file, folder: 'user-avatars', prefix: user._id.toString() });
+    const profilePictureUrl = localFile.url;
 
     // Update user — use updateOne to avoid triggering password rehash
     await User.updateOne({ _id: req.user._id }, { profilePicture: profilePictureUrl });
@@ -338,7 +348,7 @@ router.post('/user-profile-picture', imageUpload.single('file'), async (req, res
       changedFields: ['profilePicture'],
     });
 
-    res.json({ url: profilePictureUrl, storage: isCloudinaryConfigured() ? 'cloudinary' : 'local' });
+    res.json({ url: profilePictureUrl, storage: 'local' });
   } catch (error) {
     console.error('User profile picture upload error:', error);
     res.status(500).json({ message: error.message || 'Upload failed' });
@@ -348,10 +358,6 @@ router.post('/user-profile-picture', imageUpload.single('file'), async (req, res
 // ==================== UPLOAD ====================
 router.post('/upload', upload.single('file'), async (req, res) => {
   try {
-    if (!isCloudinaryConfigured()) {
-      return res.status(500).json({ message: 'Document uploads are unavailable because Cloudinary is not configured on the server' });
-    }
-
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
@@ -415,26 +421,9 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       }
     }
 
-    // Stream the buffer to Cloudinary
-    const result = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: `gtvet-wel/${institution || 'general'}`,
-          resource_type: 'auto',
-          allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf', 'doc', 'docx'],
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      uploadStream.end(req.file.buffer);
-    });
-
-    // Save metadata to MongoDB
-    const doc = new Document({
-      url: result.secure_url,
-      publicId: result.public_id,
+    const document = new Document({
+      url: '',
+      publicId: '',
       fileName: req.file.originalname,
       fileType: req.file.mimetype,
       fileSize: req.file.size,
@@ -448,8 +437,17 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       institution,
       partnerId,
     });
-
-    await doc.save();
+    let localFile;
+    try {
+      localFile = await saveLocalDocument({ file: req.file, documentId: document._id, institution });
+      document.url = localFile.url;
+      document.publicId = localFile.publicId;
+      await document.save();
+    } catch (error) {
+      if (localFile?.publicId) await deleteLocalDocument(localFile.publicId);
+      throw error;
+    }
+    const doc = document;
     await doc.populate('uploadedBy', 'name');
 
     if (supportTicketId) {
@@ -544,10 +542,12 @@ router.delete('/:id', async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to delete this document' });
     }
 
-    // Delete from Cloudinary
-    await cloudinary.uploader.destroy(doc.publicId, { resource_type: 'raw' });
-    // Also try image resource type in case it was uploaded as image
-    await cloudinary.uploader.destroy(doc.publicId).catch(() => {});
+    if (doc.publicId?.startsWith('local:')) {
+      await deleteLocalDocument(doc.publicId);
+    } else if (isCloudinaryConfigured()) {
+      await cloudinary.uploader.destroy(doc.publicId, { resource_type: 'raw' });
+      await cloudinary.uploader.destroy(doc.publicId).catch(() => {});
+    }
 
     // Delete from MongoDB
     await Document.findByIdAndDelete(req.params.id);
