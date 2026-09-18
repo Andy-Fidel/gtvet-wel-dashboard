@@ -294,9 +294,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return decodeURIComponent(cookie.slice('gtvets_csrf='.length));
   }, []);
 
-  const ensureCsrfToken = useCallback(async () => {
+  const ensureCsrfToken = useCallback(async (forceRefresh = false) => {
     const existingToken = getCsrfTokenFromCookie();
-    if (existingToken) return existingToken;
+    if (existingToken && !forceRefresh) return existingToken;
 
     const response = await fetch(`${API_BASE}/auth/csrf`, {
       credentials: 'include',
@@ -378,7 +378,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [activateOfflineScope, loadOfflineState]);
 
   const login = useCallback(async (email: string, password: string, mfaCode?: string) => {
-    const csrfToken = await ensureCsrfToken();
+    // Always rotate the CSRF token before login. This prevents a token left by
+    // a previous browser session from being reused after logout.
+    const csrfToken = await ensureCsrfToken(true);
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: {
