@@ -7,6 +7,8 @@ import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
 import { Learner } from '../models/Learner.js';
 import { Placement } from '../models/Placement.js';
+import { PlacementTransfer } from '../models/PlacementTransfer.js';
+import { registerPlacementTransfers } from '../utils/placementTransfers.js';
 import { learnerSearchFilter } from '../utils/learnerSearch.js';
 import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
@@ -580,6 +582,10 @@ const buildPlacementHistory = (placements = []) => placements.map((placement, in
   startDate: placement.startDate || null,
   endDate: placement.endDate || null,
   status: placement.status,
+  closureReason: placement.closureReason,
+  closureNote: placement.closureNote,
+  previousPlacement: placement.previousPlacement,
+  replacementPlacement: placement.replacementPlacement,
   institution: placement.institution,
   owner: placement.owner || null,
   createdAt: placement.createdAt,
@@ -8619,7 +8625,7 @@ router.get('/learners/graduated/export', async (req, res) => {
     const learnerIds = learners.map((learner) => learner._id);
 
     const [placements, assessments, evaluations, visits] = await Promise.all([
-      Placement.find({ learner: { $in: learnerIds } }).select('learner status companyName startDate endDate').lean(),
+      Placement.find({ learner: { $in: learnerIds } }).select('learner status companyName startDate endDate closureReason').lean(),
       CompetencyAssessment.find({ learner: { $in: learnerIds } }).select('learner overallScore assessmentDate').lean(),
       EmployerEvaluation.find({ learner: { $in: learnerIds } }).select('learner overallScore evaluationDate wouldHire').lean(),
       MonitoringVisit.find({ learner: { $in: learnerIds } }).select('learner visitDate').lean(),
@@ -8682,9 +8688,10 @@ router.get('/learners/graduated/export', async (req, res) => {
         'WEL Status': learner.status || 'Pending',
         'Graduation Academic Year': learner.graduationAcademicYear || 'N/A',
         'Graduated At': learner.graduatedAt ? new Date(learner.graduatedAt).toLocaleDateString() : 'Not recorded',
-        'Placement Cycles': learnerPlacements.length,
+        'Placement Episodes': learnerPlacements.length,
         'Completed Placements': learnerPlacements.filter((placement) => placement.status === 'Completed').length,
-        'Terminated Placements': learnerPlacements.filter((placement) => placement.status === 'Terminated').length,
+        'Terminated Placements': learnerPlacements.filter((placement) => placement.status === 'Terminated' && placement.closureReason !== 'Transferred').length,
+        'Workplace Transfers': learnerPlacements.filter((placement) => placement.closureReason === 'Transferred').length,
         'Latest Placement Company': latestPlacement?.companyName || 'N/A',
         'Latest Placement Status': latestPlacement?.status || 'N/A',
         'Assessments Recorded': learnerAssessments.length,
@@ -8725,7 +8732,7 @@ router.get('/learners/graduated/annual-report', async (req, res) => {
 
     const learnerIds = learners.map((learner) => learner._id);
     const [placements, assessments, evaluations] = await Promise.all([
-      Placement.find({ learner: { $in: learnerIds } }).select('learner status').lean(),
+      Placement.find({ learner: { $in: learnerIds } }).select('learner status closureReason').lean(),
       CompetencyAssessment.find({ learner: { $in: learnerIds } }).select('learner overallScore').lean(),
       EmployerEvaluation.find({ learner: { $in: learnerIds } }).select('learner overallScore wouldHire').lean(),
     ]);
@@ -8780,7 +8787,7 @@ router.get('/learners/graduated/annual-report', async (req, res) => {
       const row = grouped.get(key);
       row.totalGraduates += 1;
       if (learner.status === 'Completed') row.completedWEL += 1;
-      if (learnerPlacements.some((placement) => placement.status === 'Terminated')) row.terminatedPlacements += 1;
+      if (learnerPlacements.some((placement) => placement.status === 'Terminated' && placement.closureReason !== 'Transferred')) row.terminatedPlacements += 1;
       if (learnerAssessments.length > 0) {
         row.assessedLearners += 1;
         row.totalAssessmentScore += learnerAssessments.reduce((sum, assessment) => sum + (assessment.overallScore || 0), 0) / learnerAssessments.length;
@@ -8901,7 +8908,7 @@ router.get('/placements', async (req, res) => {
     }
 
     const placementsQuery = Placement.find(filter)
-      .select('learner trackingId academicYear companyName partner sector location supervisorName supervisorPhone supervisorEmail startDate endDate status closedAt closedBy closureReason closureNote owner institution coordinates placementRegion delegate delegatedAt delegatedBy delegateInstitution createdAt updatedAt')
+      .select('learner trackingId academicYear companyName partner sector location supervisorName supervisorPhone supervisorEmail startDate endDate status closedAt closedBy closureReason closureNote owner institution coordinates placementRegion delegate delegatedAt delegatedBy delegateInstitution createdAt updatedAt workflowVersion previousPlacement replacementPlacement')
       .populate('learner', 'firstName middleName lastName trackingId')
       .populate('owner', 'name role institution')
       .populate('partner', 'name')
@@ -9486,6 +9493,10 @@ router.put('/placements/:id', async (req, res) => {
         const plan = await runPlacementOperation(key, async () => {
             const existing = await Placement.findOne(filter);
             if (!existing || existing.archivedAt) throw placementError('Archived or missing placements cannot be edited.');
+            if (existing.replacementPlacement) throw placementError('Transferred placements are historical records and cannot be edited.');
+            if (Number(req.body.sourceVersion) !== (existing.workflowVersion || 0)) throw placementError('Placement changed. Close and reopen the form before saving.');
+            if (await PlacementTransfer.exists({ placement: existing._id, status: { $in: ['Pending', 'Scheduled'] } })) throw placementError('Cancel the pending workplace change before editing placement details.');
+            if (req.body.companyName !== undefined && req.body.companyName !== existing.companyName) throw placementError('Use Change workplace to change the employer.', 400);
             if (req.user.role === 'Staff' && req.body.status && req.body.status !== existing.status) throw placementError('Only institution management may change placement status.', 403);
             const fields = { ...placementInput(req.body) };
             delete fields.partner;
@@ -14096,4 +14107,5 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
 });
 
 
+export const processDuePlacementTransfers = registerPlacementTransfers(router, { prepareActivation: preparePlacementActivation, getScope: getPlacementScope, partnerVisibility: partnerVisibilityFilter });
 export default router;

@@ -27,6 +27,8 @@ const placementSchema = new mongoose.Schema({
   archivedAt: { type: Date, default: null },
   archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   workflowVersion: { type: Number, default: 0 },
+  previousPlacement: { type: mongoose.Schema.Types.ObjectId, ref: 'Placement' },
+  replacementPlacement: { type: mongoose.Schema.Types.ObjectId, ref: 'Placement' },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   institution: { type: String, required: true },
   coordinates: {

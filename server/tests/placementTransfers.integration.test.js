@@ -1,0 +1,96 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
+import router, { processDuePlacementTransfers } from '../routes/api.js';
+import { Placement } from '../models/Placement.js';
+import { PlacementTransfer } from '../models/PlacementTransfer.js';
+import { Learner } from '../models/Learner.js';
+import { IndustryPartner } from '../models/IndustryPartner.js';
+import { User } from '../models/User.js';
+import { PlacementCoordinator } from '../models/PlacementOperation.js';
+import { validateTransferDates } from '../utils/placementTransfers.js';
+
+test('transfer dates reject backdating, overlap with original start and invalid dates', () => {
+  const source = { startDate: '2026-09-01', endDate: '2026-12-01' };
+  const now = new Date('2026-09-20');
+  for (const effective of ['invalid', '2026-09-01', '2026-09-19', '2026-12-02']) assert.throws(() => validateTransferDates(source, effective, '2026-12-31', now));
+  validateTransferDates(source, '2026-09-20', '2026-12-01', now);
+});
+
+test('transfer lifecycle preserves evidence, approval boundaries, schedules and durable recovery', { skip: process.env.PLACEMENT_MONGO_INTEGRATION !== '1' }, async t => {
+  await mongoose.connect(`mongodb://127.0.0.1:27030/placement_transfer_qa_${Date.now()}`, { autoIndex: false, serverSelectionTimeoutMS: 3000 });
+  try {
+    const id = () => new mongoose.Types.ObjectId();
+    const now = new Date(), date = offset => new Date(now.getTime() + offset * 86400000).toISOString().slice(0, 10);
+    const y = now.getUTCFullYear() - (now.getUTCMonth() < 7 ? 1 : 0), academicYear = `${y}/${y + 1}`;
+    const admin = { _id: id(), name: 'QA Admin', role: 'Admin', institution: 'QA', status: 'Active' };
+    const staff = { ...admin, _id: id(), role: 'Staff' };
+    await User.collection.insertMany([admin, staff]);
+    const learnerId = id(), oldPartner = id(), newPartner = id();
+    await Learner.collection.insertOne({ _id: learnerId, institution: 'QA', phone: '0000000000', program: 'IT', year: 'Year 1', academicStatus: 'Active', status: 'Placed' });
+    await mongoose.connection.db.collection('institutions').insertOne({ name: 'QA', region: 'Greater Accra', calendarType: 'Single Track' });
+    await mongoose.connection.db.collection('academiccalendars').insertOne({ eventType: 'WEL Window', isActive: true, academicYear, institutionCalendarType: 'Single Track', targetYearGroup: 'Year 1', semester: 'Semester 1', startDate: new Date(date(-30)), endDate: new Date(date(90)) });
+    await IndustryPartner.collection.insertMany([oldPartner, newPartner].map((_id, i) => ({ _id, name: `Partner ${i}`, sector: 'IT', region: 'Greater Accra', status: 'Active', approvalStatus: 'Approved', totalSlots: 2, usedSlots: i === 0 ? 1 : 0 })));
+    await Placement.collection.createIndex({ learner: 1 }, { name: 'one_active_placement_per_learner', unique: true, partialFilterExpression: { status: 'Active' } });
+    const source = await Placement.create({ learner: learnerId, institution: 'QA', companyName: 'Partner 0', sector: 'IT', location: 'Accra', partner: oldPartner, coordinates: { lat: 0, lng: 0 }, startDate: date(-10), endDate: date(50), academicYear, owner: staff._id, delegate: id(), partnerSupervisor: id() });
+    await mongoose.connection.db.collection('attendancelogs').insertOne({ placement: source._id, learner: learnerId });
+    const call = async (path, body, params, actor = staff, method = 'post') => {
+      const handler = router.stack.find(layer => layer.route?.path === path && layer.route.methods[method]).route.stack.at(-1).handle;
+      const res = { code: 200, set() { return this; }, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
+      await handler({ user: actor, body, params, query: {} }, res); return res;
+    };
+    const input = { sourceVersion: 0, partner: String(newPartner), reason: 'Employer relocation', effectiveDate: date(0), endDate: date(40), supervisorName: 'Supervisor', supervisorPhone: '0200000000', placementRegion: 'Greater Accra', coordinates: { lat: 5, lng: -1 } };
+    assert.equal((await call('/placements/:id/transfers', { ...input, sourceVersion: 99 }, { id: String(source._id) })).code, 409);
+    assert.equal((await call('/placements/:id/transfers', input, { id: String(source._id) }, { ...staff, institution: 'Other' })).code, 404);
+    const hostLead = await call('/placements/:id/transfer-lead', { ...input, companyName: 'Verified lead', sector: 'IT', location: 'Accra' }, { id: String(source._id) });
+    assert.equal(hostLead.code, 201, JSON.stringify(hostLead.body));
+    assert.equal(hostLead.body.status, 'SelfSourced_Submitted');
+    assert.equal((await call('/placements/:id/transfers', { ...input, partner: undefined, sourceRequest: String(hostLead.body._id) }, { id: String(source._id) })).code, 400);
+    const requested = await call('/placements/:id/transfers', input, { id: String(source._id) });
+    assert.equal(requested.code, 201, JSON.stringify(requested.body));
+    const tid = String(requested.body._id);
+    assert.equal((await Placement.findById(source._id)).status, 'Active');
+    assert.equal((await call('/placements/:id/transfers', { ...input, reason: 'Another reason' }, { id: String(source._id) })).code, 409);
+    assert.equal((await call('/placement-transfers/:id/:action', {}, { id: tid, action: 'approve' })).code, 403);
+    assert.equal((await call('/placement-transfers/:id/:action', {}, { id: tid, action: 'approve' }, { ...admin, institution: 'Other' })).code, 404);
+    await IndustryPartner.updateOne({ _id: newPartner }, { $set: { totalSlots: 0 } });
+    assert.equal((await call('/placement-transfers/:id/:action', {}, { id: tid, action: 'approve' }, admin)).code, 409);
+    assert.equal((await Placement.findById(source._id)).status, 'Active');
+    await IndustryPartner.updateOne({ _id: newPartner }, { $set: { totalSlots: 2 } });
+    const outage = t.mock.method(Learner, 'updateOne', async () => { throw new Error('Simulated link failure'); });
+    assert.equal((await call('/placement-transfers/:id/:action', {}, { id: tid, action: 'approve' }, admin)).code, 500);
+    assert.ok((await PlacementCoordinator.findById('global')).pending);
+    outage.mock.restore();
+    const applied = await call('/placement-transfers/:id/:action', {}, { id: tid, action: 'approve' }, admin);
+    assert.equal(applied.code, 200, JSON.stringify(applied.body));
+    assert.equal(applied.body.status, 'Applied');
+    assert.equal(await Placement.countDocuments({ learner: learnerId, status: 'Active' }), 1);
+    const current = await Placement.findOne({ learner: learnerId, status: 'Active' });
+    const cancelRequest = await call('/placements/:id/transfers', { ...input, sourceVersion: current.workflowVersion, effectiveDate: date(4) }, { id: String(current._id) });
+    assert.equal(cancelRequest.code, 201, JSON.stringify(cancelRequest.body));
+    const cancelId = String(cancelRequest.body._id);
+    const cancelled = await call('/placement-transfers/:id/:action', {}, { id: cancelId, action: 'cancel' });
+    assert.equal(cancelled.body.status, 'Cancelled');
+    assert.equal((await call('/placement-transfers/:id/:action', {}, { id: cancelId, action: 'approve' }, admin)).code, 409);
+    assert.equal(await Placement.countDocuments({ learner: learnerId, status: 'Active' }), 1);
+    const replacement = await Placement.findById(applied.body.replacement);
+    assert.equal(String(replacement.previousPlacement), String(source._id));
+    assert.equal(replacement.delegate, undefined);
+    assert.equal(replacement.partnerSupervisor, undefined);
+    assert.equal((await Placement.findById(source._id)).closureReason, 'Transferred');
+    assert.equal((await IndustryPartner.findById(oldPartner)).usedSlots, 0);
+    assert.equal((await IndustryPartner.findById(newPartner)).usedSlots, 1);
+    assert.equal(String((await Learner.findById(learnerId)).placement), String(replacement._id));
+    assert.equal(await mongoose.connection.db.collection('attendancelogs').countDocuments({ placement: source._id }), 1);
+    const scheduled = await call('/placements/:id/transfers', { ...input, partner: String(oldPartner), effectiveDate: date(2), sourceVersion: replacement.workflowVersion }, { id: String(replacement._id) });
+    assert.equal(scheduled.code, 201, JSON.stringify(scheduled.body));
+    const approved = await call('/placement-transfers/:id/:action', {}, { id: String(scheduled.body._id), action: 'approve' }, admin);
+    assert.equal(approved.body.status, 'Scheduled', JSON.stringify(approved.body));
+    assert.equal((await Placement.findById(replacement._id)).status, 'Active');
+    // Bring only the schedule trigger forward; destination dates remain valid in the WEL window.
+    await PlacementTransfer.updateOne({ _id: scheduled.body._id }, { $set: { effectiveDate: new Date(date(0)) } });
+    await processDuePlacementTransfers();
+    assert.equal((await PlacementTransfer.findById(scheduled.body._id)).status, 'Applied');
+    assert.equal(await Placement.countDocuments({ learner: learnerId, status: 'Active' }), 1);
+  } finally { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); }
+});

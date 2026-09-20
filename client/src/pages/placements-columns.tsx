@@ -38,6 +38,8 @@ export interface HealthScore {
 export type Placement = {
     coordinates?: { lat?: number; lng?: number }
     _id: string
+    workflowVersion?: number
+    replacementPlacement?: string
     learner: {
         _id: string
         name: string
@@ -314,7 +316,7 @@ export const columns: ColumnDef<Placement>[] = [
         if (status === 'Terminated') color = "bg-red-500 hover:bg-red-600"
         if (status === 'Completed') color = "bg-blue-500 hover:bg-blue-600"
         
-        return <Badge className={`${color} text-white border-0`}>{status}</Badge>
+        return <Badge className={`${color} text-white border-0`}>{row.original.closureReason === 'Transferred' ? 'Transferred' : status}</Badge>
     }
   },
   {
@@ -428,6 +430,8 @@ export const columns: ColumnDef<Placement>[] = [
       const placement = row.original
       const meta = table.options.meta as { 
         onEdit: (placement: Placement) => void, 
+        onTransfer?: (placement: Placement) => void,
+        onHistory?: (placement: Placement) => void,
         onDelete: (id: string) => void,
         onOpenMessages: (placement: Placement) => void,
         onOpenEvidence: (placement: Placement) => void,
@@ -451,6 +455,7 @@ export const columns: ColumnDef<Placement>[] = [
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="bg-white/80 backdrop-blur-xl border-white/40 shadow-xl">
             <DropdownMenuLabel>Actions</DropdownMenuLabel>
+            <DropdownMenuItem onClick={() => meta?.onHistory?.(placement)}>Placement history</DropdownMenuItem>
             <DropdownMenuItem onClick={() => navigator.clipboard.writeText(placement._id)}>
               Copy ID
             </DropdownMenuItem>
@@ -464,7 +469,8 @@ export const columns: ColumnDef<Placement>[] = [
             {!isOversightUser && !isDelegated && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => meta?.onEdit(placement)}>Edit Details</DropdownMenuItem>
+                <DropdownMenuItem disabled={!!placement.replacementPlacement} onClick={() => meta?.onEdit(placement)}>Edit Details</DropdownMenuItem>
+                {placement.status === 'Active' && <DropdownMenuItem onClick={() => meta?.onTransfer?.(placement)}>Change workplace</DropdownMenuItem>}
                 {['Admin', 'Manager'].includes(meta?.role || '') && <DropdownMenuItem onClick={() => meta?.onAssignDelegate?.(placement)}>
                   <Handshake className="mr-2 h-4 w-4" /> Assign Delegate
                 </DropdownMenuItem>}

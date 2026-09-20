@@ -25,6 +25,7 @@ test('standalone placement lifecycle, permissions, capacity, duplicates and inte
     const startDate = now.toISOString().slice(0, 10), endDate = new Date(now.getTime() + 86400000 * 30).toISOString().slice(0, 10);
     await mongoose.connection.db.collection('academiccalendars').insertOne({ eventType: 'WEL Window', isActive: true, academicYear, institutionCalendarType: 'Single Track', targetYearGroup: 'Year 1', semester: 'Semester 1', startDate: new Date(now.getTime() - 86400000), endDate: new Date(now.getTime() + 86400000 * 60) });
     const call = async (path, method, body = {}, params = {}, actor = user) => {
+      if (path === '/placements/:id' && method === 'put') body = { sourceVersion: (await Placement.findById(params.id))?.workflowVersion || 0, ...body };
       const handler = router.stack.find(layer => layer.route?.path === path && layer.route.methods[method]).route.stack.at(-1).handle;
       const res = { code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
       await handler({ body, params, user: actor, query: {} }, res);

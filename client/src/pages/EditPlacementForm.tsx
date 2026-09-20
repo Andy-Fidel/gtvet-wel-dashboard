@@ -67,6 +67,7 @@ interface EditPlacementFormProps {
     onSuccess: (data: unknown) => void;
     initialData: Omit<Partial<EditPlacementFormValues>, 'learner' | 'startDate' | 'endDate'> & { 
         _id: string;
+        workflowVersion?: number;
         learner: string | { _id: string; name: string; trackingId: string };
         status?: "Active" | "Completed" | "Terminated";
         closureReason?: string;
@@ -114,6 +115,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ...values,
+                sourceVersion: initialData.workflowVersion || 0,
                 overrideWelWindow: user?.role === 'Admin' && overrideWelWindow,
                 closureReason: values.status === "Active" ? "" : values.closureReason?.trim() || "",
                 closureNote: values.status === "Active" ? "" : values.closureNote?.trim() || "",
@@ -157,7 +159,8 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
             <FormField control={form.control} name="companyName" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Company Name</FormLabel>
-                  <FormControl><Input placeholder="Tech Solutions Ltd" {...field} /></FormControl>
+                  <FormControl><Input readOnly {...field} /></FormControl>
+                  <p className="text-xs text-muted-foreground">Use Change workplace to move this learner to another employer.</p>
                   <FormMessage />
                 </FormItem>
             )} />

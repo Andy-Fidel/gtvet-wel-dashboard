@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { EditPlacementForm } from "./EditPlacementForm"
+import { PlacementTransferDialog, PlacementTransferQueue } from '@/components/PlacementTransfers'
 import { UnifiedPlacementForm } from "./UnifiedPlacementForm"
 import { DataTable } from "@/components/ui/data-table"
 import { type Placement, columns } from "./placements-columns"
@@ -102,6 +103,7 @@ export default function Placements() {
     const [placementsTotal, setPlacementsTotal] = useState(0)
     const [placementsTotalPages, setPlacementsTotalPages] = useState(0)
     const [editOpen, setEditOpen] = useState(false)
+    const [transferView, setTransferView] = useState<{ placement: Placement; historyOnly: boolean } | null>(null)
     const [newOpen, setNewOpen] = useState(false)
     const [editingPlacement, setEditingPlacement] = useState<Placement | null>(null)
     const [refreshKey, setRefreshKey] = useState(0)
@@ -587,6 +589,8 @@ export default function Placements() {
             </div>
 
             {/* Edit Dialog */}
+            {transferView && <PlacementTransferDialog placement={transferView.placement} historyOnly={transferView.historyOnly} onClose={() => setTransferView(null)} onChange={() => setRefreshKey(prev => prev + 1)} />}
+            <PlacementTransferQueue onChange={() => setRefreshKey(prev => prev + 1)} />
             <Dialog open={editOpen && !isOversightReadOnly} onOpenChange={setEditOpen}>
                 <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[600px] overflow-y-auto max-h-[90vh]">
                     <DialogHeader>
@@ -817,6 +821,8 @@ export default function Placements() {
                                             columns={columns} 
                                             meta={{ 
                                                 onEdit: handleEdit, 
+                                                onTransfer: (placement: Placement) => setTransferView({ placement, historyOnly: false }),
+                                                onHistory: (placement: Placement) => setTransferView({ placement, historyOnly: true }),
                                                 onDelete: handleDelete,
                                                 onOpenMessages: handleOpenMessages,
                                                 onOpenEvidence: handleOpenEvidence,
@@ -880,6 +886,7 @@ export default function Placements() {
                                             delegatedView: true,
                                             onViewDelegatedLearner: viewDelegatedLearner,
                                             onEdit: handleEdit,
+                                            onHistory: (placement: Placement) => setTransferView({ placement, historyOnly: true }),
                                             onDelete: handleDelete,
                                             onOpenMessages: handleOpenMessages,
                                             onOpenEvidence: handleOpenEvidence,

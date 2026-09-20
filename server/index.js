@@ -187,7 +187,7 @@ const createApp = () => {
 };
 
 import authRoutes from './routes/authRoutes.js';
-import apiRoutes from './routes/api.js';
+import apiRoutes, { processDuePlacementTransfers } from './routes/api.js';
 import uploadRoutes from './routes/uploads.js';
 import idmsRoutes from './routes/idmsRoutes.js';
 import { AuthSession } from './models/AuthSession.js';
@@ -200,6 +200,16 @@ const startWorker = async () => {
     // MFA enrollment requires a unique credential per account; TTL cleanup is secondary.
     await Promise.all([AuthSession.init(), MfaCredential.init()]);
     console.log(`MongoDB connected (worker ${process.pid})`);
+    let transfersRunning = false;
+    const processTransfers = async () => {
+      if (transfersRunning) return;
+      transfersRunning = true;
+      try { await processDuePlacementTransfers(); }
+      catch (error) { console.error('Placement transfer processing failed:', error.message); }
+      finally { transfersRunning = false; }
+    };
+    void processTransfers();
+    setInterval(processTransfers, 60000).unref();
   } catch (err) {
     console.error(`MongoDB connection error (worker ${process.pid}):`, err);
     process.exit(1);

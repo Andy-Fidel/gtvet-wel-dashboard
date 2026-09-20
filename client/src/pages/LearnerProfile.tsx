@@ -102,6 +102,10 @@ interface PlacementHistoryRecord extends PlacementRecord {
   placementId: string
   cycleNumber: number
   academicYear?: string
+  closureReason?: string
+  closureNote?: string
+  previousPlacement?: string
+  replacementPlacement?: string
 }
 
 interface MonitoringVisitRecord {
@@ -1336,7 +1340,7 @@ export default function LearnerProfile() {
                     <div>
                       <h3 className="font-bold text-lg flex items-center gap-2"><MapPin className="h-5 w-5 text-indigo-400"/> Placement History</h3>
                       <p className="text-xs text-gray-500 mt-1">
-                        {placementHistory.length} recorded WEL cycle{placementHistory.length === 1 ? '' : 's'}
+                        {placementHistory.length} recorded placement episode{placementHistory.length === 1 ? '' : 's'}
                       </p>
                     </div>
                     {canInitiatePlacement && (
@@ -1363,11 +1367,11 @@ export default function LearnerProfile() {
                                   <div>
                                     <h4 className="font-bold text-indigo-900">{p.companyName}</h4>
                                     <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-500 mt-1">
-                                      Cycle {p.cycleNumber}{p.academicYear ? ` · ${p.academicYear}` : ''}
+                                      Placement {p.cycleNumber}{p.academicYear ? ` · ${p.academicYear}` : ''}{p.previousPlacement ? ' · Transferred from previous workplace' : ''}
                                     </p>
                                   </div>
                                   <Badge className={`${p.status === 'Active' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : p.status === 'Completed' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-red-100 text-red-700 border-red-200'}`}>
-                                    {p.status}
+                                    {p.closureReason === 'Transferred' ? 'Transferred' : p.status}
                                   </Badge>
                                 </div>
                                 <p className="text-xs text-indigo-600/70 mt-1 flex items-center gap-1">
@@ -1375,6 +1379,7 @@ export default function LearnerProfile() {
                                     {p.startDate ? format(new Date(p.startDate), 'MMM yyyy') : 'TBD'} - {p.endDate ? format(new Date(p.endDate), 'MMM yyyy') : 'TBD'}
                                 </p>
                                 <p className="text-xs text-gray-600 mt-2">{p.location}</p>
+                                {p.closureReason === 'Transferred' && <p className="text-xs text-gray-600 mt-2">Reason for transfer: {p.closureNote}</p>}
                                 {p.sector ? <p className="text-xs text-gray-500 mt-1">Sector: {p.sector}</p> : null}
                                 {p.partnerName ? <p className="text-xs text-gray-500 mt-1">Partner: {p.partnerName}</p> : null}
                                 {p.supervisorName ? <p className="text-xs text-gray-500 mt-1">Supervisor: {p.supervisorName}</p> : null}
