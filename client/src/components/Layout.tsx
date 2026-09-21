@@ -4,6 +4,7 @@ import { Navbar } from '@/components/Navbar';
 import { LayoutDashboard, Users, Briefcase, BriefcaseBusiness, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake, Archive, ArrowLeft } from 'lucide-react';
 import type { FocusEvent, MouseEvent } from 'react';
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
 import { useAuth } from '@/context/AuthContext';
 import { useNotifications } from '@/hooks/useNotifications';
@@ -726,14 +727,16 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
-      <Toaster
+      {typeof document !== 'undefined' ? createPortal(<Toaster
         position="top-center"
         offset="42vh"
         richColors
+        closeButton
         toastOptions={{
           className: "min-w-[340px] rounded-2xl px-6 py-5 text-base font-bold shadow-2xl",
+          closeButtonAriaLabel: "Dismiss error message",
         }}
-      />
+      />, document.body) : null}
     </div>
     </>
   );
