@@ -14,7 +14,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { LearnerForm } from "./learners/LearnerForm"
 import { useAuth } from "@/context/AuthContext"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { useSearchParams } from "react-router-dom"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -352,11 +352,15 @@ export default function LearnerRegister() {
       const result = await res.json()
       setCsvResult(result)
       if (result.created > 0) {
-        toast.success(`${result.created} learner(s) created successfully!`)
         setRefreshKey(prev => prev + 1)
       }
       if (result.errors?.length > 0) {
-        toast.error(`${result.errors.length} row(s) had errors`)
+        const message = `${result.created || 0} learner(s) created; ${result.errors.length} row(s) could not be imported.`
+        const options = { description: 'Review the row errors in the import results and correct the affected rows before retrying.' }
+        if (result.created > 0) toast.warning(message, options)
+        else toast.error(message, options)
+      } else {
+        toast.success(`${result.created || 0} learner(s) created successfully!`)
       }
     } catch {
       toast.error("Bulk upload failed")

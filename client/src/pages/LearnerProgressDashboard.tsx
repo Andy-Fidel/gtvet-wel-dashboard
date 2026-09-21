@@ -17,7 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 
 interface LearnerProgress {
   learner: {

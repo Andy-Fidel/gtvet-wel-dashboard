@@ -2,7 +2,7 @@ import { useState, useRef } from "react"
 import { useAuth } from "@/context/AuthContext"
 import { Upload, X, FileText, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 
 interface DocumentUploadProps {
   learnerId?: string;

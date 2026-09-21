@@ -15,7 +15,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
 import { Loader2, Search, Building2, Terminal, ShieldAlert } from "lucide-react"
 import type { IndustryPartner, Learner } from '@/types/models'

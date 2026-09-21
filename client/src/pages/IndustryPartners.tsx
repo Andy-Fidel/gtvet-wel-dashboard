@@ -4,7 +4,7 @@ import { Plus, Building2, MapPin, Phone, Mail, Link as LinkIcon, BarChart2, User
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
 import { PartnerChangeForm, PartnerChangeQueue, PartnerRelationship } from '@/components/PartnerChanges'
 import { SearchPartnerDialog } from "@/components/SearchPartnerDialog"

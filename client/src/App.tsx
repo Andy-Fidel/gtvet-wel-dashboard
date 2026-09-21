@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { ADMIN_ROLES, MANAGEMENT_ROLES } from '@/lib/rbac';
+import { AppAlerts } from '@/components/AppAlerts';
 
 // Lazy-loaded page components (code-split by route)
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -329,6 +330,7 @@ function App() {
               } />
             </Route>
           </Routes>
+          <AppAlerts />
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

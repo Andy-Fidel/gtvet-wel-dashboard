@@ -1,7 +1,7 @@
 import { isHQRole } from '@/lib/rbac'
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { BriefcaseBusiness, CalendarClock, Mail, MapPin, Phone, Search, Users } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
 import type { Vacancy } from "@/types/models"
 import { Badge } from "@/components/ui/badge"

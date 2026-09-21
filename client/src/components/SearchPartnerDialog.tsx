@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Search, Link as LinkIcon, Building2, Plus, Loader2 } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import type { IndustryPartner } from "@/pages/IndustryPartners"
 
 interface SearchPartnerDialogProps {

@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Skeleton } from "@/components/ui/skeleton"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { MessageSquare, Reply, Send, X } from "lucide-react"
 
 type PlacementSummary = {

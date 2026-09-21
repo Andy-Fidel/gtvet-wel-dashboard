@@ -32,7 +32,7 @@ import {
 import { MonthlyReportForm, type MonthlyReportInitialData } from "./MonthlyReportForm"
 import { DataTable } from "@/components/ui/data-table"
 import { useAuth } from "@/context/AuthContext"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export type MonthlyReport = {

@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle, Lock, Eye, EyeOff, Loader2, ShieldCheck } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
 
 export default function ChangePassword() {
@@ -34,8 +34,9 @@ export default function ChangePassword() {
     setLoading(true);
     try {
       await changePassword(newPassword);
-      toast.success('Password changed successfully');
-      window.location.href = '/';
+      toast.success('Password changed successfully', {
+        onDismiss: () => { window.location.href = '/' },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to change password');
     } finally {

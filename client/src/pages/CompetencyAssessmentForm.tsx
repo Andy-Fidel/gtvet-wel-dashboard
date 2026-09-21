@@ -124,7 +124,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
         onSuccess(data)
     } catch (error) {
         console.error("Error submitting assessment:", error)
-        const { toast } = await import('sonner');
+        const { toast } = await import('@/lib/toast');
         toast.error(error instanceof Error ? error.message : 'Failed to save assessment');
     } finally {
         setLoading(false)

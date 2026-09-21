@@ -26,7 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { canAccessHQPage, getHQScopeLabel, hasHQPermission } from "@/lib/rbac"
 

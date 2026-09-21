@@ -23,7 +23,7 @@ import {
 import { useState } from "react"
 import { Loader2 } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 
 const formSchema = z.object({
   name: z.string().min(2, "Name is required"),

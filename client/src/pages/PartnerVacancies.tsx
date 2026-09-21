@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { BriefcaseBusiness, CalendarClock, Edit3, MapPin, Plus, Send, Users, XCircle } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
 import type { Vacancy } from "@/types/models"
 import { Badge } from "@/components/ui/badge"

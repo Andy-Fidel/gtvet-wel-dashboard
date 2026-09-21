@@ -23,7 +23,7 @@ import { useState } from "react"
 import { Loader2, CalendarDays } from "lucide-react"
 import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
 import { useAuth } from "@/context/AuthContext"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"

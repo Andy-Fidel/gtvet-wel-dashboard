@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { API_BASE } from '@/config';
 import { ArrowLeft, Lock, CheckCircle2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 const ensureCsrfToken = async () => {
   const response = await fetch(`${API_BASE}/auth/csrf`, { credentials: 'include' });
@@ -55,10 +55,10 @@ export default function ResetPassword() {
       }
 
       setIsSuccess(true);
-      toast.success(data.message || 'Password has been reset successfully!');
-      
-      // Auto redirect after 3s
-      setTimeout(() => navigate('/login'), 3000);
+      toast.success(data.message || 'Password has been reset successfully!', {
+        description: 'Close this message to continue to sign in.',
+        onDismiss: () => navigate('/login'),
+      });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to reset password');
     } finally {

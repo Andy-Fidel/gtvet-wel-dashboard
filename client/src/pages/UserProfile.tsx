@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { User, Mail, Building2, Phone, MapPin, Shield, Edit2, Loader2, Camera } from "lucide-react";
 import { useState, useRef } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { getHQScopeLabel, isHQRole } from "@/lib/rbac";
 
 export default function UserProfile() {

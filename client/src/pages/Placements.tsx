@@ -21,7 +21,7 @@ import { type Placement, columns } from "./placements-columns"
 import { MonitoringVisitForm } from './MonitoringVisitForm'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
 import { Download, Plus, AlignLeft, Building2, Users as UsersIcon, ClipboardList } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"

@@ -4,7 +4,7 @@ import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import type { Placement } from '@/pages/placements-columns'
 
 type Transfer = {

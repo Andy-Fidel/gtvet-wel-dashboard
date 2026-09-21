@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { Archive, ArrowRight, Briefcase, Building2, CalendarClock, CheckCircle2, MessageSquare, NotebookPen, Search, Star, UserCircle2, XCircle } from "lucide-react"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 
 import { useAuth } from "@/context/AuthContext"
 import { Badge } from "@/components/ui/badge"

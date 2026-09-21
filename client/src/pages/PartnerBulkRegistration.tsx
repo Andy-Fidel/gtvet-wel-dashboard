@@ -3,7 +3,7 @@ import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 
 type Result = { row: number; name: string; status: 'Ready' | 'Created' | 'Skipped'; message: string }
 type Summary = { importId?: string; createdAt?: string; results: Result[]; created: number; ready: number; skipped: number }

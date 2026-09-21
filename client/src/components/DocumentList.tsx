@@ -1,7 +1,7 @@
 import { useAuth } from "@/context/AuthContext"
 import { FileText, Trash2, Download, ExternalLink } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { format } from "date-fns"
 
 interface DocumentItem {

@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/dialog"
 import { DataTable } from "@/components/ui/data-table"
 import { useAuth } from "@/context/AuthContext"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { X } from "lucide-react"

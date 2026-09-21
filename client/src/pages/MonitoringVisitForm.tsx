@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils"
 import { Calendar } from "@/components/ui/Calendar"
 import { safeDateString } from "@/lib/dateUtils"
 import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
-import { toast } from "sonner"
+import { toast } from "@/lib/toast"
 
 const formSchema = z.object({
   learner: z.string().min(1, "Learner is required"),
