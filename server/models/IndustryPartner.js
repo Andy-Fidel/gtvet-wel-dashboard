@@ -1,6 +1,22 @@
 import mongoose from 'mongoose';
 
+const partnerChangeSchema = new mongoose.Schema({
+  institution: { type: String, required: true },
+  requester: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  requesterName: String,
+  status: { type: String, enum: ['InstitutionReview', 'HQReview', 'Returned', 'Approved', 'Rejected', 'Withdrawn'], required: true },
+  version: { type: Number, default: 0 },
+  original: mongoose.Schema.Types.Mixed,
+  proposed: mongoose.Schema.Types.Mixed,
+  reason: String,
+  attachments: [{ _id: false, documentId: mongoose.Schema.Types.ObjectId, fileName: String, url: String }],
+  history: [{ _id: false, action: String, actor: mongoose.Schema.Types.ObjectId, actorName: String, comment: String, at: Date, original: mongoose.Schema.Types.Mixed, proposed: mongoose.Schema.Types.Mixed, attachments: [mongoose.Schema.Types.Mixed] }],
+}, { timestamps: true });
+
 const industryPartnerSchema = new mongoose.Schema({
+  // Embedded so a decision and its shared registry changes commit in one MongoDB write.
+  changeRequests: { type: [partnerChangeSchema], select: false, default: [] },
+  institutionDetails: { type: [{ _id: false, institution: String, contactPerson: String, contactPhone: String, contactEmail: String, liaisonOfficer: String, notes: String, version: Number }], select: false, default: [] },
   workflowVersion: { type: Number, default: 0 },
   name: { type: String, required: true, unique: true, trim: true },
   sector: { type: String, required: true },

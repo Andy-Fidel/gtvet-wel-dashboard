@@ -16,6 +16,8 @@ import { EmployerEvaluation } from '../models/EmployerEvaluation.js';
 import { MonitoringVisit } from '../models/MonitoringVisit.js';
 import { auth } from '../middleware/auth.js';
 import { logAuditEvent } from '../utils/audit.js';
+import { IndustryPartner } from '../models/IndustryPartner.js';
+import { canReadPartnerChangeDocument } from '../utils/partnerChanges.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -149,6 +151,7 @@ const deleteLocalDocument = async (publicId) => {
 };
 
 const canAccessDocument = async (user, document) => {
+  if (await canReadPartnerChangeDocument(user, document)) return true;
   if (isHQRole(user.role)) {
     if (isScopedHQRole(user.role) && user.hqScopeType === 'Institution') return document.institution === user.institution;
     if (isScopedHQRole(user.role) && user.hqScopeType === 'Region') {
@@ -228,7 +231,7 @@ router.use(enforceHQAccess);
 
 router.get('/local-file/document/:documentId/:fileName', async (req, res) => {
   try {
-    const document = await Document.findById(req.params.documentId).select('publicId institution partnerId');
+    const document = await Document.findById(req.params.documentId).select('publicId institution partnerId url');
     if (!document || !document.publicId?.startsWith('local:') || !(await canAccessDocument(req.user, document))) {
       return res.status(404).json({ message: 'File not found' });
     }
@@ -540,6 +543,9 @@ router.delete('/:id', async (req, res) => {
     const isPartnerScoped = req.user.role === 'IndustryPartner' && doc.partnerId?.toString?.() === getUserPartnerId(req.user);
     if (!isOwner && !isSuperAdmin && !isInstitutionAdmin && !isPartnerScoped) {
       return res.status(403).json({ message: 'Not authorized to delete this document' });
+    }
+    if (await IndustryPartner.exists({ $or: [{ mouDocumentUrl: doc.url }, { 'changeRequests.attachments.documentId': doc._id }, { 'changeRequests.history.attachments.documentId': doc._id }] })) {
+      return res.status(409).json({ message: 'This document is retained as partner review evidence and cannot be deleted.' });
     }
 
     if (doc.publicId?.startsWith('local:')) {

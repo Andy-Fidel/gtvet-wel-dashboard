@@ -9,6 +9,7 @@ import { Learner } from '../models/Learner.js';
 import { Placement } from '../models/Placement.js';
 import { PlacementTransfer } from '../models/PlacementTransfer.js';
 import { registerPlacementTransfers } from '../utils/placementTransfers.js';
+import { registerPartnerChanges } from '../utils/partnerChanges.js';
 import { learnerSearchFilter } from '../utils/learnerSearch.js';
 import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
@@ -61,6 +62,7 @@ router.use(auth);
 router.use(enforceHQAccess);
 router.use((req, res, next) => {
   if (Object.hasOwn(req.body || {}, 'workflowVersion')) return res.status(400).json({ message: 'Workflow version is managed by the server.' });
+  if (Object.keys(req.body || {}).some(field => ['changeRequests', 'institutionDetails'].includes(field.split('.')[0]))) return res.status(400).json({ message: 'Use the partner change workflow to update these details.' });
   next();
 });
 
@@ -13001,7 +13003,10 @@ router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'),
 
 router.delete('/industry-partners/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        const deletedPartner = await IndustryPartner.findByIdAndDelete(req.params.id);
+        const deletedPartner = await IndustryPartner.findOneAndDelete({ _id: req.params.id, 'changeRequests.0': { $exists: false } });
+        if (!deletedPartner && await IndustryPartner.exists({ _id: req.params.id })) {
+            return res.status(409).json({ message: 'This partner has review history. Mark it inactive instead of deleting it.' });
+        }
         if (deletedPartner) {
             await logAuditEvent({
                 req,
@@ -14108,4 +14113,5 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
 
 
 export const processDuePlacementTransfers = registerPlacementTransfers(router, { prepareActivation: preparePlacementActivation, getScope: getPlacementScope, partnerVisibility: partnerVisibilityFilter });
+registerPartnerChanges(router);
 export default router;

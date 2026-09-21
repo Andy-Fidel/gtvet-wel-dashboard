@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
+import { PartnerChangeForm, PartnerChangeQueue, PartnerRelationship } from '@/components/PartnerChanges'
 import { SearchPartnerDialog } from "@/components/SearchPartnerDialog"
 import type { IndustryPartner as SharedIndustryPartner } from "@/types/models"
 
@@ -19,6 +20,8 @@ export default function IndustryPartners() {
   const [open, setOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [editingPartner, setEditingPartner] = useState<IndustryPartner | null>(null)
+  const [changePartner, setChangePartner] = useState<IndustryPartner | null>(null)
+  const [relationshipPartner, setRelationshipPartner] = useState<IndustryPartner | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(24)
@@ -78,11 +81,11 @@ export default function IndustryPartners() {
     if (!confirm("Are you sure you want to delete this partner?")) return;
     try {
       const res = await authFetch(`/api/industry-partners/${id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error("Failed to delete")
+      if (!res.ok) { const data = await res.json(); throw new Error(data.message || 'Failed to delete') }
       setRefreshKey(prev => prev + 1)
       toast.success("Industry partner deleted")
-    } catch {
-      toast.error("Error deleting partner")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Error deleting partner')
     }
   }
 
@@ -126,6 +129,9 @@ export default function IndustryPartners() {
         )}
       </div>
 
+      {['Admin', 'Manager', 'Staff', 'SuperAdmin'].includes(user?.role || '') && <PartnerChangeQueue onChange={() => setRefreshKey(key => key + 1)} />}
+      <Dialog open={!!changePartner} onOpenChange={open => { if (!open) setChangePartner(null) }}><DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Request changes: {changePartner?.name}</DialogTitle><DialogDescription>Submit corrections for institution and HQ review.</DialogDescription></DialogHeader>{changePartner && <PartnerChangeForm partner={{ ...changePartner }} onDone={() => setChangePartner(null)} />}</DialogContent></Dialog>
+      <Dialog open={!!relationshipPartner} onOpenChange={open => { if (!open) setRelationshipPartner(null) }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{relationshipPartner?.name}: institution details</DialogTitle><DialogDescription>Contacts and notes for your institution.</DialogDescription></DialogHeader>{relationshipPartner && <PartnerRelationship partner={relationshipPartner} onDone={() => setRelationshipPartner(null)} />}</DialogContent></Dialog>
       <SearchPartnerDialog 
         open={searchOpen} 
         onOpenChange={setSearchOpen}
@@ -240,6 +246,7 @@ export default function IndustryPartners() {
                     </div>
                 </div>
 
+                {['Admin', 'Manager', 'Staff'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3"><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button></div>}
                 {(user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') && (
                     <div className="flex gap-2 pt-2 border-t border-gray-100 mt-4">
                          <Button
