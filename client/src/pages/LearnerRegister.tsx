@@ -350,6 +350,7 @@ export default function LearnerRegister() {
         body: JSON.stringify({ learners: csvData }),
       })
       const result = await res.json()
+      if (!res.ok) throw new Error(result.message || 'Bulk upload failed')
       setCsvResult(result)
       if (result.created > 0) {
         setRefreshKey(prev => prev + 1)
@@ -359,11 +360,13 @@ export default function LearnerRegister() {
         const options = { description: 'Review the row errors in the import results and correct the affected rows before retrying.' }
         if (result.created > 0) toast.warning(message, options)
         else toast.error(message, options)
+      } else if (result.created > 0) {
+        toast.success(`${result.created} learner(s) created successfully!`)
       } else {
-        toast.success(`${result.created || 0} learner(s) created successfully!`)
+        toast.warning('No learners were created.', { description: 'Review the import results before retrying.' })
       }
-    } catch {
-      toast.error("Bulk upload failed")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Bulk upload failed')
     } finally {
       setCsvUploading(false)
     }
