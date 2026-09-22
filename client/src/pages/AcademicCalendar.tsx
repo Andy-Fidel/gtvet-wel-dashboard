@@ -56,8 +56,11 @@ interface AcademicEvent {
   hoursPerDay?: number | null
   sourceLabel?: string
   isActive: boolean
-  createdBy: { _id: string; name: string }
-  createdAt: string
+  createdBy?: { _id: string; name: string }
+  createdAt?: string
+  source?: 'calendar' | 'academic-term'
+  color?: string
+  termStatus?: AcademicTermOption['status']
 }
 
 const eventTypeColors: Record<string, string> = {
@@ -114,7 +117,21 @@ type AcademicTermOption = {
   startDate: string
   endDate: string
   yearGroupSchedules?: Array<{ yearGroup: string; startDate: string; endDate: string }>
+  status: 'Planned' | 'Active' | 'Completed'
+  isCurrent: boolean
 }
+
+const yearGroupColors: Record<string, string> = {
+  'Year 1': '#7C3AED',
+  'Year 2': '#0891B2',
+  'Year 3': '#D97706',
+}
+
+const getTermSchedules = (term: AcademicTermOption) => (
+  term.yearGroupSchedules?.length
+    ? term.yearGroupSchedules
+    : yearGroupOptions.map(yearGroup => ({ yearGroup, startDate: term.startDate, endDate: term.endDate }))
+)
 
 export default function AcademicCalendarPage() {
   const [terms, setTerms] = useState<AcademicTermOption[]>([])
@@ -158,6 +175,40 @@ export default function AcademicCalendarPage() {
       ? `This window extends outside the ${formData.targetYearGroup} schedule for ${matchingTerm.name}: ${termStart} to ${termEnd}. Adjust the window, review the term in Settings, or save a draft.` : ''
   )
 
+  const termBoundaryEvents: AcademicEvent[] = terms.flatMap(term => getTermSchedules(term).flatMap(schedule => {
+    const common = {
+      semester: term.termType,
+      academicYear: term.academicYear,
+      targetYearGroup: schedule.yearGroup,
+      isActive: term.status === 'Active',
+      source: 'academic-term' as const,
+      color: yearGroupColors[schedule.yearGroup] || '#8B5CF6',
+      termStatus: term.status,
+    }
+    return [
+      {
+        ...common,
+        _id: `term-${term._id}-${schedule.yearGroup}-start`,
+        title: `${schedule.yearGroup} · ${term.name} starts`,
+        description: `Official ${schedule.yearGroup} semester start from Academic Terms.`,
+        startDate: schedule.startDate,
+        endDate: schedule.startDate,
+        eventType: 'Semester Start',
+      },
+      {
+        ...common,
+        _id: `term-${term._id}-${schedule.yearGroup}-end`,
+        title: `${schedule.yearGroup} · ${term.name} ends`,
+        description: `Official ${schedule.yearGroup} semester end from Academic Terms.`,
+        startDate: schedule.endDate,
+        endDate: schedule.endDate,
+        eventType: 'Semester End',
+      },
+    ]
+  }))
+  const reportingEvents = [...events, ...termBoundaryEvents]
+  const eventColor = (event: AcademicEvent) => event.color || eventTypeColors[event.eventType] || '#6B7280'
+
   const fetchEvents = async () => {
     try {
       const res = await authFetch('/api/academic-calendar')
@@ -170,6 +221,7 @@ export default function AcademicCalendarPage() {
 
   useEffect(() => {
     fetchEvents()
+    void refreshTerms()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authFetch])
 
@@ -290,7 +342,7 @@ export default function AcademicCalendarPage() {
   const calendarDays = eachDayOfInterval({ start: startDate, end: endDate })
 
   const getEventsForDay = (day: Date) => {
-    return events.filter(event => {
+    return reportingEvents.filter(event => {
       const s = new Date(event.startDate)
       const e = new Date(event.endDate)
       return isSameDay(s, day) || isSameDay(e, day) || isWithinInterval(day, { start: s, end: e })
@@ -300,7 +352,7 @@ export default function AcademicCalendarPage() {
   const nextMonth = () => setCurrentMonth(addMonths(currentMonth, 1))
   const prevMonth = () => setCurrentMonth(subMonths(currentMonth, 1))
 
-  const upcomingEvents = events
+  const upcomingEvents = reportingEvents
     .filter(e => new Date(e.startDate) >= new Date())
     .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
     .slice(0, 6)
@@ -316,16 +368,16 @@ export default function AcademicCalendarPage() {
           {previewEvent ? (
             <div className="space-y-4 py-2">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge className="border-0" style={{ backgroundColor: `${eventTypeColors[previewEvent.eventType] || '#6B7280'}20`, color: eventTypeColors[previewEvent.eventType] || '#6B7280' }}>
+                <Badge className="border-0" style={{ backgroundColor: `${eventColor(previewEvent)}20`, color: eventColor(previewEvent) }}>
                   {previewEvent.eventType}
                 </Badge>
                 <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">{format(new Date(previewEvent.startDate), 'PP')} – {format(new Date(previewEvent.endDate), 'PP')}</Badge>
                 {previewEvent.semester ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">{previewEvent.semester}</Badge> : null}
                 {previewEvent.academicYear ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">{previewEvent.academicYear}</Badge> : null}
-                {previewEvent.eventType === 'WEL Window' && previewEvent.targetYearGroup ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">{previewEvent.targetYearGroup}</Badge> : null}
+                {(previewEvent.eventType === 'WEL Window' || previewEvent.source === 'academic-term') && previewEvent.targetYearGroup ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">{previewEvent.targetYearGroup}</Badge> : null}
                 {previewEvent.eventType === 'WEL Window' && previewEvent.institutionCalendarType ? <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">{previewEvent.institutionCalendarType}</Badge> : null}
-                <Badge className={previewEvent.isActive ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-gray-100 text-gray-700 border-gray-200'}>
-                  {previewEvent.isActive ? 'Active' : 'Inactive'}
+                <Badge className={(previewEvent.termStatus === 'Active' || (!previewEvent.termStatus && previewEvent.isActive)) ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-gray-100 text-gray-700 border-gray-200'}>
+                  {previewEvent.termStatus || (previewEvent.isActive ? 'Active' : 'Inactive')}
                 </Badge>
               </div>
               <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
@@ -336,10 +388,17 @@ export default function AcademicCalendarPage() {
                 <p className="text-xs font-black uppercase tracking-wider text-gray-400">Description</p>
                 <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{previewEvent.description || 'No description provided.'}</p>
               </div>
-              <div className="rounded-2xl border border-gray-100 bg-white p-4">
-                <p className="text-xs font-black uppercase tracking-wider text-gray-400">Created By</p>
-                <p className="mt-2 text-sm text-gray-700">{previewEvent.createdBy?.name || 'Unknown'} · {format(new Date(previewEvent.createdAt), 'PPp')}</p>
-              </div>
+              {previewEvent.source === 'academic-term' ? (
+                <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-violet-700">Source</p>
+                  <p className="mt-2 text-sm font-bold text-violet-900">Managed from Settings → Academic Terms</p>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-gray-400">Created By</p>
+                  <p className="mt-2 text-sm text-gray-700">{previewEvent.createdBy?.name || 'Unknown'}{previewEvent.createdAt ? ` · ${format(new Date(previewEvent.createdAt), 'PPp')}` : ''}</p>
+                </div>
+              )}
               {previewEvent.eventType === 'WEL Window' ? (
                 <div className="grid grid-cols-2 gap-4">
                   <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
@@ -352,16 +411,18 @@ export default function AcademicCalendarPage() {
                   </div>
                 </div>
               ) : null}
-              <DialogFooter>
-                <Button variant="outline" className="rounded-xl border-blue-200 text-blue-700 hover:bg-blue-50" onClick={() => { setPreviewEvent(null); handleEdit(previewEvent) }}>
-                  <Pencil className="mr-2 h-4 w-4" />
-                  Edit Event
-                </Button>
-                <Button variant="outline" className="rounded-xl border-red-200 text-red-700 hover:bg-red-50" onClick={() => { setPreviewEvent(null); handleDelete(previewEvent._id) }}>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete Event
-                </Button>
-              </DialogFooter>
+              {previewEvent.source !== 'academic-term' ? (
+                <DialogFooter>
+                  <Button variant="outline" className="rounded-xl border-blue-200 text-blue-700 hover:bg-blue-50" onClick={() => { setPreviewEvent(null); handleEdit(previewEvent) }}>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    Edit Event
+                  </Button>
+                  <Button variant="outline" className="rounded-xl border-red-200 text-red-700 hover:bg-red-50" onClick={() => { setPreviewEvent(null); handleDelete(previewEvent._id) }}>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Event
+                  </Button>
+                </DialogFooter>
+              ) : null}
             </div>
           ) : null}
         </DialogContent>
@@ -369,9 +430,9 @@ export default function AcademicCalendarPage() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Academic Calendar</h2>
+          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Reporting Calendar</h2>
           <p className="text-gray-500 font-bold mt-1 uppercase tracking-wider text-xs">
-            Define semesters, deadlines, and key dates for all institutions
+            Year-group semester boundaries, WEL windows, deadlines and key dates
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -405,6 +466,45 @@ export default function AcademicCalendarPage() {
         </div>
       </div>
 
+      <Card className="border-0 shadow-xl rounded-[2rem] overflow-hidden">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-xl font-black">Academic Term Schedules</CardTitle>
+          <CardDescription>Read-only dates synchronized from Settings → Academic Terms.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {terms.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm font-semibold text-slate-500">
+              No academic terms have been configured.
+            </div>
+          ) : (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {terms.map(term => (
+                <div key={term._id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-black text-slate-900">{term.name}</p>
+                      <p className="text-xs font-semibold text-slate-500">{term.termType} · {term.academicYear}</p>
+                    </div>
+                    <Badge className={term.isCurrent ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-white text-slate-600 border-slate-200'}>
+                      {term.isCurrent ? 'Current' : term.status}
+                    </Badge>
+                  </div>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    {getTermSchedules(term).map(schedule => (
+                      <div key={schedule.yearGroup} className="rounded-xl border bg-white p-3" style={{ borderColor: `${yearGroupColors[schedule.yearGroup] || '#94A3B8'}40` }}>
+                        <p className="text-xs font-black" style={{ color: yearGroupColors[schedule.yearGroup] || '#475569' }}>{schedule.yearGroup}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-700">{format(new Date(schedule.startDate), 'dd MMM yyyy')}</p>
+                        <p className="text-[11px] text-slate-400">to {format(new Date(schedule.endDate), 'dd MMM yyyy')}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Calendar Grid */}
         <div className="lg:col-span-3 bg-white border border-gray-100 rounded-[2.5rem] shadow-xl p-8">
@@ -436,7 +536,7 @@ export default function AcademicCalendarPage() {
                   </div>
                   <div className="space-y-1">
                     {dayEvents.slice(0, 3).map(event => {
-                      const color = eventTypeColors[event.eventType] || '#6B7280'
+                      const color = eventColor(event)
                       return (
                         <div
                           key={event._id}
@@ -474,7 +574,7 @@ export default function AcademicCalendarPage() {
                   <p className="text-sm text-gray-400 font-bold italic">No upcoming events</p>
                 ) : (
                   upcomingEvents.map(event => {
-                    const color = eventTypeColors[event.eventType] || '#6B7280'
+                    const color = eventColor(event)
                     return (
                       <button key={event._id} type="button" className="relative pl-6 group text-left w-full" onClick={() => setPreviewEvent(event)}>
                         <div className="absolute left-0 top-1 bottom-1 w-1 rounded-full group-hover:w-1.5 transition-all" style={{ backgroundColor: color }} />
@@ -515,12 +615,12 @@ export default function AcademicCalendarPage() {
           <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden border-0">
             <CardHeader className="p-6 pb-2">
               <CardTitle className="text-lg font-black">All Events</CardTitle>
-              <CardDescription className="text-gray-400 font-bold text-xs">{events.length} events defined</CardDescription>
+              <CardDescription className="text-gray-400 font-bold text-xs">{reportingEvents.length} reporting events</CardDescription>
             </CardHeader>
             <CardContent className="p-6 pt-2">
               <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
-                {events.map(event => {
-                  const color = eventTypeColors[event.eventType] || '#6B7280'
+                {reportingEvents.map(event => {
+                  const color = eventColor(event)
                   return (
                     <div key={event._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors group">
                       <div className="flex items-center gap-3 min-w-0">
@@ -532,14 +632,16 @@ export default function AcademicCalendarPage() {
                           </div>
                         </button>
                       </div>
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg" onClick={() => handleEdit(event)}>
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-red-500 hover:text-red-600" onClick={() => handleDelete(event._id)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
+                      {event.source !== 'academic-term' ? (
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg" onClick={() => handleEdit(event)}>
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-red-500 hover:text-red-600" onClick={() => handleDelete(event._id)}>
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ) : <Badge variant="outline" className="text-[9px]">Academic Term</Badge>}
                     </div>
                   )
                 })}
