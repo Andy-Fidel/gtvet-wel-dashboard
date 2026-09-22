@@ -7,11 +7,11 @@ import { AcademicTerm } from '../models/AcademicTerm.js';
 import { AcademicState } from '../models/AcademicState.js';
 import { SemesterReport } from '../models/SemesterReport.js';
 import { AuditLog } from '../models/AuditLog.js';
-import { activateTerm, effectiveTerm, getAcademicState, pickFields, calendarFields, termCalendarEvents, termScheduleForYearGroup, validateWindowTerm, validateTermWindows } from '../utils/academicGovernance.js';
+import { activateTerm, effectiveTerm, getAcademicState, pickFields, calendarFields, termCalendarEvents, termScheduleForYearGroup } from '../utils/academicGovernance.js';
 
 const id = () => new mongoose.Types.ObjectId();
 const termData = () => ({ name: 'Semester One', academicYear: '2026/2027', termType: 'Semester 1', startDate: '2026-09-01', endDate: '2027-02-28', createdBy: id() });
-const eventData = () => ({ title: 'Window', startDate: '2026-09-07', endDate: '2026-12-12', eventType: 'WEL Window', semester: 'Semester 1', academicYear: '2026/2027', institutionCalendarType: 'Single Track', targetYearGroup: 'Year 3', createdBy: id() });
+const eventData = () => ({ title: 'Window', startDate: '2027-03-15', endDate: '2027-05-30', eventType: 'WEL Window', semester: 'Semester 1', academicYear: '2026/2027', institutionCalendarType: 'Single Track', targetYearGroup: 'Year 3', createdBy: id() });
 const route = (path, method) => router.stack.find(layer => layer.route?.path === path && layer.route.methods[method]).route;
 const response = () => ({ code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
 function mockLock(t, state = { currentTerm: null, completedTerms: [], lockToken: 'test' }) {
@@ -21,7 +21,7 @@ function mockLock(t, state = { currentTerm: null, completedTerms: [], lockToken:
   return state;
 }
 
-test('calendar validation works with Mongoose 9 and rejects dates and incomplete WEL scope', async () => {
+test('calendar validation accepts post-semester WEL dates and rejects invalid or incomplete scope', async () => {
   await new AcademicCalendar(eventData()).validate();
   await new AcademicCalendar({ ...eventData(), eventType: 'Holiday' }).validate();
   for (const bad of [{ endDate: '2026-01-01' }, { semester: 'invalid' }, { academicYear: '2026/2028' }, { institutionCalendarType: 'All' }, { targetYearGroup: 'All' }]) {
@@ -85,24 +85,6 @@ test('ambiguous legacy current terms fail closed without choosing a winner', asy
   t.mock.method(AcademicState, 'findById', () => ({ lean: async () => null }));
   t.mock.method(AcademicTerm, 'find', () => ({ sort() { return this; }, lean: async () => [{ _id: id(), isCurrent: true }, { _id: id(), isCurrent: true }] }));
   await assert.rejects(getAcademicState(), /Multiple legacy/);
-});
-
-test('active WEL windows require exactly one enclosing term while drafts remain editable', async t => {
-  let terms = [];
-  t.mock.method(AcademicTerm, 'find', () => ({ lean: async () => terms }));
-  await validateWindowTerm({ ...eventData(), isActive: false });
-  await assert.rejects(validateWindowTerm({ ...eventData(), isActive: true }), /exactly one/);
-  terms = [termData()];
-  await validateWindowTerm({ ...eventData(), isActive: true });
-  await assert.rejects(validateWindowTerm({ ...eventData(), isActive: true, endDate: '2027-03-01' }), error => {
-    assert.equal(error.status, 409);
-    assert.match(error.message, /2026-09-01 to 2027-02-28/);
-    assert.match(error.message, /2027-03-01/);
-    assert.match(error.message, /save as a draft/);
-    return true;
-  });
-  t.mock.method(AcademicCalendar, 'find', () => ({ lean: async () => [eventData()] }));
-  await assert.rejects(validateTermWindows({ ...termData(), startDate: '2026-10-01' }), /include the active WEL/);
 });
 
 test('term delete protects current terms and report references without deleting data', async t => {

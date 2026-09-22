@@ -487,10 +487,11 @@ const guideDefinitions: GuideDefinition[] = [
     steps: () => [
       {
         title: "Reporting Calendar",
-        description: "This HQ-only page combines Academic Term schedules with deadlines and reporting events.",
+        description: "This HQ-only page shows Academic Term schedules alongside independently managed WEL vacation windows and reporting events.",
         bullets: [
           "Year 1, Year 2 and Year 3 semester boundaries synchronize automatically from Academic Terms.",
-          "Edit official semester dates in Settings and use this page for WEL windows and reporting events.",
+          "Enter the actual WEL vacation dates here; they may start after a semester ends.",
+          "Semester and academic year identify the reporting cycle and do not constrain WEL dates.",
           "Use the cohort colours to distinguish year-group milestones at a glance.",
         ],
       },

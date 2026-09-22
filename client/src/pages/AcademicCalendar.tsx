@@ -135,7 +135,6 @@ const getTermSchedules = (term: AcademicTermOption) => (
 
 export default function AcademicCalendarPage() {
   const [terms, setTerms] = useState<AcademicTermOption[]>([])
-  const [termLoadError, setTermLoadError] = useState(false)
   const [templateYear, setTemplateYear] = useState(() => {
     const now = new Date()
     const year = now.getFullYear() - (now.getMonth() < 7 ? 1 : 0)
@@ -158,22 +157,10 @@ export default function AcademicCalendarPage() {
       const data = await response.json()
       if (!Array.isArray(data)) throw new Error('Invalid academic terms response')
       setTerms(data)
-      setTermLoadError(false)
     } catch {
-      setTermLoadError(true)
+      setTerms([])
     }
   }
-  const matchingTerms = terms.filter(term => term.academicYear === formData.academicYear && term.termType === formData.semester)
-  const matchingTerm = matchingTerms.length === 1 ? matchingTerms[0] : undefined
-  const matchingSchedule = matchingTerm?.yearGroupSchedules?.find(schedule => schedule.yearGroup === formData.targetYearGroup)
-  const termStart = (matchingSchedule?.startDate || matchingTerm?.startDate || '').slice(0, 10)
-  const termEnd = (matchingSchedule?.endDate || matchingTerm?.endDate || '').slice(0, 10)
-  const windowConflict = formData.eventType === 'WEL Window' && (
-    termLoadError ? 'Academic terms could not be loaded. Retry before publishing.' :
-    !matchingTerm ? 'Select a matching academic term, or create one in Settings. You can still save a draft.' :
-    formData.startDate && formData.endDate && (formData.startDate < termStart || formData.endDate > termEnd)
-      ? `This window extends outside the ${formData.targetYearGroup} schedule for ${matchingTerm.name}: ${termStart} to ${termEnd}. Adjust the window, review the term in Settings, or save a draft.` : ''
-  )
 
   const termBoundaryEvents: AcademicEvent[] = terms.flatMap(term => getTermSchedules(term).flatMap(schedule => {
     const common = {
@@ -237,10 +224,6 @@ export default function AcademicCalendarPage() {
     }
     if (formData.endDate < formData.startDate) {
       toast.error('End date cannot be before start date')
-      return
-    }
-    if (!asDraft && formData.isActive && windowConflict) {
-      toast.error(windowConflict)
       return
     }
     if (formData.eventType === 'WEL Window') {
@@ -778,7 +761,9 @@ export default function AcademicCalendarPage() {
                     ))}
                   </select>
                   <p className="mt-2 text-xs font-medium text-slate-500">
-                    Link the event to the semester it belongs to for filtering and reporting.
+                    {formData.eventType === 'WEL Window'
+                      ? 'This identifies the reporting cycle only. It does not constrain the WEL dates.'
+                      : 'Link the event to the semester it belongs to for filtering and reporting.'}
                   </p>
                 </div>
                 <div>
@@ -798,32 +783,11 @@ export default function AcademicCalendarPage() {
 
               {formData.eventType === 'WEL Window' ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                  <label htmlFor="wel-academic-term" className="block text-sm font-bold text-slate-700">Academic term from Settings</label>
-                  <select id="wel-academic-term" className="mt-2 w-full rounded-xl border border-gray-200 p-3" value={matchingTerm?._id || ''} onChange={event => {
-                    const term = terms.find(item => item._id === event.target.value)
-                    if (term) setFormData(current => {
-                      const schedule = term.yearGroupSchedules?.find(item => item.yearGroup === current.targetYearGroup)
-                      return {
-                        ...current,
-                        academicYear: term.academicYear,
-                        semester: term.termType,
-                        startDate: current.startDate || (schedule?.startDate || term.startDate).slice(0, 10),
-                        endDate: current.endDate || (schedule?.endDate || term.endDate).slice(0, 10),
-                      }
-                    })
-                  }}>
-                    <option value="">Select a configured semester…</option>
-                    {terms.filter(term => semesterOptions.includes(term.termType)).map(term => <option key={term._id} value={term._id}>{term.name} · {term.academicYear} · {term.startDate.slice(0, 10)} – {term.endDate.slice(0, 10)}</option>)}
-                  </select>
-                  <p className="mt-2 text-sm text-slate-600">Selecting a term fills the year and semester, and supplies dates when empty. Existing window dates are preserved. Review duration whenever you change dates; official term dates are never changed here.</p>
-                  {matchingTerm && <p className="mt-2 text-sm font-semibold">Allowed {formData.targetYearGroup === 'All' ? 'term' : formData.targetYearGroup} period: {termStart} to {termEnd}</p>}
-                  {windowConflict && <p role="status" className="mt-2 text-sm text-amber-800">{windowConflict}</p>}
-                  <div className="my-3 flex flex-wrap gap-3">
-                    <Button type="button" variant="outline" onClick={() => void refreshTerms()}>Refresh terms</Button>
-                    {matchingTerm && <Button type="button" variant="outline" onClick={() => setFormData(current => ({ ...current, startDate: termStart, endDate: termEnd }))}>Use term dates</Button>}
-                    <a href="/settings" target="_blank" rel="noopener noreferrer" className="self-center text-sm text-blue-700 underline">Review terms in Settings (new tab)</a>
-                  </div>
-                  <p className="text-xs font-black uppercase tracking-wider text-slate-500">WEL Targeting</p>
+                  <p className="text-xs font-black uppercase tracking-wider text-slate-500">WEL Vacation Window</p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Enter the actual vacation placement dates. WEL dates are independent of semester dates and may begin after the selected semester ends.
+                  </p>
+                  <p className="mt-5 text-xs font-black uppercase tracking-wider text-slate-500">WEL Targeting</p>
                   <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
                       <label className="text-sm font-bold text-gray-700 block mb-1">Institution Calendar Type</label>
@@ -947,7 +911,7 @@ export default function AcademicCalendarPage() {
               Cancel
             </Button>
             {formData.eventType === 'WEL Window' && <Button type="button" variant="outline" onClick={() => void handleSave(true)} disabled={saving}>Save draft</Button>}
-            <Button onClick={() => void handleSave()} disabled={saving || Boolean(formData.isActive && windowConflict)} className="rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold">
+            <Button onClick={() => void handleSave()} disabled={saving} className="rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold">
               {saving ? 'Saving...' : editing ? 'Update Event' : 'Create Event'}
             </Button>
           </DialogFooter>

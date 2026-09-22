@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import { isInspection } from './inspectionContext.js';
 import { AcademicState } from '../models/AcademicState.js';
 import { AcademicTerm } from '../models/AcademicTerm.js';
-import { AcademicCalendar } from '../models/AcademicCalendar.js';
 
 export const academicError = (message, status = 409) => Object.assign(new Error(message), { status });
 export const academicErrorStatus = error => error.status || (['ValidationError', 'CastError'].includes(error.name) ? 400 : 500);
@@ -86,29 +85,6 @@ export async function activateTerm(term, state, previous = null) {
   const result = await AcademicState.findOneAndUpdate({ _id: 'global', lockToken: state.lockToken, currentTerm: state.currentTerm || null, lockUntil: { $gt: new Date() } }, update, { returnDocument: 'after' }).lean();
   if (!result) throw academicError('Academic settings changed during this request. Refresh and retry.');
   return effectiveTerm(term, result);
-}
-
-export async function validateWindowTerm(event) {
-  if (event.eventType !== 'WEL Window' || !event.isActive) return;
-  const terms = await AcademicTerm.find({ academicYear: event.academicYear, termType: event.semester, archived: { $ne: true } }).lean();
-  if (terms.length !== 1) throw academicError('Configure exactly one matching academic term in Settings before activating this WEL window.');
-  const term = terms[0];
-  const schedule = termScheduleForYearGroup(term, event.targetYearGroup);
-  if (!schedule?.startDate || !schedule?.endDate) throw academicError(`Configure semester dates for ${event.targetYearGroup} before activating this WEL window.`);
-  if (new Date(event.startDate) < new Date(schedule.startDate) || new Date(event.endDate) > new Date(schedule.endDate)) {
-    const date = value => new Date(value).toISOString().slice(0, 10);
-    throw academicError(`The WEL window must fall within the ${event.targetYearGroup} semester dates (${term.name || term.termType}, ${event.academicYear}: ${date(schedule.startDate)} to ${date(schedule.endDate)}). Your window is ${date(event.startDate)} to ${date(event.endDate)}. Review the year-group dates in Settings or save as a draft.`);
-  }
-}
-
-export async function validateTermWindows(term) {
-  const windows = await AcademicCalendar.find({ eventType: 'WEL Window', isActive: true, academicYear: term.academicYear, semester: term.termType }).lean();
-  if (windows.some(window => {
-    const schedule = termScheduleForYearGroup(term, window.targetYearGroup);
-    return !schedule || new Date(window.startDate) < new Date(schedule.startDate) || new Date(window.endDate) > new Date(schedule.endDate);
-  })) {
-    throw academicError('Year-group schedules must include the active WEL windows. Review those windows before changing the term.');
-  }
 }
 
 export function termCalendarEvents(terms) {

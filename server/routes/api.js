@@ -37,7 +37,7 @@ import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
 import { partnerRegionMatch, partnerVisibilityFilter } from '../utils/partnerVisibility.js';
-import { academicError, academicErrorStatus, pickFields, termFields, calendarFields, validAcademicYear, YEAR_GROUPS, termYearGroupSchedules, termScheduleForYearGroup, getAcademicState, effectiveTerm, currentAcademicTerm, withAcademicLock, activateTerm, validateWindowTerm, validateTermWindows, termCalendarEvents } from '../utils/academicGovernance.js';
+import { academicError, academicErrorStatus, pickFields, termFields, calendarFields, validAcademicYear, YEAR_GROUPS, termYearGroupSchedules, termScheduleForYearGroup, getAcademicState, effectiveTerm, currentAcademicTerm, withAcademicLock, activateTerm, termCalendarEvents } from '../utils/academicGovernance.js';
 import { PartnerImport } from '../models/PartnerImport.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { hasCoordinates, normalizeCoordinates, locationCheck } from '../utils/workplaceCoordinates.js';
@@ -2486,7 +2486,6 @@ router.post('/settings/rollover/semester', requireRole('SuperAdmin'), async (req
             if (await SemesterReport.exists({ academicTerm: currentTerm._id, status: { $in: openReportStatuses } })) throw academicError('Resolve all in-progress closure reports before rollover.');
             if (state.completedTerms.some(id => String(id) === String(freshNext._id))) throw academicError('A completed term cannot be reactivated.');
             await freshNext.validate();
-            await validateTermWindows(freshNext);
             return activateTerm(freshNext.toObject(), state, freshCurrent.toObject());
         });
 
@@ -5773,10 +5772,6 @@ async function saveAcademicTerm(req, id = null) {
         if (before?.isCurrent && (fields.isCurrent === false || (fields.status && fields.status !== 'Active'))) throw academicError('Use semester rollover to complete or replace the current term.');
         if (wantsCurrent && state.currentTerm && !before?.isCurrent) throw academicError('Use semester rollover to activate the next term.');
         if (before?.status === 'Completed' && wantsCurrent) throw academicError('A completed term cannot be reactivated.');
-        if (id) {
-            const changed = keys => keys.some(key => Object.hasOwn(fields, key) && String(key.endsWith('Date') ? new Date(fields[key]).getTime() : fields[key]) !== String(key.endsWith('Date') ? new Date(before[key]).getTime() : before[key]));
-            if (changed(['academicYear', 'termType']) && await AcademicCalendar.exists({ academicYear: before.academicYear, semester: before.termType })) throw academicError('This term is linked to calendar events; its year and type cannot be changed.');
-        }
         term.set(fields);
         // The singleton pointer is authoritative; never persist a second active flag.
         term.isCurrent = false;
@@ -5804,7 +5799,6 @@ async function saveAcademicTerm(req, id = null) {
             })) throw academicError('A year-group schedule is locked once its closure report exists.');
         }
         if (term.termType !== 'Custom' && await AcademicTerm.exists({ _id: { $ne: term._id }, archived: { $ne: true }, academicYear: term.academicYear, termType: term.termType })) throw academicError('This academic year already has that term type.');
-        await validateTermWindows(term);
         await term.save();
         const after = wantsCurrent && !before?.isCurrent ? await activateTerm(term.toObject(), state) : effectiveTerm(term, state);
         await logAuditEvent({ req, action: id ? 'UPDATE' : 'CREATE', entityType: 'AcademicTerm', entityId: term._id, summary: `Saved academic term ${term.name}`, before, after });
@@ -5828,7 +5822,7 @@ router.delete('/academic-terms/:id', requireRole('SuperAdmin'), async (req, res)
             const term = await AcademicTerm.findById(req.params.id);
             if (!term || term.archived) throw academicError('Academic term not found', 404);
             if (effectiveTerm(term, state).isCurrent) throw academicError('The current term cannot be deleted. Use semester rollover.');
-            if (await SemesterReport.exists({ academicTerm: term._id }) || await AcademicCalendar.exists({ academicYear: term.academicYear, semester: term.termType })) throw academicError('This term is used by closure reports or calendar events and cannot be deleted.');
+            if (await SemesterReport.exists({ academicTerm: term._id })) throw academicError('This term is used by closure reports and cannot be deleted.');
             const before = term.toObject();
             term.archived = true;
             await term.save();
@@ -5870,7 +5864,6 @@ router.post('/academic-calendar', requireRole('SuperAdmin'), async (req, res) =>
         });
         await withAcademicLock(async () => {
             await event.validate();
-            await validateWindowTerm(event);
             await event.save();
         });
         await logAuditEvent({ req, action: 'CREATE', entityType: 'AcademicCalendar', entityId: event._id, summary: `Created calendar event ${event.title}`, after: event });
@@ -5890,7 +5883,6 @@ router.put('/academic-calendar/:id', requireRole('SuperAdmin'), async (req, res)
             const before = record.toObject();
             record.set(pickFields(req.body, calendarFields));
             await record.validate();
-            await validateWindowTerm(record);
             await record.save();
             await logAuditEvent({ req, action: 'UPDATE', entityType: 'AcademicCalendar', entityId: record._id, summary: `Updated calendar event ${record.title}`, before, after: record });
             return record;
