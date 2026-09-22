@@ -170,7 +170,7 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
             <FormField control={form.control} name="tradeArea" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Trade Area</FormLabel>
-                  <FormControl><Input placeholder="e.g. Suame Magazine" {...field} /></FormControl>
+                  <FormControl><Input placeholder="e.g. Building Construction" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
