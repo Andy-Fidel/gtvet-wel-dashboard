@@ -9516,7 +9516,7 @@ async function preparePlacementActivation(req, input, ids, excludeId = null) {
         if (!Number.isFinite(partner.totalSlots) || occupied + learnerIds.length > partner.totalSlots) throw placementError('Partner has insufficient available capacity.');
         data.companyName = partner.name;
         data.sector = partner.sector;
-        data.location = partner.location || partner.region;
+        data.location = data.location?.trim() || partner.location || partner.region;
     }
     const documents = learnerIds.map(learner => new Placement({ ...data, learner, institution: req.user.institution, status: 'Active' }));
     await Promise.all(documents.map(doc => doc.validate()));
@@ -14100,6 +14100,10 @@ router.post('/placement-requests', async (req, res) => {
             worksiteMode = 'FixedSite',
             locationVerificationNotes = '',
             expectedOperatingArea = '',
+            worksiteLocation = '',
+            supervisorName = '',
+            supervisorPhone = '',
+            supervisorEmail = '',
             overrideWelWindow = false,
         } = req.body;
         if (!placementRegion?.trim()) {
@@ -14163,6 +14167,10 @@ router.post('/placement-requests', async (req, res) => {
                 locationVerificationStatus: coordinates ? 'GPSVerified' : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
                 locationVerificationNotes,
                 expectedOperatingArea,
+                worksiteLocation,
+                supervisorName,
+                supervisorPhone,
+                supervisorEmail,
                 selfSourcedHost: {
                     companyName: selfSourcedHost.companyName?.trim() || '',
                     sector: selfSourcedHost.sector?.trim() || '',
@@ -14207,6 +14215,7 @@ router.post('/placement-requests', async (req, res) => {
             worksiteMode,
             locationVerificationStatus: coordinates ? 'GPSVerified' : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
             locationVerificationNotes, expectedOperatingArea,
+            worksiteLocation, supervisorName, supervisorPhone, supervisorEmail,
             submittedBy: req.user._id, sourceType: 'InstitutionFound', status: 'Submitted',
         });
         await logAuditEvent({ req, action: 'CREATE', entityType: 'PlacementRequest', entityId: pending._id,
@@ -14266,10 +14275,10 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
                 partner: fresh.partner,
                 companyName: fresh.selfSourcedHost?.companyName,
                 sector: fresh.selfSourcedHost?.sector || fresh.program,
-                location: fresh.selfSourcedHost?.location || fresh.selfSourcedHost?.town,
-                supervisorName: req.body.supervisorName || fresh.selfSourcedHost?.contactPerson,
-                supervisorPhone: req.body.supervisorPhone || fresh.selfSourcedHost?.contactPhone,
-                supervisorEmail: req.body.supervisorEmail || fresh.selfSourcedHost?.contactEmail,
+                location: req.body.worksiteLocation || fresh.worksiteLocation || fresh.selfSourcedHost?.location || fresh.selfSourcedHost?.town,
+                supervisorName: req.body.supervisorName || fresh.supervisorName || fresh.selfSourcedHost?.contactPerson,
+                supervisorPhone: req.body.supervisorPhone || fresh.supervisorPhone || fresh.selfSourcedHost?.contactPhone,
+                supervisorEmail: req.body.supervisorEmail || fresh.supervisorEmail || fresh.selfSourcedHost?.contactEmail,
                 startDate: fresh.startDate, endDate: fresh.endDate,
                 academicYear: fresh.academicYear || await resolveCurrentAcademicYear(),
                 placementRegion: fresh.placementRegion, coordinates,

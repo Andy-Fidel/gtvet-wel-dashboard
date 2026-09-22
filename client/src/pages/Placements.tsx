@@ -48,6 +48,10 @@ export type PlacementRequestData = {
   locationVerificationStatus?: string;
   locationVerificationNotes?: string;
   expectedOperatingArea?: string;
+  worksiteLocation?: string;
+  supervisorName?: string;
+  supervisorPhone?: string;
+  supervisorEmail?: string;
   _id: string;
   institution: string;
   program: string;
@@ -532,8 +536,8 @@ export default function Placements() {
         setConvertWorksiteMode(request.worksiteMode || request.partner?.operatingModel || 'FixedSite')
         setConvertOperatingArea(request.expectedOperatingArea || '')
         setConvertLocationNotes(request.locationVerificationNotes || request.verificationNotes || '')
-        setConvertSupervisorName(request.selfSourcedHost?.contactPerson || '')
-        setConvertSupervisorPhone(request.selfSourcedHost?.contactPhone || '')
+        setConvertSupervisorName(request.supervisorName || request.selfSourcedHost?.contactPerson || '')
+        setConvertSupervisorPhone(request.supervisorPhone || request.selfSourcedHost?.contactPhone || '')
         setConvertLat(String(request.coordinates?.lat ?? ''))
         setConvertLng(String(request.coordinates?.lng ?? ''))
         setConvertConfirmOpen(true)

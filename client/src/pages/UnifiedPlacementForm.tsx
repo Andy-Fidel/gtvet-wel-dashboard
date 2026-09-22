@@ -17,7 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
-import { Loader2, Search, Building2, Terminal, ShieldAlert } from "lucide-react"
+import { Loader2, Search, Building2, Terminal, ShieldAlert, CheckCircle2, AlertCircle, Circle } from "lucide-react"
 import type { IndustryPartner, Learner } from '@/types/models'
 import { INDUSTRY_SECTORS } from "@/lib/constants"
 
@@ -45,6 +45,7 @@ const formSchema = z.object({
   worksiteMode: z.enum(['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises']),
   expectedOperatingArea: z.string().optional(),
   locationVerificationNotes: z.string().optional(),
+  worksiteLocation: z.string().optional(),
   approveLocationException: z.boolean(),
   
   // Shared fields
@@ -95,6 +96,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const [learners, setLearners] = useState<Learner[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [overrideWelWindow, setOverrideWelWindow] = useState(false)
+  const [worksiteChoice, setWorksiteChoice] = useState<'partner' | 'different'>('partner')
   const { authFetch, user } = useAuth()
 
   const preSelectedLearnerId = initialData?.learner;
@@ -118,7 +120,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         town: "",
         contactPerson: "",
         sourceNotes: ""
-        ,worksiteMode: 'FixedSite', expectedOperatingArea: '', locationVerificationNotes: '', approveLocationException: false
+        ,worksiteMode: 'FixedSite', expectedOperatingArea: '', locationVerificationNotes: '', worksiteLocation: '', approveLocationException: false
     },
   })
 
@@ -127,12 +129,22 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const worksiteMode = form.watch('worksiteMode')
   const approveLocationException = form.watch('approveLocationException')
   const flexibleWorksite = ['MobileField', 'NoFixedPremises'].includes(worksiteMode)
+  const selectedPartner = useMemo(() => placementType === 'registered' ? partners.find(item => item._id === selectedPartnerId) : undefined, [placementType, partners, selectedPartnerId])
+  const showWorksiteSection = placementType !== 'registered' || Boolean(selectedPartner)
   useEffect(() => {
-    const partner = placementType === 'registered' ? partners.find(item => item._id === selectedPartnerId) : undefined
-    const site = partner?.coordinates
+    const site = selectedPartner?.coordinates
     setLat(String(site?.lat ?? '')); setLng(String(site?.lng ?? ''))
-    if (partner) form.setValue('worksiteMode', partner.operatingModel || 'FixedSite')
-  }, [selectedPartnerId, placementType, partners, form])
+    setWorksiteChoice('partner')
+    if (selectedPartner) {
+      form.setValue('worksiteMode', selectedPartner.operatingModel || 'FixedSite')
+      form.setValue('worksiteLocation', selectedPartner.location || '')
+      form.setValue('locationVerificationNotes', selectedPartner.locationVerificationNotes || '')
+      form.setValue('expectedOperatingArea', ['MobileField', 'NoFixedPremises'].includes(selectedPartner.operatingModel || '') ? (selectedPartner.location || selectedPartner.region) : '')
+      form.setValue('supervisorName', selectedPartner.contactPerson || '')
+      form.setValue('supervisorPhone', selectedPartner.contactPhone || '')
+      form.setValue('supervisorEmail', selectedPartner.contactEmail || '')
+    }
+  }, [selectedPartner, form])
 
   useEffect(() => {
     const fetchData = async () => {
@@ -180,6 +192,22 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   }, [learners, searchQuery]);
 
   const selectedLearnerIds = form.watch("learners")
+  const supervisorName = form.watch('supervisorName')
+  const supervisorPhone = form.watch('supervisorPhone')
+  const expectedOperatingArea = form.watch('expectedOperatingArea')
+  const locationVerificationNotes = form.watch('locationVerificationNotes')
+  const worksiteLocation = form.watch('worksiteLocation')
+  const placementRegion = form.watch('placementRegion')
+  const companyName = form.watch('companyName')
+  const startDate = form.watch('startDate')
+  const endDate = form.watch('endDate')
+  const hasGps = Boolean(lat.trim() && lng.trim())
+  const partnerCapacityAvailable = selectedPartner ? selectedPartner.totalSlots - selectedPartner.usedSlots : 0
+  const worksiteConfirmed = placementType !== 'registered' || worksiteChoice === 'partner' || Boolean(worksiteLocation?.trim())
+  const locationReady = flexibleWorksite
+      ? Boolean(expectedOperatingArea?.trim() && locationVerificationNotes?.trim())
+      : hasGps || (user?.role === 'Admin' && approveLocationException) || placementType === 'registered'
+  const supervisorReady = Boolean(supervisorName?.trim() && supervisorPhone?.trim())
   const selectedWindowBlockedLearners = useMemo(() => learners.filter((learner) =>
       selectedLearnerIds.includes(learner._id) && learner.placementEligibility && !learner.placementEligibility.isEligible
   ), [learners, selectedLearnerIds])
@@ -196,6 +224,10 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   async function onSubmit(data: FormValues) {
     if (data.learners.length === 0) {
         toast.error("Please select at least one learner.");
+        return;
+    }
+    if (data.placementType === 'registered' && worksiteChoice === 'different' && !data.worksiteLocation?.trim()) {
+        toast.error('Enter the actual workplace address for this placement.');
         return;
     }
 
@@ -236,6 +268,10 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           worksiteMode: data.worksiteMode,
           expectedOperatingArea: data.expectedOperatingArea,
           locationVerificationNotes: data.locationVerificationNotes,
+          worksiteLocation: data.worksiteLocation,
+          supervisorName: data.supervisorName,
+          supervisorPhone: data.supervisorPhone,
+          supervisorEmail: data.supervisorEmail,
           approveLocationException: data.approveLocationException,
       }
       if (data.placementType === 'registered') {
@@ -270,9 +306,6 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 sector: data.sector,
                 location: data.location,
                 placementRegion: data.placementRegion,
-                supervisorName: data.supervisorName,
-                supervisorPhone: data.supervisorPhone,
-                supervisorEmail: data.supervisorEmail,
                 startDate: data.startDate,
                 endDate: data.endDate,
                 overrideWelWindow: selectedWindowBlockedLearners.length > 0 && overrideWelWindow
@@ -342,23 +375,14 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 space-y-4">
-          <FormField control={form.control} name="worksiteMode" render={({ field }) => (
-            <FormItem><FormLabel>Worksite Mode *</FormLabel><Select value={field.value} onValueChange={(value) => { field.onChange(value); form.setValue('approveLocationException', false) }}><FormControl><SelectTrigger className="bg-white"><SelectValue /></SelectTrigger></FormControl><SelectContent>
-              <SelectItem value="FixedSite">Fixed workshop</SelectItem><SelectItem value="HomeBased">Home-based</SelectItem><SelectItem value="MobileField">Mobile / field work</SelectItem><SelectItem value="MultipleSites">Multiple worksites</SelectItem><SelectItem value="TemporarySite">Temporary / project site</SelectItem><SelectItem value="NoFixedPremises">No fixed premises</SelectItem>
-            </SelectContent></Select><FormMessage /></FormItem>
-          )} />
-          {flexibleWorksite && <div className="grid gap-4 md:grid-cols-2">
-            <FormField control={form.control} name="expectedOperatingArea" render={({ field }) => <FormItem><FormLabel>Expected Operating Area *</FormLabel><FormControl><Input className="bg-white" placeholder="Communities, district or typical project sites" {...field} /></FormControl><FormMessage /></FormItem>} />
-            <FormField control={form.control} name="locationVerificationNotes" render={({ field }) => <FormItem><FormLabel>Alternative Location Evidence *</FormLabel><FormControl><Input className="bg-white" placeholder="Landmarks, supervisor confirmation, job card or visit arrangement" {...field} /></FormControl><FormMessage /></FormItem>} />
-          </div>}
-        </div>
-        <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} disabled={loading} />
-        <p className="text-sm text-gray-600">Partner coordinates are prefilled when available. Fixed worksites without GPS enter a follow-up queue. Mobile and no-premises worksites use the operating area and evidence above.</p>
-        {user?.role === 'Admin' && !lat && !lng && placementType === 'custom' && <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <Checkbox checked={approveLocationException} onCheckedChange={(checked) => form.setValue('approveLocationException', checked === true)} className="mt-0.5" />
-          <span><span className="block font-bold">Approve {flexibleWorksite ? 'alternative location evidence' : 'provisional activation'}</span><span className="block text-xs">{flexibleWorksite ? 'This Admin decision is recorded and monitoring visits capture the actual encounter location.' : 'GPS must be captured within 14 days. The placement will appear in the verification queue.'}</span></span>
-        </label>}
+        <section className="space-y-3" aria-label="Placement source">
+          <div><p className="text-xs font-bold uppercase tracking-wider text-gray-500">Step 1</p><h3 className="text-lg font-black text-gray-900">How was the placement found?</h3></div>
+          <div className="flex w-full max-w-2xl bg-gray-100 p-1 rounded-2xl">
+            <button type="button" aria-pressed={placementType === 'registered'} onClick={() => form.setValue('placementType', 'registered')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'registered' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Building2 className="h-4 w-4" /> Registered Partner</button>
+            <button type="button" aria-pressed={placementType === 'custom'} onClick={() => form.setValue('placementType', 'custom')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'custom' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Terminal className="h-4 w-4" /> Custom Org</button>
+            <button type="button" aria-pressed={placementType === 'learner_sourced'} onClick={() => form.setValue('placementType', 'learner_sourced')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'learner_sourced' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Search className="h-4 w-4" /> Learner Found</button>
+          </div>
+        </section>
         {selectedLearnerIds.length > 0 && (() => {
             const blockedLearners = learners.filter((learner) =>
                 selectedLearnerIds.includes(learner._id) && !learner.readiness?.isReadyForPlacement
@@ -422,39 +446,9 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           Eligible learners are current students without an active placement whose year group is within an active or preparation-stage WEL calendar window. Admins may explicitly override a window that is not currently open or configured. Previous WEL cycles stay attached to the learner profile as placement history.
         </div>
         
-        {/* Placement Type Toggle */}
-        <div className="flex bg-gray-100 p-1 rounded-2xl w-full max-w-md mx-auto">
-            <button
-                type="button"
-                onClick={() => form.setValue("placementType", "registered")}
-                className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-4 rounded-xl text-sm font-bold transition-all ${
-                    placementType === "registered" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
-                }`}
-            >
-                <Building2 className="h-4 w-4" /> Registered Partner
-            </button>
-            <button
-                type="button"
-                onClick={() => form.setValue("placementType", "custom")}
-                className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-4 rounded-xl text-sm font-bold transition-all ${
-                    placementType === "custom" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
-                }`}
-            >
-                <Terminal className="h-4 w-4" /> Custom Org
-            </button>
-            <button
-                type="button"
-                onClick={() => form.setValue("placementType", "learner_sourced")}
-                className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-4 rounded-xl text-sm font-bold transition-all ${
-                    placementType === "learner_sourced" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
-                }`}
-            >
-                <Search className="h-4 w-4" /> Learner Found
-            </button>
-        </div>
-
         {placementType === 'registered' ? (
             <div className="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100/50 space-y-4">
+                <div><p className="text-xs font-bold uppercase tracking-wider text-indigo-600">Step 2</p><h3 className="text-lg font-black text-gray-900">Select the industry partner</h3><p className="text-sm text-gray-600">Workplace details will appear after you select a partner.</p></div>
                 <FormField control={form.control} name="partner" render={({ field }) => (
                     <FormItem>
                     <FormLabel className="text-sm font-semibold text-gray-900">Select Industry Partner *</FormLabel>
@@ -466,14 +460,14 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                           form.setValue("placementRegion", selectedPartner.region, { shouldValidate: true })
                         }
                       }}
-                      defaultValue={field.value}
+                      value={field.value}
                     >
                         <FormControl><SelectTrigger className="bg-white"><SelectValue placeholder="Select an available partner" /></SelectTrigger></FormControl>
                         <SelectContent className="max-h-60">
                             {partners.length === 0 && <div className="p-4 text-sm text-gray-500 text-center">No partners have available slots.</div>}
                             {partners.map(p => ( 
                                 <SelectItem key={p._id} value={p._id}>
-                                    <span className="font-semibold">{p.name}</span> <span className="text-gray-400 ml-2">({p.totalSlots - p.usedSlots} slots available)</span>
+                                    <span className="font-semibold">{p.name}</span> <span className="ml-2 text-gray-400">{p.partnerType === 'MasterCraftPerson' ? 'MCP' : p.region} · {p.coordinates?.lat !== undefined && p.coordinates?.lng !== undefined ? 'GPS available' : ['MobileField', 'NoFixedPremises'].includes(p.operatingModel || '') ? 'Mobile evidence' : 'GPS pending'} · {p.totalSlots - p.usedSlots} slots</span>
                                 </SelectItem> 
                             ))}
                         </SelectContent>
@@ -484,6 +478,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
             </div>
         ) : (
             <div className="bg-amber-50/50 p-5 rounded-2xl border border-amber-100/50 space-y-4">
+                 <div><p className="text-xs font-bold uppercase tracking-wider text-amber-700">Step 2</p><h3 className="text-lg font-black text-gray-900">Enter the organisation</h3></div>
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField control={form.control} name="companyName" render={({ field }) => (
                         <FormItem>
@@ -574,6 +569,60 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                     )} />
                 ) : null}
             </div>
+        )}
+
+        {selectedPartner && (
+          <section className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-5" aria-label="Selected partner summary">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><p className="text-xs font-bold uppercase tracking-wider text-indigo-600">Selected partner</p><h3 className="mt-1 text-lg font-black text-gray-900">{selectedPartner.name}</h3><p className="text-sm text-gray-600">{selectedPartner.sector} · {selectedPartner.region}{selectedPartner.location ? ` · ${selectedPartner.location}` : ''}</p></div>
+              <div className="flex flex-wrap gap-2 text-xs font-bold"><span className="rounded-full bg-white px-3 py-1 text-indigo-700">{selectedPartner.partnerType === 'MasterCraftPerson' ? 'MCP' : (selectedPartner.partnerType || 'Registered company').replace(/([a-z])([A-Z])/g, '$1 $2')}</span><span className="rounded-full bg-white px-3 py-1 text-gray-700">{partnerCapacityAvailable} slots available</span></div>
+            </div>
+            <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+              <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">Workplace mode</dt><dd className="mt-1 font-bold text-gray-900">{(selectedPartner.operatingModel || 'FixedSite').replace(/([a-z])([A-Z])/g, '$1 $2')} <span className="ml-1 text-xs font-semibold text-indigo-600">From partner registry</span></dd></div>
+              <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">GPS status</dt><dd className={`mt-1 font-bold ${selectedPartner.coordinates?.lat !== undefined && selectedPartner.coordinates?.lng !== undefined ? 'text-emerald-700' : 'text-amber-700'}`}>{selectedPartner.coordinates?.lat !== undefined && selectedPartner.coordinates?.lng !== undefined ? 'GPS coordinates available' : flexibleWorksite ? 'Permanent GPS not required' : 'GPS coordinates not recorded'}</dd></div>
+              <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">Address</dt><dd className="mt-1 font-bold text-gray-900">{selectedPartner.location || 'Not recorded'} {selectedPartner.location && <span className="ml-1 text-xs font-semibold text-indigo-600">From partner registry</span>}</dd></div>
+              <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">GhanaPost GPS</dt><dd className="mt-1 font-bold text-gray-900">{selectedPartner.ghanaPostGps || 'Not recorded'}</dd></div>
+            </dl>
+          </section>
+        )}
+
+        {selectedPartner && (
+          <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
+            <div><h3 className="font-black text-gray-900">Will the learner work at this location?</h3><p className="text-sm text-gray-600">Confirm the registry location or enter the actual branch or project site for this placement.</p></div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button type="button" onClick={() => {
+                setWorksiteChoice('partner'); setLat(String(selectedPartner.coordinates?.lat ?? '')); setLng(String(selectedPartner.coordinates?.lng ?? ''))
+                form.setValue('worksiteMode', selectedPartner.operatingModel || 'FixedSite'); form.setValue('worksiteLocation', selectedPartner.location || '')
+              }} className={`rounded-xl border p-4 text-left ${worksiteChoice === 'partner' ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100' : 'border-gray-200'}`}><span className="block font-bold">Yes, use this workplace</span><span className="text-xs text-gray-600">Use the partner registry details shown above.</span></button>
+              <button type="button" onClick={() => {
+                setWorksiteChoice('different'); setLat(''); setLng(''); form.setValue('worksiteLocation', ''); form.setValue('approveLocationException', false)
+              }} className={`rounded-xl border p-4 text-left ${worksiteChoice === 'different' ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100' : 'border-gray-200'}`}><span className="block font-bold">No, use a different workplace</span><span className="text-xs text-gray-600">Enter the actual branch, workshop or project site.</span></button>
+            </div>
+          </section>
+        )}
+
+        {showWorksiteSection && (
+          <section className="space-y-5 rounded-2xl border border-slate-200 bg-slate-50 p-5" aria-label="Workplace details">
+            <div><p className="text-xs font-bold uppercase tracking-wider text-slate-500">Step 3 · Workplace for this placement</p><h3 className="mt-1 text-lg font-black text-gray-900">Confirm location and supervision</h3></div>
+            {placementType === 'registered' && worksiteChoice === 'different' && <FormField control={form.control} name="worksiteLocation" render={({ field }) => <FormItem><FormLabel>Actual Workplace Address *</FormLabel><FormControl><Input className="bg-white" placeholder="Branch, workshop, landmark or project site" {...field} /></FormControl><p className="text-xs text-gray-500">This changes only this placement. It does not overwrite the shared partner registry.</p><FormMessage /></FormItem>} />}
+            <FormField control={form.control} name="worksiteMode" render={({ field }) => (
+              <FormItem><div className="flex items-center justify-between gap-2"><FormLabel>Workplace Mode *</FormLabel>{selectedPartner && worksiteChoice === 'partner' && <span className="text-xs font-semibold text-indigo-600">From partner registry</span>}</div><Select value={field.value} disabled={Boolean(selectedPartner && worksiteChoice === 'partner')} onValueChange={(value) => { field.onChange(value); form.setValue('approveLocationException', false) }}><FormControl><SelectTrigger className="bg-white"><SelectValue /></SelectTrigger></FormControl><SelectContent>
+                <SelectItem value="FixedSite">Fixed workshop</SelectItem><SelectItem value="HomeBased">Home-based</SelectItem><SelectItem value="MobileField">Mobile / field work</SelectItem><SelectItem value="MultipleSites">Multiple worksites</SelectItem><SelectItem value="TemporarySite">Temporary / project site</SelectItem><SelectItem value="NoFixedPremises">No fixed premises</SelectItem>
+              </SelectContent></Select><FormMessage /></FormItem>
+            )} />
+            {flexibleWorksite ? <>
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900"><strong>No permanent GPS point is required.</strong> Describe where the learner normally works and how a monitoring officer can arrange a visit. The visit will capture the actual encounter location.</div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <FormField control={form.control} name="expectedOperatingArea" render={({ field }) => <FormItem><FormLabel>Expected Operating Area *</FormLabel><FormControl><Input className="bg-white" placeholder="Communities, district or typical project sites" {...field} /></FormControl><FormMessage /></FormItem>} />
+                <FormField control={form.control} name="locationVerificationNotes" render={({ field }) => <FormItem><FormLabel>Alternative Location Evidence *</FormLabel><FormControl><Input className="bg-white" placeholder="Landmarks, supervisor confirmation, job card or visit arrangement" {...field} /></FormControl><FormMessage /></FormItem>} />
+              </div>
+            </> : <>
+              <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b); form.setValue('approveLocationException', false) }} disabled={loading} />
+              <div className={`rounded-xl border p-4 text-sm ${hasGps ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>{hasGps ? <><strong>GPS coordinates available.</strong> Confirm they represent the learner’s actual workplace.</> : <><strong>GPS coordinates are missing.</strong> Capture them while at the workplace. A registered-partner request can still be submitted for management follow-up.</>}</div>
+            </>}
+            {placementType === 'registered' && <div className="grid gap-4 md:grid-cols-2"><FormField control={form.control} name="supervisorName" render={({ field }) => <FormItem><FormLabel>Workplace Supervisor {flexibleWorksite ? '*' : ''}</FormLabel><FormControl><Input className="bg-white" placeholder="Full name" {...field} /></FormControl>{selectedPartner?.contactPerson && <p className="text-xs font-semibold text-indigo-600">Prefilled from partner contact</p>}<FormMessage /></FormItem>} /><FormField control={form.control} name="supervisorPhone" render={({ field }) => <FormItem><FormLabel>Supervisor Phone {flexibleWorksite ? '*' : ''}</FormLabel><FormControl><Input className="bg-white" placeholder="+233..." {...field} /></FormControl>{selectedPartner?.contactPhone && <p className="text-xs font-semibold text-indigo-600">Prefilled from partner contact</p>}<FormMessage /></FormItem>} /></div>}
+            {user?.role === 'Admin' && !hasGps && placementType === 'custom' && <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><Checkbox checked={approveLocationException} onCheckedChange={(checked) => form.setValue('approveLocationException', checked === true)} className="mt-0.5" /><span><span className="block font-bold">Approve {flexibleWorksite ? 'alternative location evidence' : 'provisional activation'}</span><span className="block text-xs">{flexibleWorksite ? 'This decision is recorded in the audit log.' : 'GPS must be captured within 14 days.'}</span></span></label>}
+          </section>
         )}
 
         <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-5">
@@ -682,8 +731,28 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
             </div>
         </div>
 
+        <section className="rounded-2xl border border-gray-200 bg-white p-5" aria-label="Placement readiness">
+          <div className="flex items-start justify-between gap-3"><div><h3 className="font-black text-gray-900">Placement readiness</h3><p className="text-sm text-gray-500">Complete the items below before submission.</p></div><span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold text-gray-600">{selectedLearnerIds.length} learner{selectedLearnerIds.length === 1 ? '' : 's'}</span></div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            {[
+              { label: 'Organisation selected', ready: placementType === 'registered' ? Boolean(selectedPartner) : Boolean(companyName?.trim()), note: placementType === 'registered' && !selectedPartner ? 'Select a partner' : 'Complete' },
+              { label: 'Capacity available', ready: placementType !== 'registered' || Boolean(selectedPartner && selectedLearnerIds.length <= partnerCapacityAvailable), note: placementType === 'registered' ? `${partnerCapacityAvailable} slots available` : 'Reviewed during activation' },
+              { label: 'Workplace confirmed', ready: showWorksiteSection && worksiteConfirmed, note: !showWorksiteSection ? 'Select a partner first' : placementType !== 'registered' ? 'Organisation workplace' : worksiteChoice === 'different' ? 'Placement-specific site' : 'Registry site' },
+              { label: flexibleWorksite ? 'Location evidence' : 'Workplace GPS', ready: locationReady, note: locationReady ? (flexibleWorksite ? 'Evidence provided' : hasGps ? 'Coordinates available' : 'Management follow-up') : flexibleWorksite ? 'Describe area and evidence' : 'Capture GPS or request follow-up' },
+              { label: 'Supervisor contact', ready: supervisorReady, warning: !flexibleWorksite, note: supervisorReady ? 'Name and phone provided' : flexibleWorksite ? 'Required for this mode' : 'Can be completed at activation' },
+              { label: 'Eligible learners', ready: selectedLearnerIds.length > 0 && !learners.some(item => selectedLearnerIds.includes(item._id) && !item.readiness?.isReadyForPlacement), note: selectedLearnerIds.length ? `${selectedLearnerIds.length} selected` : 'Select at least one learner' },
+              { label: 'Placement dates', ready: Boolean(startDate && endDate && endDate >= startDate), note: startDate && endDate ? `${startDate} to ${endDate}` : 'Select start and end dates' },
+              { label: 'Placement region', ready: Boolean(placementRegion), note: placementRegion || 'Select actual worksite region' },
+            ].map(item => {
+              const informational = item.warning && !item.ready
+              const Icon = item.ready ? CheckCircle2 : informational ? AlertCircle : Circle
+              return <div key={item.label} className={`flex items-start gap-3 rounded-xl border p-3 ${item.ready ? 'border-emerald-100 bg-emerald-50' : informational ? 'border-amber-100 bg-amber-50' : 'border-gray-200 bg-gray-50'}`}><Icon className={`mt-0.5 h-4 w-4 shrink-0 ${item.ready ? 'text-emerald-600' : informational ? 'text-amber-600' : 'text-gray-400'}`} /><span><span className="block text-sm font-bold text-gray-900">{item.label}</span><span className="block text-xs text-gray-600">{item.note}</span></span></div>
+            })}
+          </div>
+        </section>
+
         <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm mt-2">
-          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : placementType === 'learner_sourced' ? 'Submit for Verification' : 'Confirm Placement'}
+          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : placementType === 'learner_sourced' ? 'Submit for Verification' : placementType === 'registered' ? 'Submit for Activation' : user?.role === 'Admin' && approveLocationException ? flexibleWorksite ? 'Activate with Approved Evidence' : 'Activate Provisionally' : 'Confirm Placement'}
         </Button>
       </form>
     </Form>

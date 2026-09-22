@@ -14,6 +14,10 @@ const placementRequestSchema = new mongoose.Schema({
   locationVerificationStatus: { type: String, enum: ['PendingGPS', 'GPSVerified', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'], default: 'PendingGPS' },
   locationVerificationNotes: { type: String, default: '', maxlength: 3000 },
   expectedOperatingArea: { type: String, default: '', maxlength: 1000 },
+  worksiteLocation: { type: String, default: '', maxlength: 1000 },
+  supervisorName: { type: String, default: '', maxlength: 300 },
+  supervisorPhone: { type: String, default: '', maxlength: 100 },
+  supervisorEmail: { type: String, default: '', maxlength: 300 },
   sourceType: {
     type: String,
     enum: ['InstitutionFound', 'LearnerFound'],
