@@ -130,6 +130,7 @@ interface SemesterReportRecord {
   _id: string
   semester: string
   academicYear: string
+  yearGroup?: string
   status: string
   summary?: {
     totalLearners?: number
@@ -1539,7 +1540,7 @@ export default function LearnerProfile() {
                             {semesterReports.map((r, i) => (
                                 <div key={i} className="p-3 border rounded-xl hover:bg-amber-50 transition-colors bg-white cursor-pointer" onClick={() => navigate(`/semester-reports/${r._id}`)}>
                                     <div className="flex justify-between items-start">
-                                        <span className="font-bold text-sm text-gray-900">{r.semester} — {r.academicYear}</span>
+                                        <span className="font-bold text-sm text-gray-900">{r.semester} — {r.academicYear}{r.yearGroup && r.yearGroup !== 'All' ? ` · ${r.yearGroup}` : ''}</span>
                                         <span className={`text-xs font-bold px-2 py-0.5 rounded-lg ${
                                             r.status === 'HQ_Approved' ? 'bg-green-100 text-green-700' :
                                             r.status === 'Regional_Approved' ? 'bg-amber-100 text-amber-700' :

@@ -46,13 +46,18 @@ interface AcademicTermOption {
   startDate: string;
   endDate: string;
   status: string;
+  yearGroupSchedules?: Array<{ yearGroup: YearGroup; startDate: string; endDate: string }>;
 }
+
+type YearGroup = 'Year 1' | 'Year 2' | 'Year 3';
+const yearGroups: YearGroup[] = ['Year 1', 'Year 2', 'Year 3'];
 
 interface SemesterReport {
   _id: string;
   institution: string;
   semester: string;
   academicYear: string;
+  yearGroup?: YearGroup | 'All';
   periodStart: string;
   periodEnd: string;
   status: 'Generated' | 'Draft' | 'Certified' | 'Submitted' | 'Regional_Approved' | 'HQ_Approved' | 'Rejected';
@@ -93,6 +98,7 @@ interface SemesterReportsResponse {
   pageSize: number;
   totalPages: number;
   academicYearOptions: string[];
+  existingClosureKeys: string[];
   stats: {
     draftCount: number;
     certifiedCount: number;
@@ -131,6 +137,7 @@ export default function SemesterReports() {
   const [totalReports, setTotalReports] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [academicYearOptions, setAcademicYearOptions] = useState<string[]>([]);
+  const [existingClosureKeys, setExistingClosureKeys] = useState<string[]>([]);
   const [reportStats, setReportStats] = useState({
     draftCount: 0,
     certifiedCount: 0,
@@ -143,6 +150,7 @@ export default function SemesterReports() {
   const [initiating, setInitiating] = useState(false);
   const [terms, setTerms] = useState<AcademicTermOption[]>([]);
   const [selectedTermId, setSelectedTermId] = useState("");
+  const [selectedYearGroup, setSelectedYearGroup] = useState<YearGroup | "">("");
   const { authFetch, user } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -168,6 +176,7 @@ export default function SemesterReports() {
       setTotalReports(typeof payload?.total === "number" ? payload.total : 0);
       setTotalPages(typeof payload?.totalPages === "number" ? payload.totalPages : 0);
       setAcademicYearOptions(Array.isArray(payload?.academicYearOptions) ? payload.academicYearOptions : []);
+      setExistingClosureKeys(Array.isArray(payload?.existingClosureKeys) ? payload.existingClosureKeys : []);
       setReportStats(payload?.stats || {
         draftCount: 0,
         certifiedCount: 0,
@@ -182,6 +191,7 @@ export default function SemesterReports() {
       setTotalReports(0);
       setTotalPages(0);
       setAcademicYearOptions([]);
+      setExistingClosureKeys([]);
     } finally {
       setLoading(false);
     }
@@ -215,13 +225,12 @@ export default function SemesterReports() {
     academicYearFilter ? `Academic Year: ${academicYearFilter}` : "",
   ].filter(Boolean);
 
-  // Which terms don't have reports yet
-  const usedTermIds = new Set(reports.map(r => r.academicTerm?._id).filter(Boolean));
-  const availableTerms = terms.filter(t => !usedTermIds.has(t._id));
+  const usedClosureKeys = new Set(existingClosureKeys);
+  const availableTerms = terms;
 
   const handleInitiate = async () => {
-    if (!selectedTermId) {
-      toast.error("Please select an academic term");
+    if (!selectedTermId || !selectedYearGroup) {
+      toast.error("Please select an academic term and year group");
       return;
     }
     setInitiating(true);
@@ -229,13 +238,14 @@ export default function SemesterReports() {
       const res = await authFetch('/api/semester-reports/initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ termId: selectedTermId }),
+        body: JSON.stringify({ termId: selectedTermId, yearGroup: selectedYearGroup }),
       });
       if (res.ok) {
         const report = await res.json();
         toast.success("Term closure initiated! Redirecting…");
         setShowInitiate(false);
         setSelectedTermId("");
+        setSelectedYearGroup("");
         navigate(`/semester-reports/${report._id}`);
       } else {
         const err = await res.json();
@@ -256,7 +266,7 @@ export default function SemesterReports() {
       cell: ({ row }) => (
         <div className="flex flex-col">
           <span className="font-bold text-gray-900">{row.original.semester}</span>
-          <span className="text-xs text-gray-500">{row.original.academicYear}</span>
+          <span className="text-xs text-gray-500">{row.original.academicYear}{row.original.yearGroup && row.original.yearGroup !== 'All' ? ` · ${row.original.yearGroup}` : ''}</span>
         </div>
       ),
     },
@@ -519,12 +529,18 @@ export default function SemesterReports() {
       </Card>
 
       {/* Initiate Closure Dialog */}
-      <Dialog open={showInitiate} onOpenChange={setShowInitiate}>
-        <DialogContent className="rounded-2xl sm:max-w-[500px]">
+      <Dialog open={showInitiate} onOpenChange={(open) => {
+        setShowInitiate(open);
+        if (!open) {
+          setSelectedTermId("");
+          setSelectedYearGroup("");
+        }
+      }}>
+        <DialogContent className="rounded-2xl sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle className="text-xl font-black">Initiate Term Closure</DialogTitle>
             <DialogDescription className="text-gray-400">
-              Select an academic term to generate a closure report with auto-computed metrics and exception tracking.
+              Select an academic term and year group to generate a cohort-specific closure report.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
@@ -553,7 +569,7 @@ export default function SemesterReports() {
                         name="term"
                         value={term._id}
                         checked={selectedTermId === term._id}
-                        onChange={() => setSelectedTermId(term._id)}
+                        onChange={() => { setSelectedTermId(term._id); setSelectedYearGroup(""); }}
                         className="sr-only"
                       />
                       <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${selectedTermId === term._id ? 'border-[#FFB800]' : 'border-gray-300'}`}>
@@ -573,6 +589,37 @@ export default function SemesterReports() {
                 </div>
               )}
             </div>
+            {selectedTermId && (
+              <div>
+                <label className="text-sm font-bold text-gray-700 block mb-2">Year Group</label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {yearGroups.map((yearGroup) => {
+                    const term = terms.find(item => item._id === selectedTermId);
+                    const schedule = term?.yearGroupSchedules?.find(item => item.yearGroup === yearGroup);
+                    const alreadyExists = usedClosureKeys.has(`${selectedTermId}:${yearGroup}`);
+                    return (
+                      <button
+                        key={yearGroup}
+                        type="button"
+                        disabled={alreadyExists}
+                        aria-pressed={selectedYearGroup === yearGroup}
+                        onClick={() => setSelectedYearGroup(yearGroup)}
+                        className={`rounded-2xl border-2 p-3 text-left transition-all ${selectedYearGroup === yearGroup ? 'border-[#FFB800] bg-[#FFB800]/5' : 'border-gray-100 bg-white hover:border-gray-200'} disabled:cursor-not-allowed disabled:opacity-50`}
+                      >
+                        <span className="block font-bold text-gray-900">{yearGroup}</span>
+                        <span className="mt-1 block text-xs text-gray-500">
+                          {alreadyExists
+                            ? 'Report already exists'
+                            : schedule
+                              ? `${format(new Date(schedule.startDate), 'dd MMM')} – ${format(new Date(schedule.endDate), 'dd MMM yyyy')}`
+                              : 'Uses the term default dates'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowInitiate(false)} className="rounded-xl">
@@ -580,7 +627,7 @@ export default function SemesterReports() {
             </Button>
             <Button
               onClick={handleInitiate}
-              disabled={initiating || !selectedTermId}
+              disabled={initiating || !selectedTermId || !selectedYearGroup}
               className="rounded-xl bg-[#FFB800] text-black hover:bg-[#e5a600] font-bold"
             >
               <RefreshCw className={`h-4 w-4 mr-2 ${initiating ? 'animate-spin' : ''}`} />

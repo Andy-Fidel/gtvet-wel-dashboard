@@ -53,10 +53,19 @@ type AcademicTerm = {
   termType: string
   startDate: string
   endDate: string
+  yearGroupSchedules: YearGroupSchedule[]
   status: "Planned" | "Active" | "Completed"
   isCurrent: boolean
   notes: string
   createdBy?: { name: string }
+}
+
+type YearGroup = "Year 1" | "Year 2" | "Year 3"
+
+type YearGroupSchedule = {
+  yearGroup: YearGroup
+  startDate: string
+  endDate: string
 }
 
 type WhatsAppStatus = {
@@ -121,16 +130,19 @@ const defaultNotificationPreferences: NotificationPreferences = {
   partnerUpdates: true,
 }
 
-const defaultTermForm = {
+const yearGroups: YearGroup[] = ["Year 1", "Year 2", "Year 3"]
+
+const createDefaultTermForm = () => ({
   name: "",
   academicYear: "",
   termType: "Semester 1",
   startDate: "",
   endDate: "",
+  yearGroupSchedules: yearGroups.map((yearGroup) => ({ yearGroup, startDate: "", endDate: "" })),
   status: "Planned",
   isCurrent: false,
   notes: "",
-}
+})
 
 const preferenceLabels: Array<{ key: keyof NotificationPreferences; title: string; description: string }> = [
   { key: "inApp", title: "In-app notifications", description: "Show alerts inside the dashboard notification center." },
@@ -167,7 +179,7 @@ export default function SettingsPage() {
   })
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [editingTermId, setEditingTermId] = useState<string | null>(null)
-  const [termForm, setTermForm] = useState(defaultTermForm)
+  const [termForm, setTermForm] = useState(createDefaultTermForm)
   const [archiveYearFilter, setArchiveYearFilter] = useState("")
   const [archiveSummary, setArchiveSummary] = useState<ArchiveSummary | null>(null)
 
@@ -314,15 +326,26 @@ export default function SettingsPage() {
 
   const resetTermForm = () => {
     setEditingTermId(null)
-    setTermForm(defaultTermForm)
+    setTermForm(createDefaultTermForm())
   }
 
   const saveTerm = async () => {
+    if (termForm.yearGroupSchedules.some((schedule) => !schedule.startDate || !schedule.endDate)) {
+      toast.error("Enter start and end dates for all three year groups")
+      return
+    }
+    const invalidSchedule = termForm.yearGroupSchedules.find((schedule) => schedule.endDate < schedule.startDate)
+    if (invalidSchedule) {
+      toast.error(`${invalidSchedule.yearGroup} end date cannot be before its start date`)
+      return
+    }
+    const startDate = [...termForm.yearGroupSchedules].sort((a, b) => a.startDate.localeCompare(b.startDate))[0].startDate
+    const endDate = [...termForm.yearGroupSchedules].sort((a, b) => b.endDate.localeCompare(a.endDate))[0].endDate
     setSavingTerm(true)
     try {
       const res = await authFetch(editingTermId ? `/api/academic-terms/${editingTermId}` : "/api/academic-terms", {
         method: editingTermId ? "PUT" : "POST",
-        body: JSON.stringify(termForm),
+        body: JSON.stringify({ ...termForm, startDate, endDate }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message || "Failed to save academic term")
@@ -341,6 +364,14 @@ export default function SettingsPage() {
   }
 
   const editTerm = (term: AcademicTerm) => {
+    const schedules = yearGroups.map((yearGroup) => {
+      const configured = term.yearGroupSchedules?.find((schedule) => schedule.yearGroup === yearGroup)
+      return {
+        yearGroup,
+        startDate: (configured?.startDate || term.startDate).split("T")[0],
+        endDate: (configured?.endDate || term.endDate).split("T")[0],
+      }
+    })
     setEditingTermId(term._id)
     setTermForm({
       name: term.name,
@@ -348,6 +379,7 @@ export default function SettingsPage() {
       termType: term.termType,
       startDate: term.startDate.split("T")[0],
       endDate: term.endDate.split("T")[0],
+      yearGroupSchedules: schedules,
       status: term.status,
       isCurrent: term.isCurrent,
       notes: term.notes || "",
@@ -849,7 +881,7 @@ export default function SettingsPage() {
               <Card data-help-id="settings-terms" className="border-none shadow-[0_10px_40px_rgba(15,23,42,0.08)]">
                 <CardHeader>
                   <CardTitle className="text-xl font-black">{editingTermId ? "Edit Academic Term" : "Create Academic Term"}</CardTitle>
-                  <CardDescription>Define the term window, status, and whether it is the current active cycle.</CardDescription>
+                  <CardDescription>Define a separate semester window for each year group.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
@@ -874,15 +906,42 @@ export default function SettingsPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Start Date</Label>
-                      <Input type="date" value={termForm.startDate} onChange={(e) => setTermForm((current) => ({ ...current, startDate: e.target.value }))} />
+                  <div className="space-y-3">
+                    <div>
+                      <Label>Year-group semester dates</Label>
+                      <p className="mt-1 text-sm text-slate-500">These dates control each cohort's calendar validation and closure report.</p>
                     </div>
-                    <div className="space-y-2">
-                      <Label>End Date</Label>
-                      <Input type="date" value={termForm.endDate} onChange={(e) => setTermForm((current) => ({ ...current, endDate: e.target.value }))} />
-                    </div>
+                    {termForm.yearGroupSchedules.map((schedule, index) => (
+                      <div key={schedule.yearGroup} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="mb-3 font-black text-slate-800">{schedule.yearGroup}</p>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label htmlFor={`term-${schedule.yearGroup}-start`}>Start Date</Label>
+                            <Input
+                              id={`term-${schedule.yearGroup}-start`}
+                              type="date"
+                              value={schedule.startDate}
+                              onChange={(e) => setTermForm((current) => ({
+                                ...current,
+                                yearGroupSchedules: current.yearGroupSchedules.map((item, itemIndex) => itemIndex === index ? { ...item, startDate: e.target.value } : item),
+                              }))}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor={`term-${schedule.yearGroup}-end`}>End Date</Label>
+                            <Input
+                              id={`term-${schedule.yearGroup}-end`}
+                              type="date"
+                              value={schedule.endDate}
+                              onChange={(e) => setTermForm((current) => ({
+                                ...current,
+                                yearGroupSchedules: current.yearGroupSchedules.map((item, itemIndex) => itemIndex === index ? { ...item, endDate: e.target.value } : item),
+                              }))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                   <div className="space-y-2">
                     <Label>Status</Label>
@@ -939,7 +998,17 @@ export default function SettingsPage() {
                               </Badge>
                               <Badge variant="outline">{term.termType}</Badge>
                             </div>
-                            <p className="text-sm font-medium text-slate-500">{term.academicYear} · {new Date(term.startDate).toLocaleDateString()} to {new Date(term.endDate).toLocaleDateString()}</p>
+                            <p className="text-sm font-medium text-slate-500">{term.academicYear}</p>
+                            <div className="grid gap-2 sm:grid-cols-3">
+                              {(term.yearGroupSchedules?.length ? term.yearGroupSchedules : yearGroups.map((yearGroup) => ({ yearGroup, startDate: term.startDate, endDate: term.endDate }))).map((schedule) => (
+                                <div key={schedule.yearGroup} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                                  <p className="text-xs font-black uppercase tracking-wide text-slate-500">{schedule.yearGroup}</p>
+                                  <p className="mt-1 text-xs font-semibold text-slate-700">
+                                    {new Date(schedule.startDate).toLocaleDateString()} – {new Date(schedule.endDate).toLocaleDateString()}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
                             {term.notes ? <p className="text-sm text-slate-600">{term.notes}</p> : null}
                             {term.createdBy?.name ? <p className="text-xs uppercase tracking-wide text-slate-400">Created by {term.createdBy.name}</p> : null}
                           </div>

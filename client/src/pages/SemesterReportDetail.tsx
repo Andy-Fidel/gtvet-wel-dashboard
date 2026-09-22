@@ -52,6 +52,7 @@ interface ReportData {
   institution: string;
   semester: string;
   academicYear: string;
+  yearGroup?: 'Year 1' | 'Year 2' | 'Year 3' | 'All';
   periodStart: string;
   periodEnd: string;
   status: string;
@@ -238,7 +239,7 @@ export default function SemesterReportDetail() {
         <div className="flex-1">
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
-              {report.academicTerm?.name || report.semester} — {report.academicYear}
+              {report.academicTerm?.name || report.semester} — {report.academicYear}{report.yearGroup && report.yearGroup !== 'All' ? ` · ${report.yearGroup}` : ''}
             </h2>
             <Badge className={`${statusColors[report.status]} border-0 rounded-lg font-bold text-base px-4 py-1.5`}>
               {statusLabels[report.status]}

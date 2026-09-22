@@ -11,6 +11,11 @@ const semesterReportSchema = new mongoose.Schema({
   institution: { type: String, required: true },
   semester: { type: String, required: true },
   academicYear: { type: String, required: true },
+  yearGroup: {
+    type: String,
+    enum: ['Year 1', 'Year 2', 'Year 3', 'All'],
+    default: 'All',
+  },
   periodStart: { type: Date, required: true },
   periodEnd: { type: Date, required: true },
   generatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -79,5 +84,9 @@ semesterReportSchema.index({ institution: 1, academicYear: 1, semester: 1 });
 semesterReportSchema.index({ status: 1 });
 semesterReportSchema.index({ createdAt: -1 });
 semesterReportSchema.index({ academicTerm: 1 });
+semesterReportSchema.index(
+  { institution: 1, academicTerm: 1, yearGroup: 1 },
+  { unique: true, partialFilterExpression: { academicTerm: { $type: 'objectId' } } }
+);
 
 export const SemesterReport = mongoose.model('SemesterReport', semesterReportSchema);

@@ -106,8 +106,18 @@ const buildWelWindowTitle = (formData: typeof emptyForm) => {
   return `${formData.institutionCalendarType} ${formData.targetYearGroup} WEL Window`
 }
 
+type AcademicTermOption = {
+  _id: string
+  name: string
+  academicYear: string
+  termType: string
+  startDate: string
+  endDate: string
+  yearGroupSchedules?: Array<{ yearGroup: string; startDate: string; endDate: string }>
+}
+
 export default function AcademicCalendarPage() {
-  const [terms, setTerms] = useState<Array<{ _id: string; name: string; academicYear: string; termType: string; startDate: string; endDate: string }>>([])
+  const [terms, setTerms] = useState<AcademicTermOption[]>([])
   const [termLoadError, setTermLoadError] = useState(false)
   const [templateYear, setTemplateYear] = useState(() => {
     const now = new Date()
@@ -138,13 +148,14 @@ export default function AcademicCalendarPage() {
   }
   const matchingTerms = terms.filter(term => term.academicYear === formData.academicYear && term.termType === formData.semester)
   const matchingTerm = matchingTerms.length === 1 ? matchingTerms[0] : undefined
-  const termStart = matchingTerm?.startDate.slice(0, 10) || ''
-  const termEnd = matchingTerm?.endDate.slice(0, 10) || ''
+  const matchingSchedule = matchingTerm?.yearGroupSchedules?.find(schedule => schedule.yearGroup === formData.targetYearGroup)
+  const termStart = (matchingSchedule?.startDate || matchingTerm?.startDate || '').slice(0, 10)
+  const termEnd = (matchingSchedule?.endDate || matchingTerm?.endDate || '').slice(0, 10)
   const windowConflict = formData.eventType === 'WEL Window' && (
     termLoadError ? 'Academic terms could not be loaded. Retry before publishing.' :
     !matchingTerm ? 'Select a matching academic term, or create one in Settings. You can still save a draft.' :
     formData.startDate && formData.endDate && (formData.startDate < termStart || formData.endDate > termEnd)
-      ? `This window extends outside ${matchingTerm.name}: ${termStart} to ${termEnd}. Adjust the window, review the term in Settings, or save a draft.` : ''
+      ? `This window extends outside the ${formData.targetYearGroup} schedule for ${matchingTerm.name}: ${termStart} to ${termEnd}. Adjust the window, review the term in Settings, or save a draft.` : ''
   )
 
   const fetchEvents = async () => {
@@ -688,13 +699,22 @@ export default function AcademicCalendarPage() {
                   <label htmlFor="wel-academic-term" className="block text-sm font-bold text-slate-700">Academic term from Settings</label>
                   <select id="wel-academic-term" className="mt-2 w-full rounded-xl border border-gray-200 p-3" value={matchingTerm?._id || ''} onChange={event => {
                     const term = terms.find(item => item._id === event.target.value)
-                    if (term) setFormData(current => ({ ...current, academicYear: term.academicYear, semester: term.termType, startDate: current.startDate || term.startDate.slice(0, 10), endDate: current.endDate || term.endDate.slice(0, 10) }))
+                    if (term) setFormData(current => {
+                      const schedule = term.yearGroupSchedules?.find(item => item.yearGroup === current.targetYearGroup)
+                      return {
+                        ...current,
+                        academicYear: term.academicYear,
+                        semester: term.termType,
+                        startDate: current.startDate || (schedule?.startDate || term.startDate).slice(0, 10),
+                        endDate: current.endDate || (schedule?.endDate || term.endDate).slice(0, 10),
+                      }
+                    })
                   }}>
                     <option value="">Select a configured semester…</option>
                     {terms.filter(term => semesterOptions.includes(term.termType)).map(term => <option key={term._id} value={term._id}>{term.name} · {term.academicYear} · {term.startDate.slice(0, 10)} – {term.endDate.slice(0, 10)}</option>)}
                   </select>
                   <p className="mt-2 text-sm text-slate-600">Selecting a term fills the year and semester, and supplies dates when empty. Existing window dates are preserved. Review duration whenever you change dates; official term dates are never changed here.</p>
-                  {matchingTerm && <p className="mt-2 text-sm font-semibold">Allowed period: {termStart} to {termEnd}</p>}
+                  {matchingTerm && <p className="mt-2 text-sm font-semibold">Allowed {formData.targetYearGroup === 'All' ? 'term' : formData.targetYearGroup} period: {termStart} to {termEnd}</p>}
                   {windowConflict && <p role="status" className="mt-2 text-sm text-amber-800">{windowConflict}</p>}
                   <div className="my-3 flex flex-wrap gap-3">
                     <Button type="button" variant="outline" onClick={() => void refreshTerms()}>Refresh terms</Button>

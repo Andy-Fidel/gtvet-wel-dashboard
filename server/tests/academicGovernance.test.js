@@ -7,7 +7,7 @@ import { AcademicTerm } from '../models/AcademicTerm.js';
 import { AcademicState } from '../models/AcademicState.js';
 import { SemesterReport } from '../models/SemesterReport.js';
 import { AuditLog } from '../models/AuditLog.js';
-import { activateTerm, effectiveTerm, getAcademicState, pickFields, calendarFields, termCalendarEvents, validateWindowTerm, validateTermWindows } from '../utils/academicGovernance.js';
+import { activateTerm, effectiveTerm, getAcademicState, pickFields, calendarFields, termCalendarEvents, termScheduleForYearGroup, validateWindowTerm, validateTermWindows } from '../utils/academicGovernance.js';
 
 const id = () => new mongoose.Types.ObjectId();
 const termData = () => ({ name: 'Semester One', academicYear: '2026/2027', termType: 'Semester 1', startDate: '2026-09-01', endDate: '2027-02-28', createdBy: id() });
@@ -32,8 +32,8 @@ test('calendar validation works with Mongoose 9 and rejects dates and incomplete
 test('term validation checks merged partial updates and consecutive academic years', async () => {
   const term = new AcademicTerm(termData());
   await term.validate();
-  term.startDate = '2027-03-01';
-  await assert.rejects(term.validate(), /End date cannot/);
+  term.yearGroupSchedules[0].startDate = '2027-03-01';
+  await assert.rejects(term.validate(), /end date cannot/i);
   await assert.rejects(new AcademicTerm({ ...termData(), academicYear: '2026/2029' }).validate(), /consecutive/);
 });
 
@@ -143,14 +143,36 @@ test('term update cannot bypass validation by sending only one date or replace c
   assert.match(res.body.message, /rollover/);
 });
 
+test('term closure initiation requires an explicit year group', async () => {
+  const handler = route('/semester-reports/initiate', 'post').stack.at(-1).handle;
+  const res = response();
+  await handler({ body: { termId: String(id()) }, user: { institution: 'Test Institute' } }, res);
+  assert.equal(res.code, 400);
+  assert.match(res.body.message, /yearGroup/);
+});
+
 test('Settings terms produce stable institution-calendar boundaries', () => {
   const term = { ...termData(), _id: id() };
   const events = termCalendarEvents([term]);
-  assert.equal(events.length, 2);
+  assert.equal(events.length, 6);
   assert.equal(events[0].start, term.startDate);
   assert.equal(events[1].start, term.endDate);
   assert.equal(events[0].eventType, 'Semester Start');
+  assert.match(events[0].title, /Year 1/);
   assert.match(events[0].description, /Academic Terms in Settings/);
+});
+
+test('year-group schedules resolve independently with legacy date fallback', () => {
+  const term = {
+    ...termData(),
+    yearGroupSchedules: [
+      { yearGroup: 'Year 1', startDate: '2026-09-01', endDate: '2026-12-01' },
+      { yearGroup: 'Year 2', startDate: '2026-10-01', endDate: '2027-01-15' },
+      { yearGroup: 'Year 3', startDate: '2026-11-01', endDate: '2027-02-28' },
+    ],
+  };
+  assert.equal(new Date(termScheduleForYearGroup(term, 'Year 2').startDate).toISOString().slice(0, 10), '2026-10-01');
+  assert.equal(new Date(termScheduleForYearGroup(termData(), 'Year 3').endDate).toISOString().slice(0, 10), '2027-02-28');
 });
 
 test('template creation shifts years, creates only drafts and preserves existing window edits on repeat', async t => {

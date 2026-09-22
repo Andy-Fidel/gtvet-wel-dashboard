@@ -37,7 +37,7 @@ import { auth, requireRole } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
 import { partnerRegionMatch, partnerVisibilityFilter } from '../utils/partnerVisibility.js';
-import { academicError, academicErrorStatus, pickFields, termFields, calendarFields, validAcademicYear, getAcademicState, effectiveTerm, currentAcademicTerm, withAcademicLock, activateTerm, validateWindowTerm, validateTermWindows, termCalendarEvents } from '../utils/academicGovernance.js';
+import { academicError, academicErrorStatus, pickFields, termFields, calendarFields, validAcademicYear, YEAR_GROUPS, termYearGroupSchedules, termScheduleForYearGroup, getAcademicState, effectiveTerm, currentAcademicTerm, withAcademicLock, activateTerm, validateWindowTerm, validateTermWindows, termCalendarEvents } from '../utils/academicGovernance.js';
 import { PartnerImport } from '../models/PartnerImport.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { hasCoordinates, normalizeCoordinates, locationCheck } from '../utils/workplaceCoordinates.js';
@@ -678,6 +678,12 @@ const normalizeStudyYear = (value) => {
   if (['year 3', 'year3', '3', 'third year', 'year three'].includes(normalized)) return 'Year 3';
   return value || '';
 };
+
+const studyYearAliases = (yearGroup) => ({
+  'Year 1': ['Year 1', 'year 1', 'Year1', 'year1', '1', 'First Year', 'first year', 'Year One', 'year one'],
+  'Year 2': ['Year 2', 'year 2', 'Year2', 'year2', '2', 'Second Year', 'second year', 'Year Two', 'year two'],
+  'Year 3': ['Year 3', 'year 3', 'Year3', 'year3', '3', 'Third Year', 'third year', 'Year Three', 'year three'],
+}[yearGroup] || []);
 
 const WEL_PREPARATION_WINDOW_DAYS = 45;
 
@@ -1955,7 +1961,10 @@ const buildLearnerProgressSummary = (learners, placements, visits, assessments, 
     const learnerVisits = visitsByLearner.get(learner._id.toString()) || [];
     const learnerAssessments = assessmentsByLearner.get(learner._id.toString()) || [];
     const learnerEvaluations = evaluationsByLearner.get(learner._id.toString()) || [];
-    const learnerReports = reportsByInstitution.get(learner.institution) || [];
+    const learnerYearGroup = normalizeStudyYear(learner.year);
+    const learnerReports = (reportsByInstitution.get(learner.institution) || []).filter(report => (
+      !report.yearGroup || report.yearGroup === 'All' || normalizeStudyYear(report.yearGroup) === learnerYearGroup
+    ));
 
     const progress = calculateLearnerProgress(
       learner,
@@ -5751,6 +5760,13 @@ async function saveAcademicTerm(req, id = null) {
         if (!term || term.archived) throw academicError('Academic term not found', 404);
         const before = id ? effectiveTerm(term, state) : null;
         const fields = pickFields(req.body, termFields);
+        if (!Object.hasOwn(fields, 'yearGroupSchedules') && (Object.hasOwn(fields, 'startDate') || Object.hasOwn(fields, 'endDate'))) {
+            fields.yearGroupSchedules = termYearGroupSchedules(term).map(schedule => ({
+                ...schedule,
+                startDate: fields.startDate || schedule.startDate,
+                endDate: fields.endDate || schedule.endDate,
+            }));
+        }
         if (Object.hasOwn(fields, 'isCurrent') && typeof fields.isCurrent !== 'boolean') throw academicError('Current term must be true or false.', 400);
         const wantsCurrent = fields.isCurrent === true || fields.status === 'Active';
         if ((fields.isCurrent === true && fields.status && fields.status !== 'Active') || (fields.isCurrent === false && fields.status === 'Active')) throw academicError('Active status and current term must agree.', 400);
@@ -5760,13 +5776,33 @@ async function saveAcademicTerm(req, id = null) {
         if (id) {
             const changed = keys => keys.some(key => Object.hasOwn(fields, key) && String(key.endsWith('Date') ? new Date(fields[key]).getTime() : fields[key]) !== String(key.endsWith('Date') ? new Date(before[key]).getTime() : before[key]));
             if (changed(['academicYear', 'termType']) && await AcademicCalendar.exists({ academicYear: before.academicYear, semester: before.termType })) throw academicError('This term is linked to calendar events; its year and type cannot be changed.');
-            if (changed(['academicYear', 'termType', 'startDate', 'endDate']) && await SemesterReport.exists({ academicTerm: id })) throw academicError('Term dates, year and type are locked once closure reports exist.');
         }
         term.set(fields);
         // The singleton pointer is authoritative; never persist a second active flag.
         term.isCurrent = false;
         term.status = before?.status === 'Completed' ? 'Completed' : term.status === 'Active' ? 'Planned' : term.status;
         await term.validate();
+        if (id) {
+            if ((term.academicYear !== before.academicYear || term.termType !== before.termType) && await SemesterReport.exists({ academicTerm: id })) {
+                throw academicError('The academic year and term type are locked once closure reports exist.');
+            }
+            const beforeSchedules = termYearGroupSchedules(before);
+            const afterSchedules = termYearGroupSchedules(term);
+            const changedYearGroups = YEAR_GROUPS.filter(yearGroup => {
+                const previous = beforeSchedules.find(schedule => schedule.yearGroup === yearGroup);
+                const next = afterSchedules.find(schedule => schedule.yearGroup === yearGroup);
+                return new Date(previous.startDate).getTime() !== new Date(next.startDate).getTime()
+                    || new Date(previous.endDate).getTime() !== new Date(next.endDate).getTime();
+            });
+            if (changedYearGroups.length && await SemesterReport.exists({
+                academicTerm: id,
+                $or: [
+                    { yearGroup: { $in: changedYearGroups } },
+                    { yearGroup: 'All' },
+                    { yearGroup: { $exists: false } },
+                ],
+            })) throw academicError('A year-group schedule is locked once its closure report exists.');
+        }
         if (term.termType !== 'Custom' && await AcademicTerm.exists({ _id: { $ne: term._id }, archived: { $ne: true }, academicYear: term.academicYear, termType: term.termType })) throw academicError('This academic year already has that term type.');
         await validateTermWindows(term);
         await term.save();
@@ -6005,9 +6041,11 @@ router.post('/academic-calendar/bootstrap-wel-template', requireRole('SuperAdmin
 // ==================== TERM CLOSURE REPORTS ====================
 
 // Helper: Build metrics, summary, and exceptions for a term closure report
-const buildTermClosureData = async (institution, start, end) => {
+const buildTermClosureData = async (institution, start, end, yearGroup = null) => {
     // Learner stats
-    const learners = await Learner.find({ institution, createdAt: { $lte: end } });
+    const learnerFilter = { institution, createdAt: { $lte: end } };
+    if (yearGroup) learnerFilter.year = { $in: studyYearAliases(yearGroup) };
+    const learners = await Learner.find(learnerFilter);
     const academicActive = learners.filter((l) => l.academicStatus === 'Active').length;
     const academicGraduating = learners.filter((l) => l.academicStatus === 'Graduating').length;
     const academicGraduated = learners.filter((l) => l.academicStatus === 'Graduated').length;
@@ -6036,12 +6074,12 @@ const buildTermClosureData = async (institution, start, end) => {
         ticketsResolved,
         placements,
     ] = await Promise.all([
-        MonitoringVisit.find({ institution, visitDate: { $gte: start, $lte: end } }).select('learner visitDate').lean(),
-        CompetencyAssessment.find({ institution, createdAt: { $gte: start, $lte: end } }).select('learner assessmentDate').lean(),
-        AttendanceLog.find({ institution, periodEnd: { $gte: start, $lte: end } }).select('learner placement hoursWorked').lean(),
-        SupportTicket.countDocuments({ institution, createdAt: { $gte: start, $lte: end } }),
-        SupportTicket.countDocuments({ institution, createdAt: { $gte: start, $lte: end }, status: { $in: ['Resolved', 'Closed'] } }),
-        Placement.find({ institution, createdAt: { $lte: end } }).select('learner status').lean(),
+        MonitoringVisit.find({ institution, learner: { $in: learnerIds }, visitDate: { $gte: start, $lte: end } }).select('learner visitDate').lean(),
+        CompetencyAssessment.find({ institution, learner: { $in: learnerIds }, createdAt: { $gte: start, $lte: end } }).select('learner assessmentDate').lean(),
+        AttendanceLog.find({ institution, learner: { $in: learnerIds }, periodEnd: { $gte: start, $lte: end } }).select('learner placement hoursWorked').lean(),
+        SupportTicket.countDocuments({ institution, learner: { $in: learnerIds }, createdAt: { $gte: start, $lte: end } }),
+        SupportTicket.countDocuments({ institution, learner: { $in: learnerIds }, createdAt: { $gte: start, $lte: end }, status: { $in: ['Resolved', 'Closed'] } }),
+        Placement.find({ institution, learner: { $in: learnerIds }, createdAt: { $lte: end } }).select('learner status').lean(),
     ]);
 
     // Index by learner for exception building
@@ -6127,11 +6165,11 @@ const buildTermClosureData = async (institution, start, end) => {
 // Initiate term closure (replaces manual generate)
 router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
     try {
-        const { termId } = req.body;
+        const { termId, yearGroup } = req.body;
         const institution = req.user.institution;
 
-        if (!termId) {
-            return res.status(400).json({ message: 'termId is required.' });
+        if (!termId || !YEAR_GROUPS.includes(yearGroup)) {
+            return res.status(400).json({ message: 'termId and a valid yearGroup are required.' });
         }
 
         const term = await AcademicTerm.findById(termId);
@@ -6140,20 +6178,23 @@ router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_
         }
 
         // Check for duplicate
-        const exists = await SemesterReport.findOne({ institution, academicTerm: term._id });
+        const exists = await SemesterReport.findOne({ institution, academicTerm: term._id, yearGroup });
         if (exists) {
-            return res.status(409).json({ message: 'A closure report for this term already exists.', existingId: exists._id });
+            return res.status(409).json({ message: `A ${yearGroup} closure report for this term already exists.`, existingId: exists._id });
         }
 
-        const start = new Date(term.startDate);
-        const end = new Date(term.endDate);
+        const schedule = termScheduleForYearGroup(term, yearGroup);
+        if (!schedule?.startDate || !schedule?.endDate) return res.status(409).json({ message: `Configure ${yearGroup} semester dates before initiating closure.` });
+        const start = new Date(schedule.startDate);
+        const end = new Date(schedule.endDate);
 
-        const { summary, metrics, exceptions } = await buildTermClosureData(institution, start, end);
+        const { summary, metrics, exceptions } = await buildTermClosureData(institution, start, end, yearGroup);
 
         const report = new SemesterReport({
             institution,
             semester: term.termType || term.name,
             academicYear: term.academicYear,
+            yearGroup,
             periodStart: start,
             periodEnd: end,
             generatedBy: req.user._id,
@@ -6171,7 +6212,7 @@ router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_
             action: 'CREATE',
             entityType: 'SemesterReport',
             entityId: report._id,
-            summary: `Initiated term closure for ${institution} — ${term.name} (${term.academicYear})`,
+            summary: `Initiated ${yearGroup} term closure for ${institution} — ${term.name} (${term.academicYear})`,
             after: report,
         });
 
@@ -6181,14 +6222,14 @@ router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_
         res.status(201).json(populated);
     } catch (error) {
         console.error('Error initiating term closure:', error);
-        res.status(500).json({ message: 'Failed to initiate term closure' });
+        res.status(error?.code === 11000 ? 409 : academicErrorStatus(error)).json({ message: error?.code === 11000 ? 'That year-group closure report already exists.' : error.message || 'Failed to initiate term closure' });
     }
 });
 
 // Keep legacy generate endpoint for backward compat
 router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
     try {
-        const { semester, academicYear, periodStart, periodEnd } = req.body;
+        const { semester, academicYear, periodStart, periodEnd, yearGroup = 'All' } = req.body;
         const institution = req.user.institution;
 
         if (!semester || !academicYear || !periodStart || !periodEnd) {
@@ -6198,17 +6239,26 @@ router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_
         const start = new Date(periodStart);
         const end = new Date(periodEnd);
 
-        const exists = await SemesterReport.findOne({ institution, semester, academicYear });
+        if (![...YEAR_GROUPS, 'All'].includes(yearGroup)) return res.status(400).json({ message: 'Invalid yearGroup.' });
+        const exists = await SemesterReport.findOne({
+            institution,
+            semester,
+            academicYear,
+            ...(yearGroup === 'All'
+                ? { $or: [{ yearGroup: 'All' }, { yearGroup: { $exists: false } }] }
+                : { yearGroup }),
+        });
         if (exists) {
             return res.status(409).json({ message: 'A report for this semester and academic year already exists.' });
         }
 
-        const { summary, metrics, exceptions } = await buildTermClosureData(institution, start, end);
+        const { summary, metrics, exceptions } = await buildTermClosureData(institution, start, end, yearGroup === 'All' ? null : yearGroup);
 
         const report = new SemesterReport({
             institution,
             semester,
             academicYear,
+            yearGroup,
             periodStart: start,
             periodEnd: end,
             generatedBy: req.user._id,
@@ -6238,7 +6288,8 @@ router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_
 // List semester reports
 router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMENT_ROLES), async (req, res) => {
     try {
-        let filter = await getFilter(req.user);
+        const scopeFilter = await getFilter(req.user);
+        let filter = { ...scopeFilter };
         const { status, institution, academicYear, page: requestedPage, pageSize: requestedPageSize } = req.query;
         if (status) filter.status = status;
         if (institution) filter = { $and: [filter, { institution }] };
@@ -6253,7 +6304,7 @@ router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMEN
             : 25;
 
         const reportsQuery = SemesterReport.find(filter)
-            .select('institution semester academicYear periodStart periodEnd status generatedBy certifiedBy academicTerm createdAt metrics exceptions summary')
+            .select('institution semester academicYear yearGroup periodStart periodEnd status generatedBy certifiedBy academicTerm createdAt metrics exceptions summary')
             .populate('generatedBy', 'name email')
             .populate('certifiedBy', 'name email')
             .populate('academicTerm')
@@ -6266,7 +6317,7 @@ router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMEN
         const academicYearOptionFilter = { ...filter };
         delete academicYearOptionFilter.academicYear;
 
-        const [reports, total, allAcademicYears, statusCounts, lifecycleTotals] = await Promise.all([
+        const [reports, total, allAcademicYears, statusCounts, existingClosures, lifecycleTotals] = await Promise.all([
             reportsQuery.lean(),
             usePagination ? SemesterReport.countDocuments(filter) : Promise.resolve(null),
             usePagination ? SemesterReport.distinct('academicYear', academicYearOptionFilter) : Promise.resolve(null),
@@ -6274,6 +6325,7 @@ router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMEN
                 { $match: filter },
                 { $group: { _id: '$status', count: { $sum: 1 } } },
             ]) : Promise.resolve(null),
+            usePagination ? SemesterReport.find(scopeFilter).select('academicTerm yearGroup').lean() : Promise.resolve(null),
             usePagination ? SemesterReport.aggregate([
                 { $match: filter },
                 {
@@ -6300,6 +6352,9 @@ router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMEN
                 pageSize,
                 totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
                 academicYearOptions: (allAcademicYears || []).filter(Boolean).sort((a, b) => b.localeCompare(a)),
+                existingClosureKeys: (existingClosures || [])
+                    .filter(report => report.academicTerm)
+                    .map(report => `${report.academicTerm}:${report.yearGroup || 'All'}`),
                 stats: {
                     draftCount: countsByStatus.Draft || 0,
                     certifiedCount: countsByStatus.Certified || 0,
@@ -6346,7 +6401,7 @@ router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_M
 
         const start = new Date(report.periodStart);
         const end = new Date(report.periodEnd);
-        const { summary, metrics, exceptions } = await buildTermClosureData(report.institution, start, end);
+        const { summary, metrics, exceptions } = await buildTermClosureData(report.institution, start, end, report.yearGroup && report.yearGroup !== 'All' ? report.yearGroup : null);
 
         report.summary = summary;
         report.metrics = metrics;
@@ -6358,7 +6413,7 @@ router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_M
             action: 'UPDATE',
             entityType: 'SemesterReport',
             entityId: report._id,
-            summary: `Refreshed metrics for term closure report — ${report.institution}`,
+            summary: `Refreshed ${report.yearGroup || 'all-year'} term closure metrics — ${report.institution}`,
         });
 
         const populated = await SemesterReport.findById(report._id)
@@ -6400,7 +6455,7 @@ router.put('/semester-reports/:id/certify', requireRole(...INSTITUTION_MANAGEMEN
             action: 'STATUS_CHANGE',
             entityType: 'SemesterReport',
             entityId: report._id,
-            summary: `Certified term closure report for ${report.institution}`,
+            summary: `Certified ${report.yearGroup || 'all-year'} term closure report for ${report.institution}`,
             changedFields: ['status', 'certifiedBy', 'certifiedAt', 'commentary'],
             after: report,
         });
@@ -6433,7 +6488,7 @@ router.put('/semester-reports/:id/submit', requireRole(...INSTITUTION_MANAGEMENT
             action: 'STATUS_CHANGE',
             entityType: 'SemesterReport',
             entityId: report._id,
-            summary: `Submitted term closure report for ${report.institution}`,
+            summary: `Submitted ${report.yearGroup || 'all-year'} term closure report for ${report.institution}`,
             changedFields: ['status'],
             after: report,
         });
@@ -6444,7 +6499,7 @@ router.put('/semester-reports/:id/submit', requireRole(...INSTITUTION_MANAGEMENT
             sender: req.user._id,
             type: 'report',
             title: 'Term Closure Report Submitted',
-            message: `${report.institution} has submitted a term closure report for review.`,
+            message: `${report.institution} has submitted its ${report.yearGroup || 'all-year'} term closure report for review.`,
             link: `/semester-reports/${report._id}`
         });
 
@@ -6473,7 +6528,7 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
             action: 'STATUS_CHANGE',
             entityType: 'SemesterReport',
             entityId: report._id,
-            summary: `Regionally approved term closure report for ${report.institution}`,
+            summary: `Regionally approved ${report.yearGroup || 'all-year'} term closure report for ${report.institution}`,
             before,
             after: report,
         });
@@ -6483,7 +6538,7 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
             sender: req.user._id,
             type: 'report',
             title: 'Report Endorsed Regionally',
-            message: `A report from ${report.institution} was regionally endorsed and requires HQ approval.`,
+            message: `The ${report.yearGroup || 'all-year'} report from ${report.institution} was regionally endorsed and requires HQ approval.`,
             link: `/semester-reports/${report._id}`
         });
 
@@ -6512,13 +6567,13 @@ router.put('/semester-reports/:id/hq-approve', requireRole('HQManager', 'SuperAd
             action: 'STATUS_CHANGE',
             entityType: 'SemesterReport',
             entityId: report._id,
-            summary: `HQ approved term closure report for ${report.institution}`,
+            summary: `HQ approved ${report.yearGroup || 'all-year'} term closure report for ${report.institution}`,
             before,
             after: report,
         });
         
         // Notify
-        notifyInstitutionAdmins(report.institution, sendReportStatusEmail, report.semester, report.academicYear, 'HQ_Approved');
+        notifyInstitutionAdmins(report.institution, sendReportStatusEmail, `${report.semester}${report.yearGroup && report.yearGroup !== 'All' ? ` · ${report.yearGroup}` : ''}`, report.academicYear, 'HQ_Approved');
         
         notifyUsers({
             institution: report.institution,
@@ -6526,7 +6581,7 @@ router.put('/semester-reports/:id/hq-approve', requireRole('HQManager', 'SuperAd
             sender: req.user._id,
             type: 'report',
             title: 'Report Approved by HQ',
-            message: `The term closure report for ${report.institution} has been officially approved by HQ.`,
+            message: `The ${report.yearGroup || 'all-year'} term closure report for ${report.institution} has been officially approved by HQ.`,
             link: `/semester-reports/${report._id}`
         });
 
@@ -6557,12 +6612,12 @@ router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin'
             action: 'STATUS_CHANGE',
             entityType: 'SemesterReport',
             entityId: report._id,
-            summary: `Rejected term closure report for ${report.institution}`,
+            summary: `Rejected ${report.yearGroup || 'all-year'} term closure report for ${report.institution}`,
             before,
             after: report,
         });
 
-        notifyInstitutionAdmins(report.institution, sendReportStatusEmail, report.semester, report.academicYear, 'Rejected');
+        notifyInstitutionAdmins(report.institution, sendReportStatusEmail, `${report.semester}${report.yearGroup && report.yearGroup !== 'All' ? ` · ${report.yearGroup}` : ''}`, report.academicYear, 'Rejected');
 
         notifyUsers({
             institution: report.institution,
@@ -6570,7 +6625,7 @@ router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin'
             sender: req.user._id,
             type: 'report',
             title: 'Report Rejected',
-            message: `The term closure report for ${report.institution} was rejected. Reason: ${req.body.comment || 'N/A'}.`,
+            message: `The ${report.yearGroup || 'all-year'} term closure report for ${report.institution} was rejected. Reason: ${req.body.comment || 'N/A'}.`,
             link: `/semester-reports/${report._id}`
         });
 
@@ -7606,7 +7661,11 @@ router.get('/learners/:id/profile', async (req, res) => {
       .sort({ startDate: -1 });
     const documents = await Document.find({ learner: req.params.id }).sort({ createdAt: -1 });
     const visits = await MonitoringVisit.find({ learner: req.params.id, ...filter }).sort({ visitDate: -1 });
-    const reports = await SemesterReport.find({ institution: learner.institution }).sort({ createdAt: -1 });
+    const learnerYearGroup = normalizeStudyYear(learner.year);
+    const reports = await SemesterReport.find({
+      institution: learner.institution,
+      $or: [{ yearGroup: learnerYearGroup }, { yearGroup: 'All' }, { yearGroup: { $exists: false } }],
+    }).sort({ createdAt: -1 });
     const assessments = await CompetencyAssessment.find({ learner: req.params.id, ...filter }).sort({ assessmentDate: -1 });
     const evaluations = await EmployerEvaluation.find({ learner: req.params.id }).populate('partner', 'name').sort({ evaluationDate: -1 });
     const linkedGuardians = await User.find({ role: 'Guardian', linkedLearners: learner._id })
@@ -8341,7 +8400,11 @@ router.get('/learners/:id/progress', async (req, res) => {
     const visits = await MonitoringVisit.find({ learner: req.params.id }).sort({ visitDate: -1 });
     const assessments = await CompetencyAssessment.find({ learner: req.params.id }).sort({ assessmentDate: -1 });
     const evaluations = await EmployerEvaluation.find({ learner: req.params.id }).sort({ evaluationDate: -1 });
-    const semesterReports = await SemesterReport.find({ institution: learner.institution }).sort({ createdAt: -1 });
+    const learnerYearGroup = normalizeStudyYear(learner.year);
+    const semesterReports = await SemesterReport.find({
+      institution: learner.institution,
+      $or: [{ yearGroup: learnerYearGroup }, { yearGroup: 'All' }, { yearGroup: { $exists: false } }],
+    }).sort({ createdAt: -1 });
 
     // Calculate progress
     const progress = calculateLearnerProgress(learner, placements, visits, assessments, evaluations, semesterReports);
