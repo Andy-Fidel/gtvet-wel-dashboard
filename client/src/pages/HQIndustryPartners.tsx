@@ -269,6 +269,7 @@ export default function HQIndustryPartners() {
                           <div className="p-3 rounded-2xl bg-amber-50"><Building2 className="h-5 w-5 text-amber-600" /></div>
                           <div>
                             <h3 className="text-xl font-black text-gray-900">{partner.name}</h3>
+                            <div className="mt-2 flex flex-wrap gap-2 text-xs font-bold"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">{partner.partnerType === 'MasterCraftPerson' ? 'MCP' : (partner.partnerType || 'Registered company').replace(/([a-z])([A-Z])/g, '$1 $2')}</span><span className={`rounded-full px-2.5 py-1 ${partner.locationVerificationStatus === 'GPSVerified' ? 'bg-emerald-100 text-emerald-700' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{partner.locationVerificationStatus === 'GPSVerified' ? 'GPS verified' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'Mobile evidence' : 'GPS pending'}</span></div>
                             <p className="text-sm text-gray-500 font-medium">{partner.sector} • {partner.region}</p>
                           </div>
                           <Badge className={`${approvalTone} border-0`}>

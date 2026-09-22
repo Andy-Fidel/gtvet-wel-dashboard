@@ -58,6 +58,11 @@ export interface IndustryPartner {
   sector: string;
   region: string;
   location?: string;
+  partnerType?: 'RegisteredCompany' | 'MasterCraftPerson' | 'Government' | 'NGO' | 'Other';
+  operatingModel?: 'FixedSite' | 'HomeBased' | 'MobileField' | 'MultipleSites' | 'TemporarySite' | 'NoFixedPremises';
+  locationVerificationStatus?: 'PendingGPS' | 'GPSVerified' | 'NotApplicableMobile' | 'ExceptionApproved';
+  locationVerificationNotes?: string;
+  ghanaPostGps?: string;
   contactPerson?: string;
   contactPhone?: string;
   contactEmail?: string;

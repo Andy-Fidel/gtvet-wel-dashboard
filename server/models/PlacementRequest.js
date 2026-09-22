@@ -10,6 +10,10 @@ const placementRequestSchema = new mongoose.Schema({
   requestedSlots: { type: Number, required: true, min: 1, validate: Number.isInteger },
   placementRegion: { type: String, trim: true },
   coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
+  worksiteMode: { type: String, enum: ['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'], default: 'FixedSite' },
+  locationVerificationStatus: { type: String, enum: ['PendingGPS', 'GPSVerified', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'], default: 'PendingGPS' },
+  locationVerificationNotes: { type: String, default: '', maxlength: 3000 },
+  expectedOperatingArea: { type: String, default: '', maxlength: 1000 },
   sourceType: {
     type: String,
     enum: ['InstitutionFound', 'LearnerFound'],

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { normalizeCoordinates } from '../utils/workplaceCoordinates.js';
+import { isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
 
 const placementSchema = new mongoose.Schema({
   learner: { type: mongoose.Schema.Types.ObjectId, ref: 'Learner', required: true },
@@ -35,6 +35,21 @@ const placementSchema = new mongoose.Schema({
     lat: { type: Number, min: -90, max: 90 },
     lng: { type: Number, min: -180, max: 180 },
   },
+  worksiteMode: {
+    type: String,
+    enum: ['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'],
+    default: 'FixedSite',
+  },
+  locationVerificationStatus: {
+    type: String,
+    enum: ['PendingGPS', 'GPSVerified', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'],
+    default: 'PendingGPS',
+  },
+  locationVerificationNotes: { type: String, default: '', maxlength: 3000 },
+  expectedOperatingArea: { type: String, default: '', maxlength: 1000 },
+  locationVerificationDueDate: Date,
+  locationExceptionApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  locationExceptionApprovedAt: Date,
 
   // Cross-region monitoring delegation
   placementRegion: { type: String, trim: true },
@@ -48,8 +63,17 @@ const placementSchema = new mongoose.Schema({
 placementSchema.pre('validate', function () {
   if (this.startDate && this.endDate && this.endDate < this.startDate) this.invalidate('endDate', 'Placement end date cannot be before start date');
   try {
-    normalizeCoordinates(this.coordinates, this.status === 'Active' && (this.isNew || this.isModified('status') || this.isModified('coordinates')));
+    const required = worksiteRequiresCoordinates(this);
+    normalizeCoordinates(this.coordinates, required && (this.isNew || this.isModified('status') || this.isModified('coordinates') || this.isModified('worksiteMode') || this.isModified('locationVerificationStatus')));
   } catch (error) { this.invalidate('coordinates', error.message); }
+  if (this.status === 'Active' && isFlexibleWorksite(this.worksiteMode)) {
+    if (!this.expectedOperatingArea?.trim()) this.invalidate('expectedOperatingArea', 'Operating area is required for mobile or no-premises placements');
+    if (!this.locationVerificationNotes?.trim()) this.invalidate('locationVerificationNotes', 'Alternative location evidence is required');
+    if (!this.supervisorName?.trim() || !this.supervisorPhone?.trim()) this.invalidate('supervisorName', 'Supervisor name and phone are required for mobile or no-premises placements');
+  }
+  if (this.status === 'Active' && this.locationVerificationStatus === 'Provisional' && !this.locationVerificationDueDate) {
+    this.invalidate('locationVerificationDueDate', 'A GPS verification deadline is required for provisional placements');
+  }
 });
 placementSchema.index({ learner: 1 });
 // Installed explicitly after the read-only duplicate audit, never on app startup.
@@ -64,5 +88,6 @@ placementSchema.index({ trackingId: 1 }, { unique: true, sparse: true });
 placementSchema.index({ createdAt: 1 });
 placementSchema.index({ delegate: 1 });
 placementSchema.index({ placementRegion: 1 });
+placementSchema.index({ locationVerificationStatus: 1, locationVerificationDueDate: 1 });
 
 export const Placement = mongoose.model('Placement', placementSchema);

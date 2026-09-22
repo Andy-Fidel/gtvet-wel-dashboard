@@ -40,7 +40,7 @@ import { partnerRegionMatch, partnerVisibilityFilter } from '../utils/partnerVis
 import { academicError, academicErrorStatus, pickFields, termFields, calendarFields, validAcademicYear, YEAR_GROUPS, termYearGroupSchedules, termScheduleForYearGroup, getAcademicState, effectiveTerm, currentAcademicTerm, withAcademicLock, activateTerm, termCalendarEvents } from '../utils/academicGovernance.js';
 import { PartnerImport } from '../models/PartnerImport.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
-import { hasCoordinates, normalizeCoordinates, locationCheck } from '../utils/workplaceCoordinates.js';
+import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, locationCheck, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
@@ -4280,9 +4280,11 @@ const canMutateMonitoringVisit = (user, visit, action = 'update') => {
 };
 
 const determineMonitoringVisitVerification = async ({ learnerId, placementId, delegateId, submittedLocation, gpsExceptionReason = '' }) => {
-    const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : { status: 'Active' }), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates');
+    const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : { status: 'Active' }), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates worksiteMode locationVerificationStatus');
     if (delegateId && !placement) return { error: 'No active delegated placement is available for this learner.' };
-    const result = locationCheck(submittedLocation, placement?.coordinates);
+    const result = placement && isFlexibleWorksite(placement.worksiteMode) && hasCoordinates(submittedLocation)
+        ? { locationVerified: 'Verified', gpsReviewStatus: 'Verified', distanceFromSite: null }
+        : locationCheck(submittedLocation, placement?.coordinates);
     if (!placement && hasCoordinates(submittedLocation)) result.locationVerified = 'No Placement';
     if (!hasCoordinates(submittedLocation) && !gpsExceptionReason?.trim()) return { error: 'A GPS exception reason is required when GPS is unavailable.' };
     return { ...result, placement: placement?._id, gpsCapturedAt: hasCoordinates(submittedLocation) ? new Date() : undefined };
@@ -8953,7 +8955,16 @@ router.get('/placements', async (req, res) => {
 
     // Status filter
     if (req.query.missingCoordinates === '1') {
-      filter.$and = [...(filter.$and || []), { $nor: [{ 'coordinates.lat': { $type: 'number', $gte: -90, $lte: 90 }, 'coordinates.lng': { $type: 'number', $gte: -180, $lte: 180 } }] }];
+      filter.$and = [...(filter.$and || []), {
+        $or: [
+          { locationVerificationStatus: { $in: ['PendingGPS', 'Provisional'] } },
+          {
+            locationVerificationStatus: { $exists: false },
+            worksiteMode: { $nin: ['MobileField', 'NoFixedPremises'] },
+            $nor: [{ 'coordinates.lat': { $type: 'number', $gte: -90, $lte: 90 }, 'coordinates.lng': { $type: 'number', $gte: -180, $lte: 180 } }],
+          },
+        ],
+      }];
     }
     if (req.query.status && ['Active', 'Completed', 'Terminated'].includes(req.query.status)) {
       filter.status = req.query.status;
@@ -8981,7 +8992,7 @@ router.get('/placements', async (req, res) => {
     }
 
     const placementsQuery = Placement.find(filter)
-      .select('learner trackingId academicYear companyName partner sector location supervisorName supervisorPhone supervisorEmail startDate endDate status closedAt closedBy closureReason closureNote owner institution coordinates placementRegion delegate delegatedAt delegatedBy delegateInstitution createdAt updatedAt workflowVersion previousPlacement replacementPlacement')
+      .select('learner trackingId academicYear companyName partner sector location supervisorName supervisorPhone supervisorEmail startDate endDate status closedAt closedBy closureReason closureNote owner institution coordinates placementRegion worksiteMode locationVerificationStatus locationVerificationNotes expectedOperatingArea locationVerificationDueDate locationExceptionApprovedBy locationExceptionApprovedAt delegate delegatedAt delegatedBy delegateInstitution createdAt updatedAt workflowVersion previousPlacement replacementPlacement')
       .populate('learner', 'firstName middleName lastName trackingId')
       .populate('owner', 'name role institution')
       .populate('partner', 'name')
@@ -9446,7 +9457,40 @@ async function preparePlacementActivation(req, input, ids, excludeId = null) {
     if (!await Placement.collection.indexExists('one_active_placement_per_learner')) throw placementError('Placement activation is awaiting the duplicate-index preflight. Contact the system administrator.', 503);
     const data = placementInput(input);
     validatePlacementDates(data.startDate, data.endDate);
-    data.coordinates = normalizeCoordinates(data.coordinates, true);
+    data.worksiteMode = data.worksiteMode || 'FixedSite';
+    delete data.locationExceptionApprovedBy;
+    delete data.locationExceptionApprovedAt;
+    const flexibleWorksite = isFlexibleWorksite(data.worksiteMode);
+    const coordinates = normalizeCoordinates(data.coordinates);
+    const adminLocationApproval = req.user.role === 'Admin' && input.approveLocationException === true;
+    if (coordinates) {
+        data.coordinates = coordinates;
+        data.locationVerificationStatus = 'GPSVerified';
+        data.locationVerificationDueDate = undefined;
+    } else if (adminLocationApproval && flexibleWorksite) {
+        data.coordinates = undefined;
+        data.locationVerificationStatus = 'NotApplicableMobile';
+        data.locationVerificationDueDate = undefined;
+        data.locationExceptionApprovedBy = req.user._id;
+        data.locationExceptionApprovedAt = new Date();
+    } else if (adminLocationApproval) {
+        data.coordinates = undefined;
+        data.locationVerificationStatus = 'Provisional';
+        data.locationVerificationDueDate = input.locationVerificationDueDate
+            ? new Date(input.locationVerificationDueDate)
+            : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        data.locationExceptionApprovedBy = req.user._id;
+        data.locationExceptionApprovedAt = new Date();
+    } else {
+        throw placementError(flexibleWorksite
+            ? 'An Institution Admin must approve the alternative location evidence before activating a mobile or no-premises placement.'
+            : 'Workplace coordinates are required, or an Institution Admin must approve provisional GPS verification.', 400);
+    }
+    if (flexibleWorksite) {
+        if (!data.expectedOperatingArea?.trim()) throw placementError('Describe the expected operating area for a mobile or no-premises placement.', 400);
+        if (!data.locationVerificationNotes?.trim()) throw placementError('Describe the alternative location evidence and supervision arrangements.', 400);
+        if (!data.supervisorName?.trim() || !data.supervisorPhone?.trim()) throw placementError('Supervisor name and phone are required for mobile or no-premises placements.', 400);
+    }
     if (!data.placementRegion?.trim()) throw placementError('Placement region is required.', 400);
     data.placementRegion = data.placementRegion.trim();
     data.academicYear = data.academicYear || await resolveCurrentAcademicYear();
@@ -9490,7 +9534,9 @@ function notifyPlacementActivation(req, plan) {
 router.post('/placements', async (req, res) => {
     try {
         if (!['Admin', 'Manager'].includes(req.user.role)) return res.status(403).json({ message: 'Only institution management can activate placements. Staff may submit placement requests.' });
-        try { normalizeCoordinates(req.body.coordinates, true); }
+        try { normalizeCoordinates(req.body.coordinates, req.user.role !== 'Admin' || req.body.approveLocationException !== true
+            ? worksiteRequiresCoordinates({ status: 'Active', worksiteMode: req.body.worksiteMode, locationVerificationStatus: req.body.locationVerificationStatus })
+            : false); }
         catch (error) { return res.status(400).json({ message: error.message }); }
         const ids = placementLearnerIds(req.body.learners || (req.body.learner ? [req.body.learner] : []));
         const key = placementOperationKey(req.user, 'activate', { ...placementInput(req.body), learners: ids.sort(), overrideWelWindow: req.body.overrideWelWindow === true });
@@ -9543,7 +9589,9 @@ export async function recheckPendingPlacementVisits(placement, req) {
     const visits = await MonitoringVisit.find({ learner: placement.learner, institution: placement.institution,
         gpsReviewStatus: 'PendingReview', $or: association });
     for (const visit of visits) {
-        const verification = locationCheck(visit.submittedLocation, placement.coordinates);
+        const verification = isFlexibleWorksite(placement.worksiteMode) && hasCoordinates(visit.submittedLocation)
+            ? { locationVerified: 'Verified', gpsReviewStatus: 'Verified', distanceFromSite: null }
+            : locationCheck(visit.submittedLocation, placement.coordinates);
         const before = { locationVerified: visit.locationVerified, gpsReviewStatus: visit.gpsReviewStatus, distanceFromSite: visit.distanceFromSite };
         const updated = await MonitoringVisit.findOneAndUpdate({ _id: visit._id, gpsReviewStatus: 'PendingReview' },
             { $set: { ...verification, placement: placement._id } }, { returnDocument: 'after' });
@@ -9559,8 +9607,19 @@ router.put('/placements/:id', async (req, res) => {
         const filter = { _id: req.params.id, institution: req.user.institution };
         const initial = await Placement.findOne(filter);
         if (!initial) return res.status(404).json({ message: 'Placement not found' });
-        try { normalizeCoordinates(req.body.coordinates ?? initial.coordinates, (req.body.status || initial.status) === 'Active'); }
+        const initialValue = initial.toObject ? initial.toObject() : initial;
+        const nextLocation = { ...initialValue, ...req.body, status: req.body.status || initial.status };
+        let nextCoordinates;
+        const locationChange = Object.hasOwn(req.body, 'coordinates') || Object.hasOwn(req.body, 'worksiteMode');
+        const adminLocationApproval = req.user.role === 'Admin' && req.body.approveLocationException === true;
+        try {
+            nextCoordinates = normalizeCoordinates(req.body.coordinates ?? initial.coordinates);
+            normalizeCoordinates(nextCoordinates, !adminLocationApproval && worksiteRequiresCoordinates(nextLocation));
+        }
         catch (error) { return res.status(400).json({ message: error.message }); }
+        if (locationChange && !nextCoordinates && !isFlexibleWorksite(nextLocation.worksiteMode) && !adminLocationApproval) {
+            return res.status(400).json({ message: 'Workplace coordinates are required, or an Institution Admin must approve provisional GPS verification.' });
+        }
         if (req.body.status && req.body.status !== initial.status && req.user.role === 'Staff') return res.status(403).json({ message: 'Only institution management may change placement status.' });
         const key = placementOperationKey(req.user, 'edit', { id: req.params.id, command: crypto.randomUUID() });
         const plan = await runPlacementOperation(key, async () => {
@@ -9573,6 +9632,20 @@ router.put('/placements/:id', async (req, res) => {
             if (req.user.role === 'Staff' && req.body.status && req.body.status !== existing.status) throw placementError('Only institution management may change placement status.', 403);
             const fields = { ...placementInput(req.body) };
             delete fields.partner;
+            for (const field of ['locationVerificationStatus', 'locationVerificationDueDate', 'locationExceptionApprovedBy', 'locationExceptionApprovedAt']) delete fields[field];
+            if (locationChange) {
+                if (nextCoordinates) {
+                    fields.coordinates = nextCoordinates;
+                    fields.locationVerificationStatus = 'GPSVerified';
+                    fields.locationVerificationDueDate = undefined;
+                } else if (adminLocationApproval) {
+                    fields.coordinates = undefined;
+                    fields.locationVerificationStatus = isFlexibleWorksite(nextLocation.worksiteMode) ? 'NotApplicableMobile' : 'Provisional';
+                    fields.locationVerificationDueDate = isFlexibleWorksite(nextLocation.worksiteMode) ? undefined : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+                    fields.locationExceptionApprovedBy = req.user._id;
+                    fields.locationExceptionApprovedAt = new Date();
+                }
+            }
             for (const field of ['status', 'closureReason', 'closureNote']) if (Object.hasOwn(req.body, field)) fields[field] = req.body[field];
             const payload = applyPlacementClosureMetadata(existing, fields, req.user);
             const merged = new Placement({ ...existing.toObject(), ...payload });
@@ -12932,6 +13005,14 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
     try {
         try { req.body.coordinates = normalizeCoordinates(req.body.coordinates); }
         catch (error) { return res.status(400).json({ message: error.message }); }
+        req.body.partnerType = req.body.partnerType || 'RegisteredCompany';
+        req.body.operatingModel = req.body.operatingModel || 'FixedSite';
+        req.body.locationVerificationStatus = req.body.coordinates
+            ? 'GPSVerified'
+            : isFlexibleWorksite(req.body.operatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
+        if (isFlexibleWorksite(req.body.operatingModel) && !req.body.locationVerificationNotes?.trim()) {
+            return res.status(400).json({ message: 'Describe the operating area and alternative location evidence for mobile or no-premises partners.' });
+        }
         const approvalStatus = isHQRole(req.user.role) ? 'Approved' : 'PendingHQApproval';
         const newPartner = new IndustryPartner({
             ...req.body,
@@ -13049,10 +13130,19 @@ router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'),
             catch (error) { return res.status(400).json({ message: error.message }); }
         }
         const existingPartner = await IndustryPartner.findById(req.params.id);
-        const { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions, coordinates } = req.body;
+        if (!existingPartner) return res.status(404).json({ message: 'Partner not found' });
+        const { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions, coordinates, partnerType, operatingModel, locationVerificationNotes, ghanaPostGps } = req.body;
+        const resolvedCoordinates = Object.hasOwn(req.body, 'coordinates') ? coordinates : existingPartner.coordinates;
+        const resolvedOperatingModel = operatingModel || existingPartner.operatingModel || 'FixedSite';
+        const locationVerificationStatus = hasCoordinates(resolvedCoordinates)
+            ? 'GPSVerified'
+            : isFlexibleWorksite(resolvedOperatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
+        if (isFlexibleWorksite(resolvedOperatingModel) && !(locationVerificationNotes ?? existingPartner.locationVerificationNotes)?.trim()) {
+            return res.status(400).json({ message: 'Describe the operating area and alternative location evidence for mobile or no-premises partners.' });
+        }
         const updatedPartner = await IndustryPartner.findByIdAndUpdate(
             req.params.id,
-            { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions, coordinates },
+            { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions, coordinates, partnerType, operatingModel, locationVerificationStatus, locationVerificationNotes, ghanaPostGps },
             { returnDocument: 'after', runValidators: true }
         );
         if (updatedPartner && existingPartner) {
@@ -13976,7 +14066,7 @@ router.get('/placement-requests', async (req, res) => {
             ...filter,
             ...buildArchiveQueryFilter({ includeArchived, archivedOnly }),
         })
-            .populate('partner', 'name sector region totalSlots usedSlots')
+            .populate('partner', 'name sector region totalSlots usedSlots partnerType operatingModel locationVerificationStatus coordinates')
             .populate('learners', 'firstName lastName trackingId')
             .populate('submittedBy', 'name')
             .populate('reviewedByInstitution', 'name')
@@ -14007,6 +14097,9 @@ router.post('/placement-requests', async (req, res) => {
             endDate,
             sourceType,
             selfSourcedHost,
+            worksiteMode = 'FixedSite',
+            locationVerificationNotes = '',
+            expectedOperatingArea = '',
             overrideWelWindow = false,
         } = req.body;
         if (!placementRegion?.trim()) {
@@ -14066,6 +14159,10 @@ router.post('/placement-requests', async (req, res) => {
                 sourceType: normalizedSourceType,
                 academicYear: placementAcademicYear,
                 coordinates,
+                worksiteMode,
+                locationVerificationStatus: coordinates ? 'GPSVerified' : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
+                locationVerificationNotes,
+                expectedOperatingArea,
                 selfSourcedHost: {
                     companyName: selfSourcedHost.companyName?.trim() || '',
                     sector: selfSourcedHost.sector?.trim() || '',
@@ -14107,6 +14204,9 @@ router.post('/placement-requests', async (req, res) => {
             institution: req.user.institution, partner, learners, program,
             requestedSlots: learners.length, placementRegion: placementRegion.trim(),
             academicYear: placementAcademicYear, startDate, endDate, coordinates,
+            worksiteMode,
+            locationVerificationStatus: coordinates ? 'GPSVerified' : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
+            locationVerificationNotes, expectedOperatingArea,
             submittedBy: req.user._id, sourceType: 'InstitutionFound', status: 'Submitted',
         });
         await logAuditEvent({ req, action: 'CREATE', entityType: 'PlacementRequest', entityId: pending._id,
@@ -14150,7 +14250,12 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
         if (request.status === 'Converted') return res.json(request);
         const partner = request.partner ? await IndustryPartner.findById(request.partner) : null;
         let coordinates;
-        try { coordinates = normalizeCoordinates(req.body.coordinates ?? request.coordinates ?? partner?.coordinates, true); }
+        const conversionInput = {
+            worksiteMode: req.body.worksiteMode || request.worksiteMode || partner?.operatingModel || 'FixedSite',
+            locationVerificationStatus: request.locationVerificationStatus,
+        };
+        try { coordinates = normalizeCoordinates(req.body.coordinates ?? request.coordinates ?? partner?.coordinates,
+            !(req.user.role === 'Admin' && req.body.approveLocationException === true) && worksiteRequiresCoordinates({ status: 'Active', ...conversionInput })); }
         catch (error) { return res.status(400).json({ message: error.message }); }
         const key = placementOperationKey({ ...req.user, _id: request.submittedBy }, 'convert', { request: String(request._id) });
         const plan = await runPlacementOperation(key, async () => {
@@ -14162,12 +14267,16 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
                 companyName: fresh.selfSourcedHost?.companyName,
                 sector: fresh.selfSourcedHost?.sector || fresh.program,
                 location: fresh.selfSourcedHost?.location || fresh.selfSourcedHost?.town,
-                supervisorName: fresh.selfSourcedHost?.contactPerson,
-                supervisorPhone: fresh.selfSourcedHost?.contactPhone,
-                supervisorEmail: fresh.selfSourcedHost?.contactEmail,
+                supervisorName: req.body.supervisorName || fresh.selfSourcedHost?.contactPerson,
+                supervisorPhone: req.body.supervisorPhone || fresh.selfSourcedHost?.contactPhone,
+                supervisorEmail: req.body.supervisorEmail || fresh.selfSourcedHost?.contactEmail,
                 startDate: fresh.startDate, endDate: fresh.endDate,
                 academicYear: fresh.academicYear || await resolveCurrentAcademicYear(),
                 placementRegion: fresh.placementRegion, coordinates,
+                worksiteMode: req.body.worksiteMode || fresh.worksiteMode || partner?.operatingModel || 'FixedSite',
+                locationVerificationNotes: req.body.locationVerificationNotes || fresh.locationVerificationNotes || '',
+                expectedOperatingArea: req.body.expectedOperatingArea || fresh.expectedOperatingArea || '',
+                approveLocationException: req.body.approveLocationException === true,
                 overrideWelWindow: req.body.overrideWelWindow,
             };
             const { documents, override } = await preparePlacementActivation(req, input, ids);
@@ -14179,7 +14288,7 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
         });
         await logAuditEvent({ req, action: 'CREATE', entityType: 'Placement', entityId: plan.placements.map(item => item.id).join(','), summary: 'Activated placement request', metadata: { operationKey: key, placementRequestId: request._id, replayed: !!plan.replayed, welWindowOverride: plan.override } });
         notifyPlacementActivation(req, plan);
-        res.json(await PlacementRequest.findOne(filter).populate('partner', 'name sector region totalSlots usedSlots').populate('learners', 'firstName lastName trackingId'));
+        res.json(await PlacementRequest.findOne(filter).populate('partner', 'name sector region totalSlots usedSlots partnerType operatingModel locationVerificationStatus coordinates').populate('learners', 'firstName lastName trackingId'));
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 

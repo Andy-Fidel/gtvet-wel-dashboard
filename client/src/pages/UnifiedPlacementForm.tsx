@@ -42,6 +42,10 @@ const formSchema = z.object({
   supervisorPhone: z.string().optional(),
   supervisorEmail: z.string().email("Invalid email").optional().or(z.literal('')),
   sourceNotes: z.string().optional(),
+  worksiteMode: z.enum(['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises']),
+  expectedOperatingArea: z.string().optional(),
+  locationVerificationNotes: z.string().optional(),
+  approveLocationException: z.boolean(),
   
   // Shared fields
   placementRegion: z.string().min(1, "Placement region is required"),
@@ -67,6 +71,12 @@ const formSchema = z.object({
         if (!data.location || data.location.trim().length < 2) {
              ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Location is required", path: ["location"] });
         }
+    }
+    if (['MobileField', 'NoFixedPremises'].includes(data.worksiteMode)) {
+        if (!data.expectedOperatingArea?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Operating area is required.', path: ['expectedOperatingArea'] });
+        if (!data.locationVerificationNotes?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Alternative location evidence is required.', path: ['locationVerificationNotes'] });
+        if (!data.supervisorName?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Supervisor name is required.', path: ['supervisorName'] });
+        if (!data.supervisorPhone?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Supervisor phone is required.', path: ['supervisorPhone'] });
     }
 });
 
@@ -108,15 +118,21 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         town: "",
         contactPerson: "",
         sourceNotes: ""
+        ,worksiteMode: 'FixedSite', expectedOperatingArea: '', locationVerificationNotes: '', approveLocationException: false
     },
   })
 
   const placementType = form.watch("placementType");
   const selectedPartnerId = form.watch('partner')
+  const worksiteMode = form.watch('worksiteMode')
+  const approveLocationException = form.watch('approveLocationException')
+  const flexibleWorksite = ['MobileField', 'NoFixedPremises'].includes(worksiteMode)
   useEffect(() => {
-    const site = placementType === 'registered' ? partners.find(partner => partner._id === selectedPartnerId)?.coordinates : undefined
+    const partner = placementType === 'registered' ? partners.find(item => item._id === selectedPartnerId) : undefined
+    const site = partner?.coordinates
     setLat(String(site?.lat ?? '')); setLng(String(site?.lng ?? ''))
-  }, [selectedPartnerId, placementType, partners])
+    if (partner) form.setValue('worksiteMode', partner.operatingModel || 'FixedSite')
+  }, [selectedPartnerId, placementType, partners, form])
 
   useEffect(() => {
     const fetchData = async () => {
@@ -216,6 +232,12 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
     setLoading(true)
     try {
       const coordinates = readCoordinates(lat, lng)
+      const locationFields = {
+          worksiteMode: data.worksiteMode,
+          expectedOperatingArea: data.expectedOperatingArea,
+          locationVerificationNotes: data.locationVerificationNotes,
+          approveLocationException: data.approveLocationException,
+      }
       if (data.placementType === 'registered') {
           // Send to placement-requests endpoint
           const res = await authFetch('/api/placement-requests', {
@@ -231,11 +253,12 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 startDate: data.startDate,
                 endDate: data.endDate,
                 overrideWelWindow: selectedWindowBlockedLearners.length > 0 && overrideWelWindow
+                ,...locationFields
             }),
           })
           const resData = await res.json()
           if (!res.ok) throw new Error(resData.message || "Failed to submit request")
-      } else if (data.placementType === 'custom' && coordinates && ['Admin', 'Manager'].includes(user?.role || '')) {
+      } else if (data.placementType === 'custom' && (coordinates || (user?.role === 'Admin' && data.approveLocationException)) && ['Admin', 'Manager'].includes(user?.role || '')) {
           // Send to bulk placements endpoint
           const res = await authFetch('/api/placements', {
             method: 'POST',
@@ -253,6 +276,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 startDate: data.startDate,
                 endDate: data.endDate,
                 overrideWelWindow: selectedWindowBlockedLearners.length > 0 && overrideWelWindow
+                ,...locationFields
             }),
           })
           const resData = await res.json()
@@ -282,13 +306,14 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                   notes: data.sourceNotes,
                 },
                 overrideWelWindow: selectedWindowBlockedLearners.length > 0 && overrideWelWindow
+                ,...locationFields
             }),
           })
           const resData = await res.json()
           if (!res.ok) throw new Error(resData.message || "Failed to submit learner-sourced placement")
       }
 
-      toast.success(data.placementType === 'custom' && coordinates && ['Admin', 'Manager'].includes(user?.role || '') ? 'Learners placed successfully' : 'Request submitted. Institution management must review and activate it under Placement Requests.')
+      toast.success(data.placementType === 'custom' && (coordinates || (user?.role === 'Admin' && data.approveLocationException)) && ['Admin', 'Manager'].includes(user?.role || '') ? 'Learners placed successfully' : 'Request submitted. Institution management must review and activate it under Placement Requests.')
       onSuccess()
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Something went wrong";
@@ -317,8 +342,23 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 space-y-4">
+          <FormField control={form.control} name="worksiteMode" render={({ field }) => (
+            <FormItem><FormLabel>Worksite Mode *</FormLabel><Select value={field.value} onValueChange={(value) => { field.onChange(value); form.setValue('approveLocationException', false) }}><FormControl><SelectTrigger className="bg-white"><SelectValue /></SelectTrigger></FormControl><SelectContent>
+              <SelectItem value="FixedSite">Fixed workshop</SelectItem><SelectItem value="HomeBased">Home-based</SelectItem><SelectItem value="MobileField">Mobile / field work</SelectItem><SelectItem value="MultipleSites">Multiple worksites</SelectItem><SelectItem value="TemporarySite">Temporary / project site</SelectItem><SelectItem value="NoFixedPremises">No fixed premises</SelectItem>
+            </SelectContent></Select><FormMessage /></FormItem>
+          )} />
+          {flexibleWorksite && <div className="grid gap-4 md:grid-cols-2">
+            <FormField control={form.control} name="expectedOperatingArea" render={({ field }) => <FormItem><FormLabel>Expected Operating Area *</FormLabel><FormControl><Input className="bg-white" placeholder="Communities, district or typical project sites" {...field} /></FormControl><FormMessage /></FormItem>} />
+            <FormField control={form.control} name="locationVerificationNotes" render={({ field }) => <FormItem><FormLabel>Alternative Location Evidence *</FormLabel><FormControl><Input className="bg-white" placeholder="Landmarks, supervisor confirmation, job card or visit arrangement" {...field} /></FormControl><FormMessage /></FormItem>} />
+          </div>}
+        </div>
         <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} disabled={loading} />
-        <p className="text-sm text-gray-600">Partner coordinates are prefilled when available. Change them for a different branch. Without coordinates, this is saved as a request for follow-up, not an active placement.</p>
+        <p className="text-sm text-gray-600">Partner coordinates are prefilled when available. Fixed worksites without GPS enter a follow-up queue. Mobile and no-premises worksites use the operating area and evidence above.</p>
+        {user?.role === 'Admin' && !lat && !lng && placementType === 'custom' && <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <Checkbox checked={approveLocationException} onCheckedChange={(checked) => form.setValue('approveLocationException', checked === true)} className="mt-0.5" />
+          <span><span className="block font-bold">Approve {flexibleWorksite ? 'alternative location evidence' : 'provisional activation'}</span><span className="block text-xs">{flexibleWorksite ? 'This Admin decision is recorded and monitoring visits capture the actual encounter location.' : 'GPS must be captured within 14 days. The placement will appear in the verification queue.'}</span></span>
+        </label>}
         {selectedLearnerIds.length > 0 && (() => {
             const blockedLearners = learners.filter((learner) =>
                 selectedLearnerIds.includes(learner._id) && !learner.readiness?.isReadyForPlacement

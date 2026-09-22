@@ -184,6 +184,12 @@ export default function IndustryPartners() {
                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 bg-gray-100 text-gray-600 mt-2 uppercase tracking-wide">
                         {partner.sector}
                      </span>
+                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 bg-blue-50 text-blue-700 mt-2 ml-2">
+                       {partner.partnerType === 'MasterCraftPerson' ? 'MCP' : (partner.partnerType || 'Registered company').replace(/([a-z])([A-Z])/g, '$1 $2')}
+                     </span>
+                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 mt-2 ml-2 ${partner.locationVerificationStatus === 'GPSVerified' ? 'bg-emerald-100 text-emerald-700' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                       {partner.locationVerificationStatus === 'GPSVerified' ? 'GPS verified' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'Mobile evidence' : 'GPS pending'}
+                     </span>
                      {partner.approvalStatus && partner.approvalStatus !== 'Approved' && (
                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 mt-2 ml-2 uppercase tracking-wide ${
                          partner.approvalStatus === 'PendingHQApproval'

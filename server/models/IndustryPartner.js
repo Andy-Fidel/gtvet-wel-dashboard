@@ -26,6 +26,23 @@ const industryPartnerSchema = new mongoose.Schema({
   town: { type: String },
   location: { type: String },
   coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
+  partnerType: {
+    type: String,
+    enum: ['RegisteredCompany', 'MasterCraftPerson', 'Government', 'NGO', 'Other'],
+    default: 'RegisteredCompany',
+  },
+  operatingModel: {
+    type: String,
+    enum: ['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'],
+    default: 'FixedSite',
+  },
+  locationVerificationStatus: {
+    type: String,
+    enum: ['PendingGPS', 'GPSVerified', 'NotApplicableMobile', 'ExceptionApproved'],
+    default: 'PendingGPS',
+  },
+  locationVerificationNotes: { type: String, default: '', maxlength: 3000 },
+  ghanaPostGps: { type: String, default: '', trim: true },
   contactPerson: { type: String },
   contactPhone: { type: String },
   contactEmail: { type: String },
@@ -58,5 +75,6 @@ industryPartnerSchema.index({ name: 1 }, { name: 'partner_name_ci_unique', uniqu
 industryPartnerSchema.index({ sector: 1 });
 industryPartnerSchema.index({ status: 1 });
 industryPartnerSchema.index({ approvalStatus: 1 });
+industryPartnerSchema.index({ locationVerificationStatus: 1, operatingModel: 1 });
 
 export const IndustryPartner = mongoose.model('IndustryPartner', industryPartnerSchema);

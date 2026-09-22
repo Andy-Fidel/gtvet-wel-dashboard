@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hasCoordinates, normalizeCoordinates, locationCheck } from '../utils/workplaceCoordinates.js';
+import { hasCoordinates, normalizeCoordinates, locationCheck, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
 import { Placement } from '../models/Placement.js';
 import { PlacementRequest } from '../models/PlacementRequest.js';
@@ -45,6 +45,9 @@ test('active model creation requires coordinates while closed records can omit t
   await assert.rejects(new Placement(data).validate(), /latitude and longitude/);
   await new Placement({ ...data, coordinates: { lat: 0, lng: 0 } }).validate();
   await new Placement({ ...data, status: 'Completed' }).validate();
+  await new Placement({ ...data, worksiteMode: 'MobileField', locationVerificationStatus: 'NotApplicableMobile', expectedOperatingArea: 'Across Accra project sites', locationVerificationNotes: 'Supervisor confirms each site before visits', supervisorName: 'Master Kofi', supervisorPhone: '0240000000' }).validate();
+  assert.equal(worksiteRequiresCoordinates({ status: 'Active', worksiteMode: 'MobileField' }), false);
+  assert.equal(worksiteRequiresCoordinates({ status: 'Active', worksiteMode: 'FixedSite', locationVerificationStatus: 'Provisional' }), false);
 });
 
 test('direct activation and request conversion reject missing coordinates before creating records', async t => {
@@ -80,6 +83,17 @@ test('pending rechecks use captured location, guard completed decisions and audi
   assert.equal(changes[0].update.$set.submittedLocation, undefined);
   assert.equal(changes[0].update.$set.gpsCapturedAt, undefined);
   assert.equal(audits.length, 1);
+});
+
+test('mobile worksite rechecks capture the visit location without a fixed-radius comparison', async t => {
+  let update;
+  t.mock.method(MonitoringVisit, 'find', async () => [{ _id: 'visit', submittedLocation: { lat: 5.6, lng: -0.2 }, gpsReviewStatus: 'PendingReview', locationVerified: 'No Placement' }]);
+  t.mock.method(MonitoringVisit, 'findOneAndUpdate', async (_query, value) => { update = value; return {}; });
+  t.mock.method(AuditLog, 'create', async () => ({}));
+  await recheckPendingPlacementVisits({ _id: 'site', learner: 'learner', institution: 'Institute', status: 'Active', worksiteMode: 'MobileField' }, { user: { role: 'Admin', name: 'Admin' } });
+  assert.equal(update.$set.locationVerified, 'Verified');
+  assert.equal(update.$set.gpsReviewStatus, 'Verified');
+  assert.equal(update.$set.distanceFromSite, null);
 });
 
 test('partner edits persist coordinates including zero longitude', async t => {

@@ -13,6 +13,7 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
@@ -26,6 +27,10 @@ const formSchema = z.object({
   tradeArea: z.string().optional(),
   town: z.string().optional(),
   location: z.string().optional(),
+  partnerType: z.enum(['RegisteredCompany', 'MasterCraftPerson', 'Government', 'NGO', 'Other']),
+  operatingModel: z.enum(['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises']),
+  locationVerificationNotes: z.string().max(3000).optional(),
+  ghanaPostGps: z.string().max(200).optional(),
   contactPerson: z.string().optional(),
   contactPhone: z.string().optional(),
   contactEmail: z.string().email("Invalid email").optional().or(z.literal('')),
@@ -33,13 +38,17 @@ const formSchema = z.object({
   totalSlots: z.number().min(0, "Capacity cannot be negative"),
   status: z.enum(["Active", "Inactive"]),
   mouDocumentUrl: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (['MobileField', 'NoFixedPremises'].includes(data.operatingModel) && !data.locationVerificationNotes?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['locationVerificationNotes'], message: 'Describe the operating area and how this partner can be located.' })
+  }
 })
 
 type IndustryPartnerFormValues = z.infer<typeof formSchema>
 
 interface IndustryPartnerFormProps {
   onSuccess: () => void;
-  initialData?: IndustryPartnerFormValues & { _id?: string; usedSlots?: number; mouDocumentUrl?: string; coordinates?: { lat?: number; lng?: number } };
+  initialData?: Partial<IndustryPartnerFormValues> & { _id?: string; usedSlots?: number; mouDocumentUrl?: string; coordinates?: { lat?: number; lng?: number } };
 }
 
 const GHANA_REGIONS = [
@@ -58,12 +67,15 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
 
   const form = useForm<IndustryPartnerFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: initialData || {
+    defaultValues: {
       name: "", sector: "", region: "", district: "", tradeArea: "", town: "", location: "",
+      partnerType: 'RegisteredCompany', operatingModel: 'FixedSite', locationVerificationNotes: '', ghanaPostGps: '',
       contactPerson: "", contactPhone: "", contactEmail: "", website: "",
       totalSlots: 0, status: "Active", mouDocumentUrl: "",
+      ...initialData,
     },
   })
+  const operatingModel = form.watch('operatingModel')
 
   async function onSubmit(data: IndustryPartnerFormValues) {
     setLoading(true)
@@ -106,10 +118,22 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-        <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} disabled={loading} />
-        
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+          Register the partner now even if GPS is unavailable. Fixed workplaces will enter the GPS follow-up queue; mobile and no-premises partners use operating-area evidence.
+        </div>
+
         {/* Company Details */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <FormField control={form.control} name="partnerType" render={({ field }) => (
+              <FormItem><FormLabel>Partner Type *</FormLabel><Select value={field.value} onValueChange={field.onChange}><FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl><SelectContent>
+                <SelectItem value="RegisteredCompany">Registered company</SelectItem><SelectItem value="MasterCraftPerson">Master Craft Person (MCP)</SelectItem><SelectItem value="Government">Government</SelectItem><SelectItem value="NGO">NGO</SelectItem><SelectItem value="Other">Other</SelectItem>
+              </SelectContent></Select><FormMessage /></FormItem>
+            )} />
+            <FormField control={form.control} name="operatingModel" render={({ field }) => (
+              <FormItem><FormLabel>Operating Model *</FormLabel><Select value={field.value} onValueChange={field.onChange}><FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl><SelectContent>
+                <SelectItem value="FixedSite">Fixed workshop</SelectItem><SelectItem value="HomeBased">Home-based</SelectItem><SelectItem value="MobileField">Mobile / field work</SelectItem><SelectItem value="MultipleSites">Multiple worksites</SelectItem><SelectItem value="TemporarySite">Temporary / project site</SelectItem><SelectItem value="NoFixedPremises">No fixed premises</SelectItem>
+              </SelectContent></Select><FormMessage /></FormItem>
+            )} />
             <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Company Name *</FormLabel>
@@ -157,7 +181,19 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
                   <FormMessage />
                 </FormItem>
             )} />
+            <FormField control={form.control} name="location" render={({ field }) => (
+              <FormItem><FormLabel>Address / Location Description</FormLabel><FormControl><Input placeholder="Landmark, street or operating area" {...field} /></FormControl><FormMessage /></FormItem>
+            )} />
+            <FormField control={form.control} name="ghanaPostGps" render={({ field }) => (
+              <FormItem><FormLabel>GhanaPost GPS Address</FormLabel><FormControl><Input placeholder="e.g. GA-123-4567" {...field} /></FormControl><FormMessage /></FormItem>
+            )} />
         </div>
+
+        <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} disabled={loading} />
+        <p className="text-xs text-muted-foreground">Coordinates are optional during registration. Capture them later for fixed, home-based, multi-site and temporary workplaces.</p>
+        <FormField control={form.control} name="locationVerificationNotes" render={({ field }) => (
+          <FormItem><FormLabel>{['MobileField', 'NoFixedPremises'].includes(operatingModel) ? 'Operating Area and Location Evidence *' : 'Location Verification Notes'}</FormLabel><FormControl><Textarea rows={3} placeholder={['MobileField', 'NoFixedPremises'].includes(operatingModel) ? 'Describe usual communities, project sites, landmarks and how visits will be arranged.' : 'Add directions, landmark or GPS follow-up notes.'} {...field} /></FormControl><FormMessage /></FormItem>
+        )} />
 
         {/* Contact Info */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

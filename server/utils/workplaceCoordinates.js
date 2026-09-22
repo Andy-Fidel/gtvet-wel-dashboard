@@ -3,6 +3,20 @@ export function hasCoordinates(value) {
     && typeof value?.lng === 'number' && Number.isFinite(value.lng) && value.lng >= -180 && value.lng <= 180;
 }
 
+export const WORKSITE_MODES = ['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'];
+export const FLEXIBLE_WORKSITE_MODES = ['MobileField', 'NoFixedPremises'];
+export const LOCATION_VERIFICATION_STATUSES = ['PendingGPS', 'GPSVerified', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'];
+
+export function isFlexibleWorksite(mode) {
+  return FLEXIBLE_WORKSITE_MODES.includes(mode);
+}
+
+export function worksiteRequiresCoordinates({ status = 'Active', worksiteMode = 'FixedSite', locationVerificationStatus = 'PendingGPS' } = {}) {
+  if (status !== 'Active') return false;
+  if (isFlexibleWorksite(worksiteMode)) return false;
+  return !['Provisional', 'ExceptionApproved'].includes(locationVerificationStatus);
+}
+
 export function normalizeCoordinates(value, required = false) {
   const blank = v => v === undefined || v === null || (typeof v === 'string' && !v.trim());
   if (value != null && (typeof value !== 'object' || Array.isArray(value))) throw new Error('Provide workplace coordinates as latitude and longitude.');

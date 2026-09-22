@@ -6,8 +6,9 @@ import { partnerVisibilityFilter, partnerRegionMatch } from './partnerVisibility
 import { notifyUsers } from './notifications.js';
 import { logAuditEvent } from './audit.js';
 import { runPlacementOperation } from './placementWorkflow.js';
+import { hasCoordinates, isFlexibleWorksite } from './workplaceCoordinates.js';
 
-export const partnerChangeFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'coordinates', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'programs', 'mouDocumentUrl'];
+export const partnerChangeFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'coordinates', 'partnerType', 'operatingModel', 'locationVerificationNotes', 'ghanaPostGps', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'programs', 'mouDocumentUrl'];
 const institutionRoles = ['Admin', 'Manager', 'Staff'];
 const pending = ['InstitutionReview', 'HQReview', 'Returned'];
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
@@ -28,6 +29,12 @@ export function normalizePartnerChanges(input) {
     } else if (key === 'coordinates') {
       if (!value || typeof value.lat !== 'number' || typeof value.lng !== 'number' || !Number.isFinite(value.lat) || !Number.isFinite(value.lng) || Math.abs(value.lat) > 90 || Math.abs(value.lng) > 180) fail('Provide valid latitude and longitude.');
       result[key] = { lat: value.lat, lng: value.lng };
+    } else if (key === 'partnerType') {
+      if (!['RegisteredCompany', 'MasterCraftPerson', 'Government', 'NGO', 'Other'].includes(value)) fail('Select a valid partner type.');
+      result[key] = value;
+    } else if (key === 'operatingModel') {
+      if (!['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'].includes(value)) fail('Select a valid operating model.');
+      result[key] = value;
     } else {
       if (typeof value !== 'string' || value.length > 2000) fail(`Provide a valid ${key}.`);
       result[key] = value.trim();
@@ -76,6 +83,12 @@ async function proposal(req, partner) {
   const proposed = {}, original = {};
   for (const [field, value] of Object.entries(values)) {
     if (!same(value, partner[field])) { proposed[field] = value; original[field] = partner[field] ?? null; }
+  }
+  if (Object.hasOwn(proposed, 'coordinates') || Object.hasOwn(proposed, 'operatingModel')) {
+    const coordinates = proposed.coordinates ?? partner.coordinates;
+    const operatingModel = proposed.operatingModel ?? partner.operatingModel ?? 'FixedSite';
+    proposed.locationVerificationStatus = hasCoordinates(coordinates) ? 'GPSVerified' : isFlexibleWorksite(operatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
+    original.locationVerificationStatus = partner.locationVerificationStatus ?? 'PendingGPS';
   }
   if (!Object.keys(proposed).length) fail('Change at least one partner detail.');
   const ids = req.body.attachmentIds || [];

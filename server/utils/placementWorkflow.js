@@ -9,7 +9,7 @@ import { PlacementCoordinator, PlacementOperation } from '../models/PlacementOpe
 
 export const placementError = (message, status = 409) => Object.assign(new Error(message), { status });
 export const placementErrorStatus = error => error.status || (['ValidationError', 'CastError'].includes(error.name) ? 400 : error.code === 11000 ? 409 : 500);
-export const placementInputFields = ['companyName', 'sector', 'location', 'supervisorName', 'supervisorPhone', 'supervisorEmail', 'startDate', 'endDate', 'academicYear', 'placementRegion', 'coordinates', 'partner'];
+export const placementInputFields = ['companyName', 'sector', 'location', 'supervisorName', 'supervisorPhone', 'supervisorEmail', 'startDate', 'endDate', 'academicYear', 'placementRegion', 'coordinates', 'partner', 'worksiteMode', 'locationVerificationStatus', 'locationVerificationNotes', 'expectedOperatingArea', 'locationVerificationDueDate', 'locationExceptionApprovedBy', 'locationExceptionApprovedAt'];
 export const placementInput = body => Object.fromEntries(placementInputFields.filter(key => Object.hasOwn(body || {}, key)).map(key => [key, body[key]]));
 
 export function validatePlacementDates(start, end) {

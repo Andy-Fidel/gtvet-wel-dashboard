@@ -6,7 +6,7 @@ import { User } from '../models/User.js';
 import { Learner } from '../models/Learner.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { placementError, placementErrorStatus, placementInput, runPlacementOperation, placementOperationKey, validatePlacementDates } from './placementWorkflow.js';
-import { normalizeCoordinates } from './workplaceCoordinates.js';
+import { isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates } from './workplaceCoordinates.js';
 import { notifyUsers } from './notifications.js';
 import { logAuditEvent } from './audit.js';
 
@@ -54,7 +54,16 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
       if (!partner) throw placementError('Partner is not approved or is outside your access.', 400);
       Object.assign(data, { companyName: partner.name, sector: partner.sector, location: partner.location || partner.region });
     }
-    data.coordinates = normalizeCoordinates(data.coordinates, true);
+    const adminLocationApproval = req.user.role === 'Admin' && input.approveLocationException === true;
+    data.worksiteMode = data.worksiteMode || 'FixedSite';
+    data.coordinates = normalizeCoordinates(data.coordinates, !adminLocationApproval && worksiteRequiresCoordinates({ status: 'Active', ...data }));
+    if (!data.coordinates && adminLocationApproval) {
+      data.locationVerificationStatus = isFlexibleWorksite(data.worksiteMode) ? 'NotApplicableMobile' : 'Provisional';
+      data.locationVerificationDueDate = isFlexibleWorksite(data.worksiteMode) ? undefined : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+      data.locationExceptionApprovedBy = req.user._id;
+      data.locationExceptionApprovedAt = new Date();
+      data.approveLocationException = true;
+    }
     if (!data.supervisorName?.trim() || !data.supervisorPhone?.trim() || !data.placementRegion?.trim()) throw placementError('Supervisor name, phone and placement region are required.', 400);
     return data;
   };
@@ -83,8 +92,8 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
       requireOperator(req);
       const source = await scopedPlacement(req, req.params.id);
       if (source.institution !== req.user.institution) throw placementError('Only the owning institution may transfer this learner.', 403);
-      const partners = await IndustryPartner.find({ $and: [{ status: 'Active', approvalStatus: 'Approved' }, await partnerVisibility(req.user)] }).select('name region location coordinates').sort({ name: 1 }).lean();
-      const requests = await PlacementRequest.find({ institution: req.user.institution, learners: source.learner, sourceType: 'LearnerFound', status: 'Approved', archivedAt: null }).select('selfSourcedHost coordinates placementRegion').lean();
+      const partners = await IndustryPartner.find({ $and: [{ status: 'Active', approvalStatus: 'Approved' }, await partnerVisibility(req.user)] }).select('name region location coordinates operatingModel locationVerificationStatus').sort({ name: 1 }).lean();
+      const requests = await PlacementRequest.find({ institution: req.user.institution, learners: source.learner, sourceType: 'LearnerFound', status: 'Approved', archivedAt: null }).select('selfSourcedHost coordinates placementRegion worksiteMode locationVerificationStatus locationVerificationNotes expectedOperatingArea').lean();
       res.json({ partners, requests });
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
   });
