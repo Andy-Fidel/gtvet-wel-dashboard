@@ -114,6 +114,18 @@ export const getFilter = async (user) => {
   return { institution: user.institution };
 };
 
+// User management includes regional-office accounts as well as institution users.
+export const getUserManagementFilter = async (user) => {
+  if (user.role !== 'RegionalAdmin') return getFilter(user);
+  const institutions = await Institution.find({ region: user.region }).select('name').lean();
+  return {
+    $or: [
+      { role: 'RegionalAdmin', region: user.region },
+      { institution: { $in: institutions.map((institution) => institution.name) } },
+    ],
+  };
+};
+
 const getMonitoringFilter = async (user, learnerOptions = false) => {
   if (isHQRole(user.role) || user.role === 'RegionalAdmin') return getFilter(user);
   if (!canLogMonitoringVisit(user)) return { _id: { $in: [] } };
@@ -1150,7 +1162,7 @@ const getManageableUserRoles = (actorRole) => {
     return ['SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner', 'Guardian'];
   }
   if (actorRole === 'RegionalAdmin') {
-    return ['Admin', 'Manager', 'Staff', 'Guardian'];
+    return ['RegionalAdmin', 'Admin', 'Manager', 'Staff', 'Guardian'];
   }
   if (actorRole === 'Admin') {
     return ['Manager', 'Staff', 'Guardian'];
@@ -1435,6 +1447,10 @@ export const normalizeUserPayloadForRole = async (actor, payload, existingUser =
 
   if (targetRole === 'RegionalAdmin') {
     normalized.hqScopeType = undefined;
+    if (actor.role === 'RegionalAdmin') {
+      if (!actor.region?.trim()) return { status: 403, message: 'Your account has no assigned region' };
+      normalized.region = actor.region.trim();
+    }
     if (!normalized.region?.trim()) {
       return { status: 400, message: 'Region is required for Regional Admins' };
     }
@@ -10532,7 +10548,7 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
 
 router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const filter = await getFilter(req.user);
+        const filter = await getUserManagementFilter(req.user);
         const {
             role,
             status,
@@ -10556,10 +10572,11 @@ router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'
                 }
                 filter.institution = req.user.institution;
             } else {
-                const allowedInstitutions = filter.institution?.$in || [];
-                if (!allowedInstitutions.includes(institution)) {
+                const institutionInRegion = await Institution.exists({ name: institution, region: req.user.region });
+                if (!institutionInRegion) {
                     return res.status(403).json({ message: 'Forbidden: Institution is outside your region' });
                 }
+                delete filter.$or;
                 filter.institution = institution;
             }
         }
@@ -10579,12 +10596,14 @@ router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'
             const escapedSearch = String(q).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             if (escapedSearch) {
                 const searchRegex = new RegExp(escapedSearch, 'i');
-                filter.$or = [
-                    { name: searchRegex },
-                    { email: searchRegex },
-                    { institution: searchRegex },
-                    { region: searchRegex },
-                ];
+                filter.$and = [{
+                    $or: [
+                        { name: searchRegex },
+                        { email: searchRegex },
+                        { institution: searchRegex },
+                        { region: searchRegex },
+                    ],
+                }];
             }
         }
 
@@ -10807,7 +10826,7 @@ router.get('/users/institution-team-overview', requireRole('Admin'), async (req,
 
 router.get('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const filter = await getFilter(req.user);
+        const filter = await getUserManagementFilter(req.user);
         const users = await User.find(filter)
             .populate('partnerId', 'name')
             .populate('linkedLearners', 'name trackingId institution');
@@ -11082,10 +11101,8 @@ router.delete('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'),
         if (req.user.role === 'SuperAdmin') {
             // SuperAdmin can delete any user
         } else if (req.user.role === 'RegionalAdmin') {
-            // RegionalAdmin can only delete users in institutions within their region
-            const insts = await Institution.find({ region: req.user.region }).select('name');
-            const instNames = insts.map(i => i.name);
-            if (!instNames.includes(userToDelete.institution)) {
+            const institutionMatches = userToDelete.institution && (await Institution.exists({ name: userToDelete.institution, region: req.user.region }));
+            if (!(institutionMatches || userToDelete.region === req.user.region)) {
                 return res.status(403).json({ message: 'Forbidden: Access denied' });
             }
         } else {

@@ -706,7 +706,7 @@ export default function Users() {
 
     const canManageUser = (target: User) => {
         if (user?.role === "SuperAdmin") return true
-        if (user?.role === "RegionalAdmin") return ["Admin", "Manager", "Staff", "Guardian"].includes(target.role)
+        if (user?.role === "RegionalAdmin") return ["RegionalAdmin", "Admin", "Manager", "Staff", "Guardian"].includes(target.role)
         return ["Manager", "Staff", "Guardian"].includes(target.role)
     }
 
@@ -1641,7 +1641,9 @@ export default function Users() {
                    User Management
                 </h2>
                 <p className="text-muted-foreground">
-                    Manage system users, roles, and access levels.
+                    {user?.role === "RegionalAdmin"
+                        ? `Manage users and Regional Admin accounts within ${user.region || "your assigned region"}.`
+                        : "Manage system users, roles, and access levels."}
                 </p>
                 </div>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center w-full md:w-auto mt-4 md:mt-0 space-y-2 sm:space-y-0 sm:space-x-2">

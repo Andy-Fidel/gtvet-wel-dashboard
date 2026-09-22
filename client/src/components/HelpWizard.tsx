@@ -520,6 +520,7 @@ const guideDefinitions: GuideDefinition[] = [
         targetId: "users-add",
         bullets: [
           "Create or edit users with the correct scope so access stays defensible.",
+          "Regional Admins can create peer Regional Admin accounts only within their assigned region.",
           "Use suspension and deactivation carefully when active ownership still exists.",
           "Review approvals, anomalies, and inactive accounts as part of routine governance.",
         ],

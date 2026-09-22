@@ -7,7 +7,7 @@ import { IndustryPartner } from '../models/IndustryPartner.js';
 import { Institution } from '../models/Institution.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { PartnerImport } from '../models/PartnerImport.js';
-import router, { getFilter, normalizeUserPayloadForRole } from '../routes/api.js';
+import router, { getFilter, getUserManagementFilter, normalizeUserPayloadForRole } from '../routes/api.js';
 
 const response = () => ({
   statusCode: 200,
@@ -78,6 +78,31 @@ test('only SuperAdmin can assign HQ roles and national scope clears institution 
     }
     assert.equal((await normalizeUserPayloadForRole({ role: 'Admin' }, { role: 'Staff' }, { role })).status, 403);
   }
+});
+
+test('Regional Admins can create peer admins only in their own region', async () => {
+  const actor = { role: 'RegionalAdmin', region: 'Ashanti' };
+  const { normalized } = await normalizeUserPayloadForRole(actor, {
+    role: 'RegionalAdmin',
+    region: 'Greater Accra',
+    institution: 'Forged Institution',
+  });
+  assert.equal(normalized.role, 'RegionalAdmin');
+  assert.equal(normalized.region, 'Ashanti');
+  assert.equal(normalized.institution, 'N/A');
+  assert.equal((await normalizeUserPayloadForRole({ role: 'Admin', institution: 'School' }, { role: 'RegionalAdmin', region: 'Ashanti' })).status, 403);
+});
+
+test('regional user management includes peer Regional Admins and institutions in scope', async (t) => {
+  t.mock.method(Institution, 'find', () => ({
+    select: () => ({ lean: async () => [{ name: 'Kumasi Technical Institute' }] }),
+  }));
+  assert.deepEqual(await getUserManagementFilter({ role: 'RegionalAdmin', region: 'Ashanti' }), {
+    $or: [
+      { role: 'RegionalAdmin', region: 'Ashanti' },
+      { institution: { $in: ['Kumasi Technical Institute'] } },
+    ],
+  });
 });
 
 test('HQ institution and region scopes resolve like portal scopes', async (t) => {

@@ -140,7 +140,7 @@ const ROLE_CONFIG = {
 
 const getManageableRoles = (actorRole?: string) => {
   if (actorRole === "SuperAdmin") return ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"] as const
-  if (actorRole === "RegionalAdmin") return ["Admin", "Manager", "Staff", "Guardian"] as const
+  if (actorRole === "RegionalAdmin") return ["RegionalAdmin", "Admin", "Manager", "Staff", "Guardian"] as const
   return ["Manager", "Staff", "Guardian"] as const
 }
 
@@ -615,6 +615,14 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
                       <FormMessage />
                     </FormItem>
                 )} />
+            )}
+
+            {currentUser?.role === 'RegionalAdmin' && selectedRole === 'RegionalAdmin' && (
+              <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-4">
+                <p className="text-xs font-black uppercase tracking-wider text-sky-700">Assigned Region</p>
+                <p className="mt-2 text-sm font-bold text-gray-900">{currentUser.region}</p>
+                <p className="mt-1 text-xs text-gray-600">The API locks this account to your regional scope.</p>
+              </div>
             )}
 
             {/* Partner field for SuperAdmin creating IndustryPartners */}
