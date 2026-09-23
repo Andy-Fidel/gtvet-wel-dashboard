@@ -42,6 +42,7 @@ import { PartnerImport } from '../models/PartnerImport.js';
 import { PartnerSlotAllocation } from '../models/PartnerSlotAllocation.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { decoratePartnerCapacities, partnerCapacityAt } from '../utils/partnerCapacity.js';
+import { isPartnerSector } from '../utils/partnerTaxonomy.js';
 import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, locationCheck, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
@@ -13104,6 +13105,9 @@ router.post('/industry-partners/imports/:id/resume', requireRole('SuperAdmin'), 
 
 router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'), async (req, res) => {
     try {
+        req.body.sector = String(req.body.sector || '').trim();
+        req.body.tradeArea = String(req.body.tradeArea || '').trim();
+        if (!isPartnerSector(req.body.sector)) return res.status(400).json({ message: 'Select a valid sector from the available options.' });
         try { req.body.coordinates = normalizeCoordinates(req.body.coordinates); }
         catch (error) { return res.status(400).json({ message: error.message }); }
         req.body.partnerType = req.body.partnerType || 'RegisteredCompany';
@@ -13232,6 +13236,10 @@ router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'),
         }
         const existingPartner = await IndustryPartner.findById(req.params.id);
         if (!existingPartner) return res.status(404).json({ message: 'Partner not found' });
+        if (Object.hasOwn(req.body, 'sector')) {
+            req.body.sector = String(req.body.sector || '').trim();
+            if (req.body.sector !== existingPartner.sector && !isPartnerSector(req.body.sector)) return res.status(400).json({ message: 'Select a valid sector from the available options.' });
+        }
         const { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions, coordinates, partnerType, operatingModel, locationVerificationNotes, ghanaPostGps } = req.body;
         const resolvedCoordinates = Object.hasOwn(req.body, 'coordinates') ? coordinates : existingPartner.coordinates;
         const resolvedOperatingModel = operatingModel || existingPartner.operatingModel || 'FixedSite';

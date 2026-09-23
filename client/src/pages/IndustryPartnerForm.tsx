@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
 import { Loader2, UploadCloud } from "lucide-react"
+import { INDUSTRY_SECTORS } from '@/lib/constants'
 
 const formSchema = z.object({
   name: z.string().min(2, "Name is required"),
@@ -56,14 +57,19 @@ const GHANA_REGIONS = [
   "Greater Accra", "North East", "Northern", "Oti", "Savannah",
   "Upper East", "Upper West", "Volta", "Western", "Western North"
 ].sort();
+const NO_TRADE_AREA = '__not_specified__'
+
+type InstitutionPrograms = { programs?: string[] }
 
 export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerFormProps) {
   const [loading, setLoading] = useState(false)
   const [lat, setLat] = useState(String(initialData?.coordinates?.lat ?? ''))
   const [lng, setLng] = useState(String(initialData?.coordinates?.lng ?? ''))
   const [mouFile, setMouFile] = useState<File | null>(null)
+  const [tradeAreas, setTradeAreas] = useState<string[]>(initialData?.tradeArea ? [initialData.tradeArea] : [])
+  const [loadingTradeAreas, setLoadingTradeAreas] = useState(true)
   const normalizeNumberInput = (value: string) => (value === "" ? 0 : parseInt(value, 10))
-  const { authFetch } = useAuth()
+  const { authFetch, user } = useAuth()
 
   const form = useForm<IndustryPartnerFormValues>({
     resolver: zodResolver(formSchema),
@@ -76,6 +82,31 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
     },
   })
   const operatingModel = form.watch('operatingModel')
+  const sectorOptions = useMemo(() => initialData?.sector && !INDUSTRY_SECTORS.includes(initialData.sector as (typeof INDUSTRY_SECTORS)[number])
+    ? [initialData.sector, ...INDUSTRY_SECTORS]
+    : [...INDUSTRY_SECTORS], [initialData?.sector])
+
+  useEffect(() => {
+    if (!user?.role) return
+    let current = true
+    const loadTradeAreas = async () => {
+      setLoadingTradeAreas(true)
+      try {
+        const institutionUser = ['Admin', 'Manager'].includes(user?.role || '')
+        const response = await authFetch(institutionUser ? '/api/my-institution' : '/api/institutions')
+        const data: InstitutionPrograms | InstitutionPrograms[] = await response.json()
+        if (!response.ok) throw new Error('Unable to load institution programmes')
+        const institutions = Array.isArray(data) ? data : [data]
+        const values = institutions.flatMap(institution => institution.programs || []).map(value => value.trim()).filter(Boolean)
+        if (initialData?.tradeArea) values.push(initialData.tradeArea)
+        if (current) setTradeAreas([...new Set(values)].sort((a, b) => a.localeCompare(b)))
+      } catch (error) {
+        if (current) toast.error(error instanceof Error ? error.message : 'Unable to load institution programmes')
+      } finally { if (current) setLoadingTradeAreas(false) }
+    }
+    void loadTradeAreas()
+    return () => { current = false }
+  }, [authFetch, initialData?.tradeArea, user?.role])
 
   async function onSubmit(data: IndustryPartnerFormValues) {
     setLoading(true)
@@ -144,7 +175,12 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
             <FormField control={form.control} name="sector" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Sector *</FormLabel>
-                  <FormControl><Input placeholder="e.g. IT, Automotive" {...field} /></FormControl>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select sector" /></SelectTrigger></FormControl>
+                    <SelectContent className="max-h-72">
+                      {sectorOptions.map(sector => <SelectItem key={sector} value={sector}>{sector}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                   <FormMessage />
                 </FormItem>
             )} />
@@ -170,7 +206,14 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
             <FormField control={form.control} name="tradeArea" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Trade Area</FormLabel>
-                  <FormControl><Input placeholder="e.g. Building Construction" {...field} /></FormControl>
+                  <Select value={field.value || NO_TRADE_AREA} onValueChange={value => field.onChange(value === NO_TRADE_AREA ? '' : value)} disabled={loadingTradeAreas}>
+                    <FormControl><SelectTrigger><SelectValue placeholder={loadingTradeAreas ? 'Loading programmes…' : 'Select programme'} /></SelectTrigger></FormControl>
+                    <SelectContent className="max-h-72">
+                      <SelectItem value={NO_TRADE_AREA}>Not specified</SelectItem>
+                      {tradeAreas.map(programme => <SelectItem key={programme} value={programme}>{programme}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {!loadingTradeAreas && tradeAreas.length === 0 ? <p className="text-xs text-amber-700">No programmes are configured for the available institution scope.</p> : null}
                   <FormMessage />
                 </FormItem>
             )} />

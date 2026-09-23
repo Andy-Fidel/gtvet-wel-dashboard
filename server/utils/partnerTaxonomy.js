@@ -1,0 +1,26 @@
+export const PARTNER_SECTORS = Object.freeze([
+  'Automotive',
+  'Construction',
+  'Electronics',
+  'Government/Public Service',
+  'Electrical Engineering/Installation',
+  'Fashion & Garment Design',
+  'Plumbing',
+  'Agriculture',
+  'Naval/Maritime',
+  'Hospitality - Food/Catering',
+  'Printing - Graphics/Media',
+  'Public Utilities - Power/Water',
+  'Welding & Metal Fabrication',
+  'Sanitation & Waste Management',
+  'Beauty',
+  'Hair/Cosmetology',
+  'Education & Training',
+  'Hospitality - Hotel/Lodging',
+  'Woodwork - Furniture/Carpentry',
+  'Refrigeration & Air conditioning',
+  'Electronics - Phone/Computer Repair',
+  'Health/Medical Services',
+]);
+
+export const isPartnerSector = value => PARTNER_SECTORS.includes(String(value || '').trim());
