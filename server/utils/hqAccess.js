@@ -20,6 +20,7 @@ export const canHQRequest = (role, method, path) => {
   return hasHQPermission(role, 'hq:approve') && method === 'PUT' && (
     /^\/semester-reports\/[^/]+\/(hq-approve|reject)$/.test(path)
     || /^\/industry-partners\/[^/]+\/hq-(approve|reject)$/.test(path)
+    || /^\/slot-allocations\/[^/]+\/(approve|reject)$/.test(path)
     || /^\/partner-change-requests\/[^/]+\/(approve|reject|return)$/.test(path)
   );
 };

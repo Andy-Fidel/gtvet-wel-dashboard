@@ -11,6 +11,7 @@
     "bootstrap:superadmin": "node bootstrap_superadmin.js",
     "dev": "nodemon index.js",
     "smtp:verify": "node verify_smtp.js",
+    "indexes:partner-slots": "node scripts/install_partner_slot_indexes.js",
     "generate:vapid": "web-push generate-vapid-keys"
   },
   "keywords": [],

@@ -157,7 +157,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         ]);
         
         const pData: IndustryPartner[] = await partnersRes.json();
-        setPartners(pData.filter((p) => p.status === 'Active' && p.totalSlots > p.usedSlots));
+        setPartners(pData.filter((p) => p.status === 'Active'));
 
         if (preSelectedLearnerId) {
              const lData: Learner = await learnersRes.json();
@@ -201,8 +201,22 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const companyName = form.watch('companyName')
   const startDate = form.watch('startDate')
   const endDate = form.watch('endDate')
+  useEffect(() => {
+    if (!startDate) return
+    let current = true
+    const refreshCapacity = async () => {
+      try {
+        const response = await authFetch(`/api/industry-partners?capacityDate=${encodeURIComponent(startDate)}`)
+        const data: IndustryPartner[] = await response.json()
+        if (!response.ok) throw new Error()
+        if (current) setPartners(data.filter(partner => partner.status === 'Active'))
+      } catch { if (current) toast.error('Unable to refresh partner capacity for the selected start date') }
+    }
+    void refreshCapacity()
+    return () => { current = false }
+  }, [authFetch, startDate])
   const hasGps = Boolean(lat.trim() && lng.trim())
-  const partnerCapacityAvailable = selectedPartner ? selectedPartner.totalSlots - selectedPartner.usedSlots : 0
+  const partnerCapacityAvailable = selectedPartner ? selectedPartner.institutionCapacity?.availableSlots ?? selectedPartner.totalSlots - selectedPartner.usedSlots : 0
   const worksiteConfirmed = placementType !== 'registered' || worksiteChoice === 'partner' || Boolean(worksiteLocation?.trim())
   const locationReady = flexibleWorksite
       ? Boolean(expectedOperatingArea?.trim() && locationVerificationNotes?.trim())
@@ -252,8 +266,9 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
     if (data.placementType === 'registered') {
         const partnerDoc = partners.find(p => p._id === data.partner);
         if (!partnerDoc) return;
-        if (data.learners.length > (partnerDoc.totalSlots - partnerDoc.usedSlots)) {
-            toast.error(`${partnerDoc.name} only has ${partnerDoc.totalSlots - partnerDoc.usedSlots} slots available.`);
+        const availableSlots = partnerDoc.institutionCapacity?.availableSlots ?? (partnerDoc.totalSlots - partnerDoc.usedSlots)
+        if (data.learners.length > availableSlots) {
+            toast.error(`${partnerDoc.name} only has ${availableSlots} slots available to your institution.`);
             return;
         }
     }
@@ -466,8 +481,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                         <SelectContent className="max-h-60">
                             {partners.length === 0 && <div className="p-4 text-sm text-gray-500 text-center">No partners have available slots.</div>}
                             {partners.map(p => ( 
-                                <SelectItem key={p._id} value={p._id}>
-                                    <span className="font-semibold">{p.name}</span> <span className="ml-2 text-gray-400">{p.partnerType === 'MasterCraftPerson' ? 'MCP' : p.region} · {p.coordinates?.lat !== undefined && p.coordinates?.lng !== undefined ? 'GPS available' : ['MobileField', 'NoFixedPremises'].includes(p.operatingModel || '') ? 'Mobile evidence' : 'GPS pending'} · {p.totalSlots - p.usedSlots} slots</span>
+                                <SelectItem key={p._id} value={p._id} disabled={(p.institutionCapacity?.availableSlots ?? p.totalSlots - p.usedSlots) <= 0}>
+                                    <span className="font-semibold">{p.name}</span> <span className="ml-2 text-gray-400">{p.partnerType === 'MasterCraftPerson' ? 'MCP' : p.region} · {p.coordinates?.lat !== undefined && p.coordinates?.lng !== undefined ? 'GPS available' : ['MobileField', 'NoFixedPremises'].includes(p.operatingModel || '') ? 'Mobile evidence' : 'GPS pending'} · {p.institutionCapacity?.availableSlots ?? p.totalSlots - p.usedSlots} slots for you</span>
                                 </SelectItem> 
                             ))}
                         </SelectContent>

@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
 import { PartnerBulkRegistration } from './PartnerBulkRegistration'
+import { PartnerSlotAllocations } from '@/components/PartnerSlotAllocations'
 
 type HQIndustryPartner = IndustryPartner & {
   district?: string
@@ -64,6 +65,7 @@ export default function HQIndustryPartners() {
   const [submittingDecision, setSubmittingDecision] = useState(false)
   const [registrationOpen, setRegistrationOpen] = useState(false)
   const [editingPartner, setEditingPartner] = useState<HQIndustryPartner | null>(null)
+  const [allocationPartner, setAllocationPartner] = useState<HQIndustryPartner | null>(null)
 
   const fetchPartners = useCallback(async () => {
     try {
@@ -313,6 +315,7 @@ export default function HQIndustryPartners() {
                       </div>
 
                       <div className="flex flex-col gap-2 xl:w-48">
+                        <Button variant="outline" onClick={() => setAllocationPartner(partner)}>Reserved Slots</Button>
                         {user?.role === 'SuperAdmin' && <Button variant="outline" onClick={() => { setEditingPartner(partner); setRegistrationOpen(true) }}>Edit Partner / GPS</Button>}
                         {canApproveHQ(user?.role) && partner.approvalStatus === "PendingHQApproval" ? (
                           <>
@@ -355,6 +358,7 @@ export default function HQIndustryPartners() {
           </div>
         </DialogContent>
       </Dialog>
+      {allocationPartner && <PartnerSlotAllocations partner={allocationPartner} open={Boolean(allocationPartner)} onOpenChange={value => { if (!value) setAllocationPartner(null) }} onChanged={() => void fetchPartners()} />}
 
       <Dialog open={Boolean(decisionPartner)} onOpenChange={(open) => !open && setDecisionPartner(null)}>
         <DialogContent className="rounded-[2rem] border-none bg-white">

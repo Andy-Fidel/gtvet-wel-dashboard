@@ -69,6 +69,12 @@ export interface IndustryPartner {
   website?: string;
   totalSlots: number;
   usedSlots: number;
+  institutionCapacity?: {
+    reservedSlots: number;
+    reservedAvailable: number;
+    sharedAvailable: number;
+    availableSlots: number;
+  };
   status: 'Active' | 'Inactive';
   approvalStatus?: 'PendingHQApproval' | 'Approved' | 'Rejected';
   approvalRequestedAt?: string;

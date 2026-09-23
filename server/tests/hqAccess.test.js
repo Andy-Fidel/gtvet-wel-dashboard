@@ -125,16 +125,18 @@ test('HQ reads are national operations, never user or system administration', ()
   }
 });
 
-test('all operational mutations denied except the four manager decisions', () => {
+test('operational mutations are denied except explicit HQ Manager decisions', () => {
   const allowed = new Set([
     '/semester-reports/:id/hq-approve', '/semester-reports/:id/reject',
     '/industry-partners/:id/hq-approve', '/industry-partners/:id/hq-reject',
+    '/slot-allocations/:id/:action',
+    '/partner-change-requests/:id/:action',
     '/notifications/read-all', '/notifications/:id/read',
   ]);
   for (const layer of router.stack.filter((entry) => entry.route)) {
     const route = layer.route;
     for (const method of Object.keys(route.methods).filter((value) => !['get', 'head', 'options'].includes(value))) {
-      const path = route.path.replaceAll(':id', 'record-id');
+      const path = route.path.replaceAll(':id', 'record-id').replace(':action', 'approve');
       assert.equal(canHQRequest('HQManager', method.toUpperCase(), path), method === 'put' && allowed.has(route.path), `${method} ${path}`);
       assert.equal(canHQRequest('HQStaff', method.toUpperCase(), path), method === 'put' && path.startsWith('/notifications/'), `${method} ${path}`);
     }

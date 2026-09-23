@@ -23,6 +23,8 @@ import { PartnerHandoffStatus, type PartnerHandoff } from "@/components/PartnerH
 import { PartnerAttendanceMobileCard } from "@/components/PartnerAttendanceMobileCard"
 import { PartnerDashboardLoadError } from "@/components/PartnerDashboardLoadError"
 import { PartnerGettingStartedChecklist, type PartnerChecklistStep } from "@/components/PartnerGettingStartedChecklist"
+import { PartnerSlotAllocations } from '@/components/PartnerSlotAllocations'
+import type { IndustryPartner } from '@/types/models'
 import { PartnerWorkflowHandoffs } from "@/components/PartnerWorkflowHandoffs"
 import { useMediaQuery } from "@/hooks/useMediaQuery"
 import { downloadPlacementAgreementPdf } from "@/lib/placementAgreementPdf"
@@ -379,6 +381,7 @@ export default function PartnerDashboard() {
   const [agreementSubmitting, setAgreementSubmitting] = useState(false)
   const [supportSubmitting, setSupportSubmitting] = useState(false)
   const [incidentSubmitting, setIncidentSubmitting] = useState(false)
+  const [slotAllocationsOpen, setSlotAllocationsOpen] = useState(false)
   const handledDeepLinkRef = useRef("")
   const [supportDraft, setSupportDraft] = useState({
     subject: "",
@@ -404,6 +407,7 @@ export default function PartnerDashboard() {
     ? sectionParam
     : "overview"
   const isPartnerCoordinator = user?.partnerPortalRole !== "Supervisor"
+  const portalPartner: IndustryPartner | null = user?.partnerId ? { _id: user.partnerId._id, name: user.partnerId.name, sector: '', region: '', totalSlots: 0, usedSlots: 0, status: 'Active', programs: [] } : null
   const isDesktopViewport = useMediaQuery("(min-width: 768px)")
 
   const activePlacements = useMemo(
@@ -1116,6 +1120,7 @@ export default function PartnerDashboard() {
 
   return (
     <div className="flex-1 space-y-6 p-4 md:space-y-8 md:p-8 max-w-7xl mx-auto w-full">
+      {portalPartner && <PartnerSlotAllocations partner={portalPartner} open={slotAllocationsOpen} onOpenChange={setSlotAllocationsOpen} onChanged={() => setRefreshKey(value => value + 1)} />}
       <Dialog open={evaluateOpen} onOpenChange={setEvaluateOpen}>
         <DialogContent className="sm:max-w-[700px] bg-white rounded-2xl border-none shadow-2xl overflow-y-auto max-h-[90vh]">
           <DialogHeader className="p-6 pb-0">
@@ -1775,6 +1780,7 @@ export default function PartnerDashboard() {
           >
             View Placement History
           </Button>
+          {isPartnerCoordinator && portalPartner ? <Button type="button" variant="outline" className="min-h-11 rounded-xl" onClick={() => setSlotAllocationsOpen(true)}>Review Reserved Slots</Button> : null}
           {dashboardSection === "placements" ? <div className="flex items-center gap-2 rounded-2xl bg-white border border-gray-200 p-1">
             <Button
               type="button"

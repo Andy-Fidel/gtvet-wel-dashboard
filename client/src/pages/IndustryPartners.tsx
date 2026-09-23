@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { toast } from "@/lib/toast"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
 import { PartnerChangeForm, PartnerChangeQueue, PartnerRelationship } from '@/components/PartnerChanges'
+import { PartnerSlotAllocations } from '@/components/PartnerSlotAllocations'
 import { SearchPartnerDialog } from "@/components/SearchPartnerDialog"
 import type { IndustryPartner as SharedIndustryPartner } from "@/types/models"
 
@@ -22,6 +23,7 @@ export default function IndustryPartners() {
   const [editingPartner, setEditingPartner] = useState<IndustryPartner | null>(null)
   const [changePartner, setChangePartner] = useState<IndustryPartner | null>(null)
   const [relationshipPartner, setRelationshipPartner] = useState<IndustryPartner | null>(null)
+  const [allocationPartner, setAllocationPartner] = useState<IndustryPartner | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(24)
@@ -132,6 +134,7 @@ export default function IndustryPartners() {
       {['Admin', 'Manager', 'Staff', 'SuperAdmin'].includes(user?.role || '') && <PartnerChangeQueue onChange={() => setRefreshKey(key => key + 1)} />}
       <Dialog open={!!changePartner} onOpenChange={open => { if (!open) setChangePartner(null) }}><DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Request changes: {changePartner?.name}</DialogTitle><DialogDescription>Submit corrections for institution and HQ review.</DialogDescription></DialogHeader>{changePartner && <PartnerChangeForm partner={{ ...changePartner }} onDone={() => setChangePartner(null)} />}</DialogContent></Dialog>
       <Dialog open={!!relationshipPartner} onOpenChange={open => { if (!open) setRelationshipPartner(null) }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{relationshipPartner?.name}: institution details</DialogTitle><DialogDescription>Contacts and notes for your institution.</DialogDescription></DialogHeader>{relationshipPartner && <PartnerRelationship partner={relationshipPartner} onDone={() => setRelationshipPartner(null)} />}</DialogContent></Dialog>
+      {allocationPartner && <PartnerSlotAllocations partner={allocationPartner} open={Boolean(allocationPartner)} onOpenChange={value => { if (!value) setAllocationPartner(null) }} onChanged={() => setRefreshKey(key => key + 1)} />}
       <SearchPartnerDialog 
         open={searchOpen} 
         onOpenChange={setSearchOpen}
@@ -250,9 +253,10 @@ export default function IndustryPartners() {
                          style={{ width: `${partner.totalSlots > 0 ? Math.min((partner.usedSlots / partner.totalSlots) * 100, 100) : 0}%` }}
                         ></div>
                     </div>
+                    {partner.institutionCapacity && <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 text-xs"><span><strong className="block text-gray-900">{partner.institutionCapacity.reservedAvailable}</strong> reserved available</span><span><strong className="block text-gray-900">{partner.institutionCapacity.sharedAvailable}</strong> shared available</span></div>}
                 </div>
 
-                {['Admin', 'Manager', 'Staff'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3"><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button></div>}
+                {['Admin', 'Manager', 'Staff'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3"><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></div>}
                 {(user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') && (
                     <div className="flex gap-2 pt-2 border-t border-gray-100 mt-4">
                          <Button

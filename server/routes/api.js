@@ -39,7 +39,9 @@ import { parsePartnerCsv } from '../utils/partnerImport.js';
 import { partnerRegionMatch, partnerVisibilityFilter } from '../utils/partnerVisibility.js';
 import { academicError, academicErrorStatus, pickFields, termFields, calendarFields, validAcademicYear, YEAR_GROUPS, termYearGroupSchedules, termScheduleForYearGroup, getAcademicState, effectiveTerm, currentAcademicTerm, withAcademicLock, activateTerm, termCalendarEvents } from '../utils/academicGovernance.js';
 import { PartnerImport } from '../models/PartnerImport.js';
+import { PartnerSlotAllocation } from '../models/PartnerSlotAllocation.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
+import { decoratePartnerCapacities, partnerCapacityAt } from '../utils/partnerCapacity.js';
 import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, locationCheck, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
@@ -9512,8 +9514,8 @@ async function preparePlacementActivation(req, input, ids, excludeId = null) {
     if (data.partner) {
         const partner = await IndustryPartner.findOne({ $and: [{ _id: data.partner, status: 'Active', approvalStatus: 'Approved' }, await partnerVisibilityFilter(req.user)] });
         if (!partner) throw placementError('Select an approved, active partner visible to your institution.', 400);
-        const occupied = await Placement.countDocuments({ partner: partner._id, status: 'Active', ...(excludeId ? { _id: { $ne: excludeId } } : {}) });
-        if (!Number.isFinite(partner.totalSlots) || occupied + learnerIds.length > partner.totalSlots) throw placementError('Partner has insufficient available capacity.');
+        const capacity = await partnerCapacityAt({ partner, institution: req.user.institution, date: data.startDate, excludePlacementId: excludeId });
+        if (!Number.isFinite(partner.totalSlots) || learnerIds.length > capacity.availableSlots) throw placementError(`Partner has ${capacity.availableSlots} slot(s) available to your institution: ${capacity.reservedAvailable} reserved and ${capacity.sharedAvailable} shared.`);
         data.companyName = partner.name;
         data.sector = partner.sector;
         data.location = data.location?.trim() || partner.location || partner.region;
@@ -12892,12 +12894,16 @@ router.get('/industry-partners', async (req, res) => {
                 ])
                 : Promise.resolve(null),
         ]);
+        const capacityDate = validAllocationDate(req.query.capacityDate) ? new Date(req.query.capacityDate) : new Date();
+        const capacityAwarePartners = req.user.institution && ['Admin', 'Manager', 'Staff'].includes(req.user.role)
+            ? await decoratePartnerCapacities(partners, req.user.institution, capacityDate)
+            : partners;
 
         if (usePagination) {
             const summary = summaryCounts?.[0] || { total: 0, pending: 0, approved: 0, rejected: 0 };
             const safeTotal = total || 0;
             return res.json({
-                items: partners,
+                items: capacityAwarePartners,
                 total: safeTotal,
                 page,
                 pageSize,
@@ -12906,7 +12912,7 @@ router.get('/industry-partners', async (req, res) => {
             });
         }
 
-        res.json(partners);
+        res.json(capacityAwarePartners);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
@@ -12956,6 +12962,101 @@ router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), asyn
     } catch (error) {
         res.status(500).json({ message: 'Error linking partner' });
     }
+});
+
+const slotAllocationRoles = ['SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'];
+const validAllocationDate = value => value && Number.isFinite(new Date(value).getTime());
+
+router.get('/industry-partners/:id/slot-allocations', requireRole(...slotAllocationRoles), async (req, res) => {
+    try {
+        const partner = req.user.role === 'IndustryPartner'
+            ? String(req.params.id) === String(getPartnerId(req.user)) ? await IndustryPartner.findById(req.params.id) : null
+            : await IndustryPartner.findOne({ $and: [{ _id: req.params.id }, await partnerVisibilityFilter(req.user)] });
+        if (!partner) return res.status(404).json({ message: 'Partner not found or outside your access.' });
+        const filter = { partner: partner._id };
+        if (['Admin', 'Manager', 'Staff'].includes(req.user.role)) filter.institution = req.user.institution;
+        const allocations = await PartnerSlotAllocation.find(filter)
+            .populate('requestedBy reviewedBy', 'name role institution')
+            .sort({ createdAt: -1 }).lean();
+        const now = Date.now();
+        res.json(allocations.map(item => item.status === 'Approved' && new Date(item.endDate).getTime() < now
+            ? { ...item, status: 'Expired' }
+            : item));
+    } catch (error) { res.status(500).json({ message: 'Unable to load slot allocations.' }); }
+});
+
+router.post('/industry-partners/:id/slot-allocations', requireRole('Admin', 'Manager'), async (req, res) => {
+    try {
+        if (!req.user.institution) return res.status(403).json({ message: 'An institution is required.' });
+        const partner = await IndustryPartner.findOne({ $and: [{ _id: req.params.id, status: 'Active', approvalStatus: 'Approved' }, await partnerVisibilityFilter(req.user)] });
+        if (!partner) return res.status(404).json({ message: 'Select an approved partner visible to your institution.' });
+        const slots = Number(req.body.slots);
+        if (!Number.isSafeInteger(slots) || slots < 1 || slots > partner.totalSlots) return res.status(400).json({ message: `Reserved slots must be between 1 and ${partner.totalSlots}.` });
+        if (!validAllocationDate(req.body.startDate) || !validAllocationDate(req.body.endDate) || new Date(req.body.endDate) < new Date(req.body.startDate)) return res.status(400).json({ message: 'Provide valid allocation start and end dates.' });
+        const notes = String(req.body.notes || '').trim();
+        if (notes.length < 5) return res.status(400).json({ message: 'Describe the special placement arrangement.' });
+        const overlap = { startDate: { $lte: new Date(req.body.endDate) }, endDate: { $gte: new Date(req.body.startDate) } };
+        if (await PartnerSlotAllocation.exists({ partner: partner._id, institution: req.user.institution, status: 'Pending', ...overlap })) return res.status(409).json({ message: 'Your institution already has a pending allocation request for these dates.' });
+        const allocation = await PartnerSlotAllocation.create({
+            partner: partner._id, institution: req.user.institution, slots,
+            startDate: new Date(req.body.startDate), endDate: new Date(req.body.endDate),
+            academicYear: String(req.body.academicYear || '').trim(),
+            notes, agreementReference: String(req.body.agreementReference || '').trim(),
+            requestedBy: req.user._id,
+        });
+        await logAuditEvent({ req, action: 'CREATE', entityType: 'PartnerSlotAllocation', entityId: allocation._id, summary: `Requested ${slots} reserved slots with ${partner.name}`, after: allocation });
+        const notification = { sender: req.user._id, type: 'partner', title: 'Reserved slot request', message: `${req.user.institution} requested ${slots} reserved slots with ${partner.name}.` };
+        await Promise.all([
+            notifyUsers({ ...notification, partnerId: partner._id, roles: ['IndustryPartner'], link: '/partner-dashboard' }),
+            notifyUsers({ ...notification, roles: ['SuperAdmin', 'HQManager'], link: '/industry-partners' }),
+        ]);
+        res.status(201).json(allocation);
+    } catch (error) { res.status(error.name === 'ValidationError' ? 400 : 500).json({ message: error.message || 'Unable to request reserved slots.' }); }
+});
+
+router.put('/slot-allocations/:id/:action', requireRole('SuperAdmin', 'HQManager', 'Admin', 'Manager', 'IndustryPartner'), async (req, res) => {
+    try {
+        let allocation = await PartnerSlotAllocation.findById(req.params.id);
+        if (!allocation) return res.status(404).json({ message: 'Slot allocation request not found.' });
+        const partner = await IndustryPartner.findById(allocation.partner);
+        if (!partner) return res.status(404).json({ message: 'Partner not found.' });
+        const action = req.params.action;
+        if (!['approve', 'reject', 'cancel'].includes(action)) return res.status(400).json({ message: 'Unsupported slot allocation action.' });
+        let reviewComment = '';
+        if (action === 'cancel') {
+            if (!['Admin', 'Manager'].includes(req.user.role) || req.user.institution !== allocation.institution || allocation.status !== 'Pending') return res.status(403).json({ message: 'Only the requesting institution may cancel a pending request.' });
+        } else {
+            const partnerReviewer = req.user.role === 'IndustryPartner' && canManagePartnerAssignments(req.user) && String(getPartnerId(req.user)) === String(partner._id);
+            const hqReviewer = ['SuperAdmin', 'HQManager'].includes(req.user.role) && !!await IndustryPartner.exists({ $and: [{ _id: partner._id }, await partnerVisibilityFilter(req.user)] });
+            if (!partnerReviewer && !hqReviewer) return res.status(403).json({ message: 'Partner coordinator or HQ Manager approval is required.' });
+            if (allocation.status !== 'Pending') return res.status(409).json({ message: 'This request is no longer awaiting review.' });
+            reviewComment = String(req.body.reviewComment || '').trim();
+            if (action === 'reject' && reviewComment.length < 5) return res.status(400).json({ message: 'Provide a rejection reason.' });
+        }
+        const targetStatus = action === 'approve' ? 'Approved' : action === 'reject' ? 'Rejected' : 'Cancelled';
+        await runPlacementOperation(`slot-allocation-${action}:${allocation._id}`, async () => {
+            const pending = await PartnerSlotAllocation.findOne({ _id: allocation._id, status: 'Pending' }).lean();
+            if (!pending) throw placementError('This request is no longer awaiting review.');
+            if (action === 'approve') {
+                    const currentPartner = await IndustryPartner.findById(pending.partner).lean();
+                    if (!currentPartner) throw placementError('Partner not found.', 404);
+                    const overlapping = await PartnerSlotAllocation.find({ _id: { $ne: pending._id }, partner: pending.partner, status: 'Approved', startDate: { $lte: pending.endDate }, endDate: { $gte: pending.startDate } }).select('institution slots').lean();
+                    const reserved = new Map();
+                    for (const item of [...overlapping, pending]) reserved.set(item.institution, (reserved.get(item.institution) || 0) + item.slots);
+                    const active = await Placement.aggregate([{ $match: { partner: pending.partner, status: 'Active' } }, { $group: { _id: '$institution', count: { $sum: 1 } } }]);
+                    const reservedTotal = [...reserved.values()].reduce((sum, value) => sum + value, 0);
+                    const sharedUsed = active.reduce((sum, item) => sum + Math.max(0, item.count - (reserved.get(item._id || '') || 0)), 0);
+                    if (reservedTotal > currentPartner.totalSlots || sharedUsed > currentPartner.totalSlots - reservedTotal) throw placementError('The partner does not currently have enough uncommitted capacity for this reservation.');
+            }
+            const values = { status: targetStatus };
+            if (action !== 'cancel') Object.assign(values, { reviewedBy: req.user._id, reviewedAt: new Date(), reviewComment });
+            return { placements: [], learnerIds: [], partnerIds: [], slotAllocation: { id: pending._id, values } };
+        });
+        allocation = await PartnerSlotAllocation.findById(allocation._id);
+        await logAuditEvent({ req, action: 'UPDATE', entityType: 'PartnerSlotAllocation', entityId: allocation._id, summary: `Slot allocation ${allocation.status.toLowerCase()}`, after: allocation });
+        await notifyUsers({ institution: allocation.institution, roles: ['Admin', 'Manager'], sender: req.user._id, type: 'partner', title: `Reserved slots ${allocation.status.toLowerCase()}`, message: `${allocation.slots} slots with ${partner.name}: ${allocation.status}.`, link: '/industry-partners' });
+        res.json(allocation);
+    } catch (error) { res.status(error.name === 'ValidationError' ? 400 : placementErrorStatus(error)).json({ message: error.message || 'Unable to update slot allocation.' }); }
 });
 
 router.post('/industry-partners/import-csv', requireRole('SuperAdmin'), async (req, res) => {

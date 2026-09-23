@@ -5,6 +5,7 @@ import { Learner } from '../models/Learner.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { PlacementRequest } from '../models/PlacementRequest.js';
 import { PlacementTransfer } from '../models/PlacementTransfer.js';
+import { PartnerSlotAllocation } from '../models/PartnerSlotAllocation.js';
 import { PlacementCoordinator, PlacementOperation } from '../models/PlacementOperation.js';
 
 export const placementError = (message, status = 409) => Object.assign(new Error(message), { status });
@@ -84,6 +85,7 @@ export async function runPlacementOperation(key, buildPlan) {
       if (plan.transfer.insert) await PlacementTransfer.updateOne({ _id: plan.transfer.id }, { $setOnInsert: { ...plan.transfer.values, workflowVersion: lock.sequence } }, { upsert: true });
       else await writeVersioned(PlacementTransfer, plan.transfer.id, { $set: plan.transfer.values }, lock.sequence);
     }
+    if (plan.slotAllocation) await writeVersioned(PartnerSlotAllocation, plan.slotAllocation.id, { $set: plan.slotAllocation.values }, lock.sequence);
     await assertLease();
     await PlacementOperation.updateOne({ _id: operation._id }, { $set: { completed: true, plan } }, { upsert: true, writeConcern: { w: 1, j: true } });
     await PlacementCoordinator.updateOne({ _id: 'global', token, 'pending._id': operation._id }, { $unset: { pending: 1 } });
