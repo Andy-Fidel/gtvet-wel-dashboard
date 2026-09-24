@@ -13,6 +13,7 @@ import { lazy, Suspense } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { ADMIN_ROLES, MANAGEMENT_ROLES } from '@/lib/rbac';
 import { AppAlerts } from '@/components/AppAlerts';
+import { PwaManager } from '@/components/PwaManager';
 
 // Lazy-loaded page components (code-split by route)
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -331,6 +332,7 @@ function App() {
             </Route>
           </Routes>
           <AppAlerts />
+          <PwaManager />
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
