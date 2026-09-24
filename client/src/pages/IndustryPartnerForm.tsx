@@ -21,9 +21,9 @@ import { Loader2, UploadCloud } from "lucide-react"
 import { INDUSTRY_SECTORS } from '@/lib/constants'
 
 const formSchema = z.object({
-  name: z.string().min(2, "Name is required"),
-  sector: z.string().min(2, "Sector is required"),
-  region: z.string().min(2, "Region is required"),
+  name: z.string().trim().min(2, "Name is required"),
+  sector: z.string().trim().min(2, "Sector is required"),
+  region: z.string().trim().min(2, "Region is required"),
   district: z.string().optional(),
   tradeArea: z.string().optional(),
   town: z.string().optional(),
@@ -35,8 +35,8 @@ const formSchema = z.object({
   contactPerson: z.string().optional(),
   contactPhone: z.string().optional(),
   contactEmail: z.string().email("Invalid email").optional().or(z.literal('')),
-  website: z.string().url("Invalid URL").optional().or(z.literal('')),
-  totalSlots: z.number().min(0, "Capacity cannot be negative"),
+  website: z.string().url("Invalid URL").refine(value => /^https?:\/\//i.test(value), "Use an http:// or https:// website address").optional().or(z.literal('')),
+  totalSlots: z.number().int("Capacity must be a whole number").min(0, "Capacity cannot be negative"),
   status: z.enum(["Active", "Inactive"]),
   mouDocumentUrl: z.string().optional(),
 }).superRefine((data, ctx) => {
@@ -187,7 +187,7 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
             <FormField control={form.control} name="region" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Region *</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select region" /></SelectTrigger></FormControl>
                     <SelectContent className="max-h-60">
                         {GHANA_REGIONS.map(r => (<SelectItem key={r} value={r}>{r}</SelectItem>))}
@@ -199,9 +199,20 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
             <FormField control={form.control} name="totalSlots" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Total Capacity (Slots) *</FormLabel>
-                  <FormControl><Input type="number" {...field} value={Number.isFinite(field.value) ? field.value : ""} onChange={e => field.onChange(normalizeNumberInput(e.target.value))} /></FormControl>
+                  <FormControl><Input type="number" min={initialData?.usedSlots || 0} step="1" {...field} value={Number.isFinite(field.value) ? field.value : ""} onChange={e => field.onChange(normalizeNumberInput(e.target.value))} /></FormControl>
                   <FormMessage />
                 </FormItem>
+            )} />
+            <FormField control={form.control} name="status" render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-sm font-semibold text-gray-700">Registry Status *</FormLabel>
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                  <SelectContent><SelectItem value="Active">Active</SelectItem><SelectItem value="Inactive">Inactive</SelectItem></SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Inactive partners remain in historical records but cannot receive new placements.</p>
+                <FormMessage />
+              </FormItem>
             )} />
             <FormField control={form.control} name="tradeArea" render={({ field }) => (
                 <FormItem>

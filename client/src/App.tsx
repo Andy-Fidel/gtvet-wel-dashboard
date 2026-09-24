@@ -239,7 +239,7 @@ function App() {
                 </ProtectedRoute>
               } />
               <Route path="hq-industry-partners" element={
-                <ProtectedRoute requiredRoles={['SuperAdmin']}>
+                <ProtectedRoute requiredRoles={['SuperAdmin', 'HQManager', 'HQStaff']}>
                   <ErrorBoundary>
                     <Suspense fallback={<PageSkeleton />}>
                       <HQIndustryPartners />

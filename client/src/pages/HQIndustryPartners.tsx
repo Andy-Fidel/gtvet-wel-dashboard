@@ -1,11 +1,10 @@
 import { PartnerInsights } from '@/components/PartnerInsights'
 import { PartnerChangeQueue } from '@/components/PartnerChanges'
 import { canApproveHQ } from '@/lib/rbac'
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
-import { Building2, CheckCircle2, Clock3, Mail, MapPin, Plus, Search, UserPlus, XCircle } from "lucide-react"
+import { AlertTriangle, Building2, CheckCircle2, Clock3, Eye, Loader2, Mail, MapPin, Plus, Search, Trash2, UserPlus, XCircle } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
-import type { IndustryPartner } from "@/types/models"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -16,23 +15,9 @@ import { toast } from "@/lib/toast"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
 import { PartnerBulkRegistration } from './PartnerBulkRegistration'
 import { PartnerSlotAllocations } from '@/components/PartnerSlotAllocations'
+import { HQPartnerDetailsDialog, type HQPartnerDetails, type HQPartnerRecord } from '@/components/HQPartnerDetailsDialog'
 
-type HQIndustryPartner = IndustryPartner & {
-  district?: string
-  contactPerson?: string
-  mouDocumentUrl?: string
-  linkedInstitutions?: string[]
-  addedBy?: {
-    name?: string
-    role?: string
-    institution?: string
-    region?: string
-  } | null
-  approvalReviewedBy?: {
-    name?: string
-    role?: string
-  } | null
-}
+type HQIndustryPartner = HQPartnerRecord
 
 interface HQIndustryPartnersResponse {
   items: HQIndustryPartner[]
@@ -52,6 +37,7 @@ export default function HQIndustryPartners() {
   const { authFetch, user } = useAuth()
   const [partners, setPartners] = useState<HQIndustryPartner[]>([])
   const [loading, setLoading] = useState(true)
+  const [queryInput, setQueryInput] = useState("")
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<"All" | "PendingHQApproval" | "Approved" | "Rejected">("All")
   const [page, setPage] = useState(1)
@@ -66,8 +52,17 @@ export default function HQIndustryPartners() {
   const [registrationOpen, setRegistrationOpen] = useState(false)
   const [editingPartner, setEditingPartner] = useState<HQIndustryPartner | null>(null)
   const [allocationPartner, setAllocationPartner] = useState<HQIndustryPartner | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [detailsLoading, setDetailsLoading] = useState(false)
+  const [partnerDetails, setPartnerDetails] = useState<HQPartnerDetails | null>(null)
+  const [deleteDetails, setDeleteDetails] = useState<HQPartnerDetails | null>(null)
+  const [deleteConfirmation, setDeleteConfirmation] = useState("")
+  const [deleting, setDeleting] = useState(false)
+  const fetchSequence = useRef(0)
 
   const fetchPartners = useCallback(async () => {
+    const sequence = ++fetchSequence.current
+    setLoading(true)
     try {
       const params = new URLSearchParams()
       params.set("includeAll", "1")
@@ -79,11 +74,13 @@ export default function HQIndustryPartners() {
       const res = await authFetch(`/api/industry-partners?${params.toString()}`)
       if (!res.ok) throw new Error("Failed to fetch industry partners")
       const data = await res.json() as HQIndustryPartnersResponse
+      if (sequence !== fetchSequence.current) return
       setPartners(Array.isArray(data?.items) ? data.items : [])
       setTotalPartners(typeof data?.total === "number" ? data.total : 0)
       setTotalPages(typeof data?.totalPages === "number" ? data.totalPages : 0)
       setSummary(data?.summary || { total: 0, pending: 0, approved: 0, rejected: 0 })
     } catch (error) {
+      if (sequence !== fetchSequence.current) return
       console.error("Error fetching HQ industry partners:", error)
       toast.error("Failed to load industry partners")
       setPartners([])
@@ -91,13 +88,18 @@ export default function HQIndustryPartners() {
       setTotalPages(0)
       setSummary({ total: 0, pending: 0, approved: 0, rejected: 0 })
     } finally {
-      setLoading(false)
+      if (sequence === fetchSequence.current) setLoading(false)
     }
   }, [authFetch, page, pageSize, query, statusFilter])
 
   useEffect(() => {
     fetchPartners()
   }, [fetchPartners])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(queryInput.trim()), 350)
+    return () => window.clearTimeout(timer)
+  }, [queryInput])
 
   useEffect(() => {
     setPage(1)
@@ -153,6 +155,57 @@ export default function HQIndustryPartners() {
 
   const isApprovedPartner = (partner: HQIndustryPartner) => !partner.approvalStatus || partner.approvalStatus === "Approved"
 
+  const openDetails = async (partner: HQIndustryPartner) => {
+    setDetailsOpen(true)
+    setDetailsLoading(true)
+    setPartnerDetails(null)
+    try {
+      const response = await authFetch(`/api/industry-partners/${partner._id}`)
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || 'Unable to load partner details')
+      setPartnerDetails(payload as HQPartnerDetails)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to load partner details')
+    } finally {
+      setDetailsLoading(false)
+    }
+  }
+
+  const openEdit = (partner: HQPartnerRecord) => {
+    setDetailsOpen(false)
+    setEditingPartner(partner as HQIndustryPartner)
+    setRegistrationOpen(true)
+  }
+
+  const openDelete = (details: HQPartnerDetails) => {
+    setDeleteDetails(details)
+    setDeleteConfirmation('')
+  }
+
+  const deletePartner = async () => {
+    if (!deleteDetails || deleteConfirmation !== deleteDetails.partner.name) return
+    setDeleting(true)
+    try {
+      const response = await authFetch(`/api/industry-partners/${deleteDetails.partner._id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmationName: deleteConfirmation }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || 'Unable to delete partner')
+      toast.success('Partner permanently deleted', { description: `${deleteDetails.partner.name} was unused and has been removed from the registry.` })
+      setDeleteDetails(null)
+      setDetailsOpen(false)
+      setPartnerDetails(null)
+      if (partners.length === 1 && page > 1) setPage(current => current - 1)
+      else await fetchPartners()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to delete partner')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const handleRegistrationSuccess = async () => {
     setRegistrationOpen(false)
     setStatusFilter("All")
@@ -199,7 +252,7 @@ export default function HQIndustryPartners() {
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search company, sector, contact..." className="pl-10 rounded-xl w-full sm:w-80" />
+                <Input value={queryInput} onChange={(e) => setQueryInput(e.target.value)} placeholder="Search company, sector, contact..." className="pl-10 rounded-xl w-full sm:w-80" />
               </div>
               <div className="flex flex-wrap gap-2">
                 {(["All", "PendingHQApproval", "Approved", "Rejected"] as const).map((filter) => (
@@ -315,6 +368,7 @@ export default function HQIndustryPartners() {
                       </div>
 
                       <div className="flex flex-col gap-2 xl:w-48">
+                        <Button variant="outline" className="rounded-xl" onClick={() => void openDetails(partner)}><Eye className="mr-2 h-4 w-4" /> View Details</Button>
                         <Button variant="outline" onClick={() => setAllocationPartner(partner)}>Reserved Slots</Button>
                         {user?.role === 'SuperAdmin' && <Button variant="outline" onClick={() => { setEditingPartner(partner); setRegistrationOpen(true) }}>Edit Partner / GPS</Button>}
                         {canApproveHQ(user?.role) && partner.approvalStatus === "PendingHQApproval" ? (
@@ -359,6 +413,45 @@ export default function HQIndustryPartners() {
         </DialogContent>
       </Dialog>
       {allocationPartner && <PartnerSlotAllocations partner={allocationPartner} open={Boolean(allocationPartner)} onOpenChange={value => { if (!value) setAllocationPartner(null) }} onChanged={() => void fetchPartners()} />}
+
+      <HQPartnerDetailsDialog
+        open={detailsOpen}
+        loading={detailsLoading}
+        details={partnerDetails}
+        onOpenChange={(open) => { setDetailsOpen(open); if (!open) setPartnerDetails(null) }}
+        onEdit={openEdit}
+        onDelete={openDelete}
+        canManage={user?.role === 'SuperAdmin'}
+      />
+
+      <Dialog open={Boolean(deleteDetails)} onOpenChange={(open) => { if (!open && !deleting) { setDeleteDetails(null); setDeleteConfirmation('') } }}>
+        <DialogContent className="rounded-[2rem] border-none bg-white sm:max-w-lg">
+          <DialogHeader>
+            <div className="mb-2 flex items-center gap-3">
+              <div className="rounded-xl bg-rose-50 p-2.5"><AlertTriangle className="h-5 w-5 text-rose-600" /></div>
+              <DialogTitle>Permanently delete partner</DialogTitle>
+            </div>
+            <DialogDescription>
+              This is available only for an unused record with no operational or review history. The deletion is recorded in the audit log.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteDetails ? <div className="space-y-4">
+            <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 text-sm text-rose-900">
+              Enter <span className="font-black">{deleteDetails.partner.name}</span> exactly to confirm.
+            </div>
+            <div>
+              <label htmlFor="delete-partner-confirmation" className="mb-2 block text-sm font-bold text-slate-700">Partner name</label>
+              <Input id="delete-partner-confirmation" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" disabled={deleting} />
+            </div>
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Button variant="outline" className="rounded-xl" onClick={() => setDeleteDetails(null)} disabled={deleting}>Cancel</Button>
+              <Button className="rounded-xl bg-rose-600 text-white hover:bg-rose-700" onClick={() => void deletePartner()} disabled={deleting || deleteConfirmation !== deleteDetails.partner.name}>
+                {deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />} Delete permanently
+              </Button>
+            </div>
+          </div> : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(decisionPartner)} onOpenChange={(open) => !open && setDecisionPartner(null)}>
         <DialogContent className="rounded-[2rem] border-none bg-white">

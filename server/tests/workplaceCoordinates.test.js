@@ -9,8 +9,8 @@ import { AuditLog } from '../models/AuditLog.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import router, { recheckPendingPlacementVisits } from '../routes/api.js';
 
-async function call(path, method, body, user = { role: 'Admin', institution: 'Institute', _id: 'actor' }) {
-  const req = { body, user, params: { id: 'placement' }, method: method.toUpperCase() };
+async function call(path, method, body, user = { role: 'Admin', institution: 'Institute', _id: 'actor' }, id = 'placement') {
+  const req = { body, user, params: { id }, method: method.toUpperCase() };
   const res = { statusCode: 200, status(value) { this.statusCode = value; return this; }, json(value) { this.body = value; return this; } };
   const route = router.stack.find(layer => layer.route?.path === path && layer.route.methods[method]).route;
   await route.stack.at(-1).handle(req, res);
@@ -98,10 +98,10 @@ test('mobile worksite rechecks capture the visit location without a fixed-radius
 
 test('partner edits persist coordinates including zero longitude', async t => {
   let updated;
-  t.mock.method(IndustryPartner, 'findById', async () => ({ _id: 'partner' }));
-  t.mock.method(IndustryPartner, 'findByIdAndUpdate', async (id, value) => { updated = value; return { _id: id, ...value }; });
+  t.mock.method(IndustryPartner, 'findOne', async () => ({ _id: 'partner' }));
+  t.mock.method(IndustryPartner, 'findOneAndUpdate', async (filter, value) => { updated = value; return { _id: filter._id, ...value }; });
   t.mock.method(AuditLog, 'create', async () => ({}));
-  const result = await call('/industry-partners/:id', 'put', { coordinates: { lat: 5, lng: 0 } }, { role: 'SuperAdmin' });
+  const result = await call('/industry-partners/:id', 'put', { coordinates: { lat: 5, lng: 0 } }, { role: 'SuperAdmin' }, '507f1f77bcf86cd799439011');
   assert.equal(result.statusCode, 200);
   assert.deepEqual(updated.coordinates, { lat: 5, lng: 0 });
 });

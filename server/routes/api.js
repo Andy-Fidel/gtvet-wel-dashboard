@@ -44,6 +44,7 @@ import { importSummary, preparePartnerImport, startPartnerImport, advancePartner
 import { decoratePartnerCapacities, partnerCapacityAt } from '../utils/partnerCapacity.js';
 import { isPartnerSector } from '../utils/partnerTaxonomy.js';
 import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, locationCheck, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
+import { getPartnerDependencySummary, getPartnerDeletionBlockers } from '../utils/partnerRegistry.js';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
@@ -12935,6 +12936,47 @@ router.get('/industry-partners/search', async (req, res) => {
     }
 });
 
+router.get('/industry-partners/:id', requireRole('SuperAdmin', 'HQManager', 'HQStaff'), async (req, res) => {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid partner ID' });
+    try {
+        const partner = await IndustryPartner.findOne({ _id: req.params.id, ...await getHQPartnerFilter(req.user) })
+            .select('+changeRequests')
+            .populate('addedBy', 'name role institution region')
+            .populate('approvalReviewedBy', 'name role')
+            .lean();
+        if (!partner) return res.status(404).json({ message: 'Partner not found' });
+
+        const [storedDependencies, auditHistory] = await Promise.all([
+            getPartnerDependencySummary(partner._id),
+            AuditLog.find({ entityType: 'IndustryPartner', entityId: String(partner._id) })
+                .select('action summary actorName actorRole changedFields createdAt')
+                .sort({ createdAt: -1 })
+                .limit(20)
+                .lean(),
+        ]);
+        const dependencies = {
+            ...storedDependencies,
+            linkedInstitutions: partner.linkedInstitutions?.length || 0,
+            reportedUsedSlots: partner.usedSlots || 0,
+        };
+        const reviewHistoryCount = partner.changeRequests?.length || 0;
+        const deleteBlockers = getPartnerDeletionBlockers(dependencies, reviewHistoryCount);
+        delete partner.changeRequests;
+        return res.json({
+            partner,
+            dependencies,
+            auditHistory,
+            deletion: {
+                allowed: req.user.role === 'SuperAdmin' && deleteBlockers.length === 0,
+                blockers: deleteBlockers,
+            },
+        });
+    } catch (error) {
+        console.error('Error loading industry partner details:', error);
+        return res.status(500).json({ message: 'Unable to load partner details' });
+    }
+});
+
 router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), async (req, res) => {
     try {
         if (!req.user.institution) return res.status(400).json({ message: 'User has no assigned institution' });
@@ -13105,22 +13147,52 @@ router.post('/industry-partners/imports/:id/resume', requireRole('SuperAdmin'), 
 
 router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'), async (req, res) => {
     try {
-        req.body.sector = String(req.body.sector || '').trim();
-        req.body.tradeArea = String(req.body.tradeArea || '').trim();
-        if (!isPartnerSector(req.body.sector)) return res.status(400).json({ message: 'Select a valid sector from the available options.' });
-        try { req.body.coordinates = normalizeCoordinates(req.body.coordinates); }
+        const name = String(req.body.name || '').trim();
+        const sector = String(req.body.sector || '').trim();
+        const region = String(req.body.region || '').trim();
+        const tradeArea = String(req.body.tradeArea || '').trim();
+        const totalSlots = Number(req.body.totalSlots ?? 0);
+        if (name.length < 2 || !region) return res.status(400).json({ message: 'Company name and region are required.' });
+        if (!isPartnerSector(sector)) return res.status(400).json({ message: 'Select a valid sector from the available options.' });
+        if (!Number.isInteger(totalSlots) || totalSlots < 0) return res.status(400).json({ message: 'Total capacity must be a whole number of zero or more.' });
+        if (req.user.role === 'RegionalAdmin' && !partnerRegionMatch(req.user.region).test(region)) {
+            return res.status(403).json({ message: 'Regional administrators can register partners only in their assigned region.' });
+        }
+        let coordinates;
+        try { coordinates = normalizeCoordinates(req.body.coordinates); }
         catch (error) { return res.status(400).json({ message: error.message }); }
-        req.body.partnerType = req.body.partnerType || 'RegisteredCompany';
-        req.body.operatingModel = req.body.operatingModel || 'FixedSite';
-        req.body.locationVerificationStatus = req.body.coordinates
+        const partnerType = req.body.partnerType || 'RegisteredCompany';
+        const operatingModel = req.body.operatingModel || 'FixedSite';
+        const locationVerificationNotes = String(req.body.locationVerificationNotes || '').trim();
+        const locationVerificationStatus = coordinates
             ? 'GPSVerified'
-            : isFlexibleWorksite(req.body.operatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
-        if (isFlexibleWorksite(req.body.operatingModel) && !req.body.locationVerificationNotes?.trim()) {
+            : isFlexibleWorksite(operatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
+        if (isFlexibleWorksite(operatingModel) && !locationVerificationNotes) {
             return res.status(400).json({ message: 'Describe the operating area and alternative location evidence for mobile or no-premises partners.' });
         }
         const approvalStatus = isHQRole(req.user.role) ? 'Approved' : 'PendingHQApproval';
         const newPartner = new IndustryPartner({
-            ...req.body,
+            name,
+            sector,
+            region,
+            tradeArea,
+            district: String(req.body.district || '').trim(),
+            town: String(req.body.town || '').trim(),
+            location: String(req.body.location || '').trim(),
+            coordinates,
+            partnerType,
+            operatingModel,
+            locationVerificationStatus,
+            locationVerificationNotes,
+            ghanaPostGps: String(req.body.ghanaPostGps || '').trim(),
+            contactPerson: String(req.body.contactPerson || '').trim(),
+            contactPhone: String(req.body.contactPhone || '').trim(),
+            contactEmail: String(req.body.contactEmail || '').trim().toLowerCase(),
+            website: String(req.body.website || '').trim(),
+            totalSlots,
+            status: req.body.status || 'Active',
+            programs: Array.isArray(req.body.programs) ? req.body.programs.map(value => String(value).trim()).filter(Boolean) : [],
+            mouDocumentUrl: String(req.body.mouDocumentUrl || '').trim(),
             approvalStatus,
             approvalRequestedAt: new Date(),
             approvalReviewedAt: approvalStatus === 'Approved' ? new Date() : undefined,
@@ -13156,6 +13228,8 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
         res.status(201).json(newPartner);
     } catch (error) {
         if (error.code === 11000) return res.status(400).json({ message: 'Company name already exists! Please search and link the existing partner instead.' });
+        if (error.name === 'ValidationError') return res.status(400).json({ message: Object.values(error.errors || {})[0]?.message || 'Partner details are invalid.' });
+        console.error('Error creating industry partner:', error);
         res.status(500).json({ message: 'Error creating industry partner' });
     }
 });
@@ -13230,28 +13304,43 @@ router.put('/industry-partners/:id/hq-reject', requireRole('HQManager', 'SuperAd
 
 router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
+        if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid partner ID' });
         if (Object.hasOwn(req.body, 'coordinates')) {
             try { req.body.coordinates = normalizeCoordinates(req.body.coordinates); }
             catch (error) { return res.status(400).json({ message: error.message }); }
         }
-        const existingPartner = await IndustryPartner.findById(req.params.id);
+        const existingPartner = await IndustryPartner.findOne({ _id: req.params.id, ...await partnerVisibilityFilter(req.user) });
         if (!existingPartner) return res.status(404).json({ message: 'Partner not found' });
         if (Object.hasOwn(req.body, 'sector')) {
             req.body.sector = String(req.body.sector || '').trim();
             if (req.body.sector !== existingPartner.sector && !isPartnerSector(req.body.sector)) return res.status(400).json({ message: 'Select a valid sector from the available options.' });
         }
-        const { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions, coordinates, partnerType, operatingModel, locationVerificationNotes, ghanaPostGps } = req.body;
-        const resolvedCoordinates = Object.hasOwn(req.body, 'coordinates') ? coordinates : existingPartner.coordinates;
-        const resolvedOperatingModel = operatingModel || existingPartner.operatingModel || 'FixedSite';
-        const locationVerificationStatus = hasCoordinates(resolvedCoordinates)
+        const allowedFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'status', 'programs', 'mouDocumentUrl', 'coordinates', 'partnerType', 'operatingModel', 'locationVerificationNotes', 'ghanaPostGps'];
+        const update = Object.fromEntries(allowedFields.filter(field => Object.hasOwn(req.body, field)).map(field => [field, req.body[field]]));
+        for (const field of ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'mouDocumentUrl', 'locationVerificationNotes', 'ghanaPostGps']) {
+            if (Object.hasOwn(update, field)) update[field] = String(update[field] || '').trim();
+        }
+        if (Object.hasOwn(update, 'contactEmail')) update.contactEmail = update.contactEmail.toLowerCase();
+        for (const field of ['name', 'sector', 'region']) {
+            if (Object.hasOwn(update, field) && !update[field]) return res.status(400).json({ message: 'Company name, sector and region cannot be empty.' });
+        }
+        if (Object.hasOwn(update, 'totalSlots') && (!Number.isInteger(update.totalSlots) || update.totalSlots < 0)) return res.status(400).json({ message: 'Total capacity must be a whole number of zero or more.' });
+        if (Object.hasOwn(update, 'totalSlots') && update.totalSlots < (existingPartner.usedSlots || 0)) return res.status(409).json({ message: `Total capacity cannot be lower than the ${existingPartner.usedSlots || 0} slots already in use.` });
+        const resolvedRegion = update.region || existingPartner.region;
+        if (req.user.role === 'RegionalAdmin' && !partnerRegionMatch(req.user.region).test(String(resolvedRegion || ''))) {
+            return res.status(403).json({ message: 'Regional administrators cannot move partners outside their assigned region.' });
+        }
+        const resolvedCoordinates = Object.hasOwn(update, 'coordinates') ? update.coordinates : existingPartner.coordinates;
+        const resolvedOperatingModel = update.operatingModel || existingPartner.operatingModel || 'FixedSite';
+        update.locationVerificationStatus = hasCoordinates(resolvedCoordinates)
             ? 'GPSVerified'
             : isFlexibleWorksite(resolvedOperatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
-        if (isFlexibleWorksite(resolvedOperatingModel) && !(locationVerificationNotes ?? existingPartner.locationVerificationNotes)?.trim()) {
+        if (isFlexibleWorksite(resolvedOperatingModel) && !(update.locationVerificationNotes ?? existingPartner.locationVerificationNotes)?.trim()) {
             return res.status(400).json({ message: 'Describe the operating area and alternative location evidence for mobile or no-premises partners.' });
         }
-        const updatedPartner = await IndustryPartner.findByIdAndUpdate(
-            req.params.id,
-            { name, sector, region, district, tradeArea, town, location, contactPerson, contactPhone, contactEmail, website, totalSlots, status, programs, mouDocumentUrl, linkedInstitutions, coordinates, partnerType, operatingModel, locationVerificationStatus, locationVerificationNotes, ghanaPostGps },
+        const updatedPartner = await IndustryPartner.findOneAndUpdate(
+            { _id: req.params.id, ...await partnerVisibilityFilter(req.user) },
+            update,
             { returnDocument: 'after', runValidators: true }
         );
         if (updatedPartner && existingPartner) {
@@ -13268,28 +13357,48 @@ router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'),
         res.json(updatedPartner);
     } catch (error) {
         if (error.code === 11000) return res.status(409).json({ message: 'Company name already exists. Choose a different name or use the existing partner.' });
+        if (error.name === 'ValidationError') return res.status(400).json({ message: Object.values(error.errors || {})[0]?.message || 'Partner details are invalid.' });
+        console.error('Error updating industry partner:', error);
         res.status(500).json({ message: 'Error updating partner' });
     }
 });
 
 router.delete('/industry-partners/:id', requireRole('SuperAdmin'), async (req, res) => {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid partner ID' });
     try {
-        const deletedPartner = await IndustryPartner.findOneAndDelete({ _id: req.params.id, 'changeRequests.0': { $exists: false } });
-        if (!deletedPartner && await IndustryPartner.exists({ _id: req.params.id })) {
-            return res.status(409).json({ message: 'This partner has review history. Mark it inactive instead of deleting it.' });
+        const partner = await IndustryPartner.findById(req.params.id).select('+changeRequests');
+        if (!partner) return res.status(404).json({ message: 'Partner not found' });
+        if (String(req.body?.confirmationName || '').trim() !== partner.name) {
+            return res.status(400).json({ message: 'Enter the partner name exactly to confirm deletion.' });
         }
-        if (deletedPartner) {
-            await logAuditEvent({
-                req,
-                action: 'DELETE',
-                entityType: 'IndustryPartner',
-                entityId: deletedPartner._id,
-                summary: `Deleted industry partner ${deletedPartner.name}`,
-                before: deletedPartner,
+        const dependencies = {
+            ...await getPartnerDependencySummary(partner._id),
+            linkedInstitutions: partner.linkedInstitutions?.length || 0,
+            reportedUsedSlots: partner.usedSlots || 0,
+        };
+        const blockers = getPartnerDeletionBlockers(dependencies, partner.changeRequests?.length || 0);
+        if (blockers.length > 0) {
+            return res.status(409).json({
+                code: 'PARTNER_HAS_HISTORY',
+                message: 'This partner has operational history and cannot be permanently deleted. Mark it inactive instead.',
+                dependencies,
+                blockers,
             });
         }
-        res.json({ message: 'Industry partner deleted' });
+        const deletedPartner = await IndustryPartner.findOneAndDelete({ _id: partner._id, 'changeRequests.0': { $exists: false } });
+        if (!deletedPartner) return res.status(409).json({ message: 'The partner changed while deletion was being checked. Refresh and try again.' });
+        await logAuditEvent({
+            req,
+            action: 'DELETE',
+            entityType: 'IndustryPartner',
+            entityId: deletedPartner._id,
+            summary: `Deleted unused industry partner ${deletedPartner.name}`,
+            before: deletedPartner,
+            metadata: { confirmedName: true, dependencyCheck: dependencies },
+        });
+        res.json({ message: 'Industry partner permanently deleted' });
     } catch (error) {
+        console.error('Error deleting industry partner:', error);
         res.status(500).json({ message: 'Error deleting partner' });
     }
 });
