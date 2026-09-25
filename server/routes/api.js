@@ -14295,6 +14295,28 @@ router.get('/placement-requests', async (req, res) => {
     }
 });
 
+router.get('/placement-requests/:id', async (req, res) => {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid placement batch ID' });
+    try {
+        const request = await PlacementRequest.findOne({ _id: req.params.id, ...await getFilter(req.user) })
+            .populate('partner', 'name sector region totalSlots usedSlots partnerType operatingModel locationVerificationStatus coordinates')
+            .populate('learners', 'firstName middleName lastName name trackingId indexNumber program year')
+            .populate('submittedBy', 'name role')
+            .populate('reviewedByInstitution', 'name role')
+            .populate({
+                path: 'convertedPlacementIds',
+                select: 'learner companyName sector location supervisorName supervisorPhone supervisorEmail startDate endDate status placementRegion worksiteMode locationVerificationStatus trackingId closureReason',
+                populate: { path: 'learner', select: 'firstName middleName lastName name trackingId indexNumber program year' },
+            })
+            .lean();
+        if (!request) return res.status(404).json({ message: 'Placement batch not found' });
+        return res.json(request);
+    } catch (error) {
+        console.error('Error loading placement batch details:', error);
+        return res.status(500).json({ message: 'Unable to load placement batch details' });
+    }
+});
+
 router.post('/placement-requests', async (req, res) => {
     try {
         if (!['Admin', 'Manager', 'Staff'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied' });

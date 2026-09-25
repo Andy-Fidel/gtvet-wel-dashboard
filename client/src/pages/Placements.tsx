@@ -23,7 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
-import { Download, Plus, AlignLeft, Building2, Users as UsersIcon, ClipboardList } from "lucide-react"
+import { Download, Plus, AlignLeft, Building2, Eye, Users as UsersIcon, ClipboardList } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -34,6 +34,7 @@ import { PromptDialog } from "@/components/PromptDialog"
 import { Handshake, Search as SearchIcon, Loader2, X } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
+import { PlacementBatchDetailsDialog, type PlacementBatchDetails } from '@/components/PlacementBatchDetailsDialog'
 
 type DelegateUser = {
   _id: string;
@@ -58,6 +59,10 @@ export type PlacementRequestData = {
   requestedSlots: number;
   status: 'Submitted' | 'Regional_Approved' | 'HQ_Approved' | 'Rejected' | 'Placed' | 'SelfSourced_Submitted' | 'Under_Verification' | 'Approved' | 'Converted';
   sourceType?: 'InstitutionFound' | 'LearnerFound';
+  startDate?: string;
+  endDate?: string;
+  academicYear?: string;
+  placementRegion?: string;
   createdAt: string;
   submittedBy: { name: string };
   partner?: { name: string; sector: string; region: string; totalSlots: number; usedSlots: number; operatingModel?: PlacementRequestData['worksiteMode'] };
@@ -129,6 +134,12 @@ export default function Placements() {
     const [evidenceLoading, setEvidenceLoading] = useState(false)
     const [evidencePlacement, setEvidencePlacement] = useState<Placement | null>(null)
     const [evidenceDocuments, setEvidenceDocuments] = useState<EvidenceDocument[]>([])
+    const [batchDetailsOpen, setBatchDetailsOpen] = useState(false)
+    const [batchDetailsLoading, setBatchDetailsLoading] = useState(false)
+    const [batchDetails, setBatchDetails] = useState<PlacementBatchDetails | null>(null)
+    const [batchDetailsError, setBatchDetailsError] = useState('')
+    const [batchDetailsId, setBatchDetailsId] = useState<string | null>(null)
+    const batchDetailsRequest = useRef(0)
     const { authFetch, user, isLoading: authLoading } = useAuth()
     const isOversightReadOnly = isHQRole(user?.role) || user?.role === 'RegionalAdmin'
 
@@ -169,6 +180,40 @@ export default function Placements() {
     const delegatedView = searchParams.get("view") === "delegated" || location.pathname === "/delegated-placements"
     const initialTab = delegatedView ? "delegated" : "all"
     const [activeTab, setActiveTab] = useState(initialTab)
+
+    const loadBatchDetails = async (id: string) => {
+        const request = ++batchDetailsRequest.current
+        setBatchDetailsLoading(true)
+        setBatchDetailsError('')
+        try {
+            const response = await authFetch(`/api/placement-requests/${id}`)
+            const payload = await response.json().catch(() => ({}))
+            if (!response.ok) throw new Error(payload.message || 'Unable to load placement batch details')
+            if (request === batchDetailsRequest.current) setBatchDetails(payload as PlacementBatchDetails)
+        } catch (error) {
+            if (request === batchDetailsRequest.current) setBatchDetailsError(error instanceof Error ? error.message : 'Unable to load placement batch details')
+        } finally {
+            if (request === batchDetailsRequest.current) setBatchDetailsLoading(false)
+        }
+    }
+
+    const openBatchDetails = (placementRequest: PlacementRequestData) => {
+        setBatchDetailsId(placementRequest._id)
+        setBatchDetails(null)
+        setBatchDetailsOpen(true)
+        void loadBatchDetails(placementRequest._id)
+    }
+
+    const changeBatchDetailsOpen = (open: boolean) => {
+        setBatchDetailsOpen(open)
+        if (!open) {
+            batchDetailsRequest.current += 1
+            setBatchDetailsId(null)
+            setBatchDetails(null)
+            setBatchDetailsError('')
+            setBatchDetailsLoading(false)
+        }
+    }
 
     // Debounce search input
     useEffect(() => {
@@ -1009,6 +1054,10 @@ export default function Placements() {
                                         </div>
                                     )}
 
+                                    <Button type="button" variant="outline" className="w-full rounded-xl border-slate-200 font-bold" onClick={() => openBatchDetails(req)}>
+                                        <Eye className="mr-2 h-4 w-4" /> View Learner Placement Details
+                                    </Button>
+
                                     {req.sourceType !== 'LearnerFound' && req.status === 'Submitted' && ['Admin', 'Manager'].includes(user?.role || '') && <Button onClick={() => handleConvertSelfSourcedPlacement(req)}>Add GPS and Activate</Button>}
                                     {req.sourceType === 'LearnerFound' && ['Admin', 'Manager'].includes(user?.role || '') && (
                                         <div className="flex flex-wrap gap-2">
@@ -1046,6 +1095,15 @@ export default function Placements() {
                     </TabsContent>
                 </Tabs>
             </div>
+
+            <PlacementBatchDetailsDialog
+                open={batchDetailsOpen}
+                loading={batchDetailsLoading}
+                details={batchDetails}
+                error={batchDetailsError}
+                onRetry={() => { if (batchDetailsId) void loadBatchDetails(batchDetailsId) }}
+                onOpenChange={changeBatchDetailsOpen}
+            />
 
             {/* Delegate Assignment Dialog */}
             <Dialog open={delegateOpen} onOpenChange={setDelegateOpen}>
