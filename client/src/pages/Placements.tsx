@@ -440,12 +440,15 @@ export default function Placements() {
 
         setDelegateLoading(true)
         try {
-            const res = await authFetch(`/api/users/by-region/${encodeURIComponent(placement.placementRegion)}`)
-            if (!res.ok) throw new Error("Failed to fetch users")
+            const res = await authFetch(`/api/placements/${placement._id}/delegate-candidates`)
+            if (!res.ok) {
+                const payload = await res.json().catch(() => ({}))
+                throw new Error(payload.message || "Failed to fetch users")
+            }
             const users = await res.json()
             setDelegateCandidates(users)
-        } catch {
-            toast.error("Failed to load users in the placement region")
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to load users in the placement region")
         } finally {
             setDelegateLoading(false)
         }
@@ -458,7 +461,7 @@ export default function Placements() {
             const res = await authFetch(`/api/placements/${delegatePlacement._id}/delegate`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ delegateId }),
+                body: JSON.stringify({ delegateId, sourceVersion: delegatePlacement.workflowVersion || 0 }),
             })
             if (!res.ok) {
                 const err = await res.json()
@@ -481,14 +484,15 @@ export default function Placements() {
             const res = await authFetch(`/api/placements/${delegatePlacement._id}/delegate`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ delegateId: null }),
+                body: JSON.stringify({ delegateId: null, sourceVersion: delegatePlacement.workflowVersion || 0 }),
             })
-            if (!res.ok) throw new Error('Failed to remove delegate')
+            const payload = await res.json().catch(() => ({}))
+            if (!res.ok) throw new Error(payload.message || 'Failed to remove delegate')
             toast.success("Delegate removed")
             setDelegateOpen(false)
             setRefreshKey(prev => prev + 1)
-        } catch {
-            toast.error("Failed to remove delegate")
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to remove delegate")
         } finally {
             setDelegateSaving(false)
         }

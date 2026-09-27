@@ -1145,6 +1145,37 @@ const getPlacementScope = async (user) => {
   return getPlacementFilter(user);
 };
 
+const delegationRoles = ['Admin', 'Manager', 'Staff'];
+
+const regionInstitutionNames = async region => {
+  if (!String(region || '').trim()) return [];
+  const institutions = await Institution.find({ region: partnerRegionMatch(region) }).select('name').lean();
+  return institutions.map(institution => institution.name).filter(Boolean);
+};
+
+const findEligibleDelegate = async (delegateId, region) => {
+  if (!mongoose.isObjectIdOrHexString(delegateId)) return null;
+  const institutionNames = await regionInstitutionNames(region);
+  if (!institutionNames.length) return null;
+  return User.findOne({
+    _id: delegateId,
+    role: { $in: delegationRoles },
+    institution: { $in: institutionNames },
+    status: 'Active',
+  }).select('_id name role institution');
+};
+
+const delegationVersionFilter = version => version === 0
+  ? { $or: [{ workflowVersion: 0 }, { workflowVersion: { $exists: false } }] }
+  : { workflowVersion: version };
+
+export const delegationChangesForRegion = async (existing, nextRegion) => {
+  const regionChanged = String(nextRegion || '').trim() !== String(existing?.placementRegion || '').trim();
+  if (!regionChanged || !existing?.delegate) return {};
+  const validDelegate = await findEligibleDelegate(existing.delegate, nextRegion);
+  return validDelegate ? {} : { delegate: null, delegatedAt: null, delegatedBy: null, delegateInstitution: '' };
+};
+
 const findPlacementForUser = async (user, placementId) => {
   const scope = await getPlacementScope(user);
   return Placement.findOne({ _id: placementId, ...scope })
@@ -9651,6 +9682,9 @@ router.put('/placements/:id', async (req, res) => {
                 }
             }
             for (const field of ['status', 'closureReason', 'closureNote']) if (Object.hasOwn(req.body, field)) fields[field] = req.body[field];
+            if (Object.hasOwn(fields, 'placementRegion')) {
+                Object.assign(fields, await delegationChangesForRegion(existing, fields.placementRegion));
+            }
             const payload = applyPlacementClosureMetadata(existing, fields, req.user);
             const merged = new Placement({ ...existing.toObject(), ...payload });
             validatePlacementDates(merged.startDate, merged.endDate);
@@ -9661,6 +9695,7 @@ router.put('/placements/:id', async (req, res) => {
         });
         const updated = await Placement.findOne(filter);
         if (Object.hasOwn(req.body, 'coordinates') && hasCoordinates(updated.coordinates)) await recheckPendingPlacementVisits(updated, req);
+        await notifyPreviousDelegate(plan.before, updated, req.user);
         await logAuditEvent({ req, action: 'UPDATE', entityType: 'Placement', entityId: req.params.id, summary: 'Updated placement and reconciled operational links', before: plan.before, after: updated, metadata: { operationKey: key } });
         res.json(updated);
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
@@ -9787,16 +9822,23 @@ router.put('/placements/:id/delegate', async (req, res) => {
         }
 
         const { delegateId } = req.body;
+        const sourceVersion = Number(req.body.sourceVersion);
+        if (!Number.isInteger(sourceVersion) || sourceVersion < 0) {
+            return res.status(400).json({ message: 'Placement version is required. Refresh the placement list and try again.' });
+        }
+        if (sourceVersion !== (placement.workflowVersion || 0)) {
+            return res.status(409).json({ message: 'Placement changed. Refresh the placement list before updating its delegate.' });
+        }
         const before = placement.toObject();
         if (delegateId && placement.status !== 'Active') return res.status(400).json({ message: 'Only active placements can be delegated.' });
 
         if (!delegateId) {
-            // Remove delegate
-            placement.delegate = undefined;
-            placement.delegatedAt = undefined;
-            placement.delegatedBy = undefined;
-            placement.delegateInstitution = undefined;
-            await placement.save();
+            const updatedPlacement = await Placement.findOneAndUpdate(
+                { _id: placement._id, ...filter, ...delegationVersionFilter(sourceVersion) },
+                { $unset: { delegate: 1, delegatedAt: 1, delegatedBy: 1, delegateInstitution: 1 }, $inc: { workflowVersion: 1 } },
+                { returnDocument: 'after', runValidators: true }
+            );
+            if (!updatedPlacement) return res.status(409).json({ message: 'Placement changed. Refresh the placement list before updating its delegate.' });
 
             await logAuditEvent({
                 req,
@@ -9805,12 +9847,12 @@ router.put('/placements/:id/delegate', async (req, res) => {
                 entityId: placement._id,
                 summary: `Removed delegate from placement ${placement._id}`,
                 before,
-                after: placement,
+                after: updatedPlacement,
                 changedFields: ['delegate', 'delegatedAt', 'delegatedBy', 'delegateInstitution'],
             });
 
-            await notifyPreviousDelegate(before, placement, req.user);
-            return res.json(placement);
+            await notifyPreviousDelegate(before, updatedPlacement, req.user);
+            return res.json(updatedPlacement);
         }
 
         // Validate delegate is a Staff/Manager/Admin at an institution in the placement region
@@ -9819,25 +9861,18 @@ router.put('/placements/:id/delegate', async (req, res) => {
             return res.status(400).json({ message: 'Placement region must be set before assigning a delegate. Please edit the placement and set the placement region.' });
         }
 
-        const regionInstitutions = await Institution.find({ region: placementRegion }).select('name');
-        const regionInstitutionNames = regionInstitutions.map(i => i.name);
-
-        const delegateUser = await User.findOne({
-            _id: delegateId,
-            role: { $in: ['Admin', 'Manager', 'Staff'] },
-            institution: { $in: regionInstitutionNames },
-            status: 'Active',
-        }).select('_id name role institution');
+        const delegateUser = await findEligibleDelegate(delegateId, placementRegion);
 
         if (!delegateUser) {
             return res.status(400).json({ message: 'Selected delegate must be an active staff member at an institution in the placement region' });
         }
 
-        placement.delegate = delegateUser._id;
-        placement.delegatedAt = new Date();
-        placement.delegatedBy = req.user._id;
-        placement.delegateInstitution = delegateUser.institution;
-        await placement.save();
+        const updatedPlacement = await Placement.findOneAndUpdate(
+            { _id: placement._id, ...filter, ...delegationVersionFilter(sourceVersion) },
+            { $set: { delegate: delegateUser._id, delegatedAt: new Date(), delegatedBy: req.user._id, delegateInstitution: delegateUser.institution }, $inc: { workflowVersion: 1 } },
+            { returnDocument: 'after', runValidators: true }
+        );
+        if (!updatedPlacement) return res.status(409).json({ message: 'Placement changed. Refresh the placement list before updating its delegate.' });
 
         await logAuditEvent({
             req,
@@ -9846,12 +9881,12 @@ router.put('/placements/:id/delegate', async (req, res) => {
             entityId: placement._id,
             summary: `Assigned delegate ${delegateUser.name} for placement ${placement._id}`,
             before,
-            after: placement,
+            after: updatedPlacement,
             changedFields: ['delegate', 'delegatedAt', 'delegatedBy', 'delegateInstitution'],
         });
 
         // Notify the delegate
-        await notifyPreviousDelegate(before, placement, req.user);
+        await notifyPreviousDelegate(before, updatedPlacement, req.user);
         await notifyUsers({
             recipientIds: [delegateUser._id.toString()],
             sender: req.user._id,
@@ -9906,16 +9941,23 @@ router.get('/placements/delegated-to-me', async (req, res) => {
     }
 });
 
-// Get users by region for delegate picker
-router.get('/users/by-region/:region', async (req, res) => {
+// Candidate directory is derived from a placement in the manager's institution.
+router.get('/placements/:id/delegate-candidates', async (req, res) => {
     try {
-        const region = req.params.region;
-        const regionInstitutions = await Institution.find({ region }).select('name');
-        const regionInstitutionNames = regionInstitutions.map(i => i.name);
+        if (!['Admin', 'Manager'].includes(req.user.role) || !req.user.institution) {
+            return res.status(403).json({ message: 'Only originating institution management can view delegation candidates.' });
+        }
+        if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid placement ID' });
+        const placement = await Placement.findOne({ _id: req.params.id, institution: req.user.institution })
+            .select('placementRegion status');
+        if (!placement) return res.status(404).json({ message: 'Placement not found or unauthorized' });
+        if (placement.status !== 'Active') return res.status(409).json({ message: 'Only active placements can be delegated.' });
+        if (!placement.placementRegion) return res.status(400).json({ message: 'Set the placement region before selecting a delegate.' });
+        const institutionNames = await regionInstitutionNames(placement.placementRegion);
 
         const users = await User.find({
-            role: { $in: ['Admin', 'Manager', 'Staff'] },
-            institution: { $in: regionInstitutionNames },
+            role: { $in: delegationRoles },
+            institution: { $in: institutionNames },
             status: 'Active',
         })
             .select('_id name role institution')
@@ -9923,8 +9965,8 @@ router.get('/users/by-region/:region', async (req, res) => {
 
         res.json(users);
     } catch (error) {
-        console.error('Error fetching users by region:', error);
-        res.status(500).json({ message: 'Error fetching users by region' });
+        console.error('Error fetching delegation candidates:', error);
+        res.status(500).json({ message: 'Error fetching delegation candidates' });
     }
 });
 
