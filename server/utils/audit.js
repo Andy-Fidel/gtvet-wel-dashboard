@@ -54,6 +54,7 @@ export async function logAuditEvent({
   after = null,
   metadata = {},
   changedFields = null,
+  scope = {},
 }) {
   try {
     const currentActor = req?.inspectionActor || actor || req?.user;
@@ -78,8 +79,8 @@ export async function logAuditEvent({
       actorId: actorDetails._id,
       actorName: actorDetails.name || 'System',
       actorRole: actorDetails.role || 'System',
-      institution: actorDetails.institution || 'N/A',
-      region: actorDetails.region || '',
+      institution: scope.institution || actorDetails.institution || 'N/A',
+      region: scope.region || actorDetails.region || '',
       partnerId: actorDetails.partnerId?._id || actorDetails.partnerId || undefined,
       route: req?.originalUrl || '',
       method: req?.method || '',

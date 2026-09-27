@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import router, { delegationChangesForRegion } from '../routes/api.js';
+import router, { delegationChangesForRegion, regionalAdminIdsForRegion } from '../routes/api.js';
 import { Placement } from '../models/Placement.js';
 import { Institution } from '../models/Institution.js';
 import { User } from '../models/User.js';
@@ -83,6 +83,17 @@ test('changing to a region where the delegate is ineligible clears the delegatio
     delegateInstitution: 'Kumasi Technical Institute',
   }, 'Volta');
   assert.deepEqual(changes, { delegate: null, delegatedAt: null, delegatedBy: null, delegateInstitution: '' });
+});
+
+test('regional administrator recipients use region aliases and active accounts only', async t => {
+  t.mock.method(User, 'find', query => {
+    assert.equal(query.role, 'RegionalAdmin');
+    assert.equal(query.status, 'Active');
+    assert.equal(query.region.test('Greater Accra Region'), true);
+    assert.equal(query.region.test('Ashanti'), false);
+    return { select() { return this; }, lean: async () => [{ _id: placementId }] };
+  });
+  assert.deepEqual(await regionalAdminIdsForRegion('G. Accra'), [placementId]);
 });
 
 test('limited learner endpoint requires exact active assignment', async t => {

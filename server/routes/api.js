@@ -1113,8 +1113,11 @@ const getAuditLogScope = async (user) => {
   if (user.role === 'SuperAdmin') return {};
   if (isScopedHQRole(user.role)) return getHQInstitutionFilter(user);
   if (user.role === 'RegionalAdmin') {
-    const insts = await Institution.find({ region: user.region }).select('name');
-    return { institution: { $in: insts.map((inst) => inst.name) } };
+    const insts = await Institution.find({ region: partnerRegionMatch(user.region) }).select('name');
+    return { $and: [{ $or: [
+      { institution: { $in: insts.map((inst) => inst.name) } },
+      { region: partnerRegionMatch(user.region) },
+    ] }] };
   }
   return { institution: user.institution };
 };
@@ -1151,6 +1154,16 @@ const regionInstitutionNames = async region => {
   if (!String(region || '').trim()) return [];
   const institutions = await Institution.find({ region: partnerRegionMatch(region) }).select('name').lean();
   return institutions.map(institution => institution.name).filter(Boolean);
+};
+
+export const regionalAdminIdsForRegion = async region => {
+  if (!String(region || '').trim()) return [];
+  const regionalAdmins = await User.find({
+    role: 'RegionalAdmin',
+    region: partnerRegionMatch(region),
+    status: 'Active',
+  }).select('_id').lean();
+  return regionalAdmins.map(admin => admin._id.toString());
 };
 
 const findEligibleDelegate = async (delegateId, region) => {
@@ -9894,6 +9907,46 @@ router.put('/placements/:id/delegate', async (req, res) => {
             title: 'Cross-Region Delegation Assignment',
             message: `You have been assigned as the delegate supervisor for ${placement.learner?.name || 'a learner'} (${placement.learner?.trackingId || ''}) from ${placement.institution}. Please conduct monitoring visits at ${placement.companyName}.`,
             link: '/placements?view=delegated',
+        });
+
+        const regionalAdminIds = await regionalAdminIdsForRegion(placementRegion).catch(error => {
+            console.error('Unable to resolve Regional Admin delegation recipients:', error);
+            return [];
+        });
+        await notifyUsers({
+            recipientIds: regionalAdminIds,
+            sender: req.user._id,
+            type: 'placement',
+            title: `Cross-Region Delegation in ${placementRegion}`,
+            message: `${placement.learner?.name || 'A learner'} (${placement.learner?.trackingId || 'tracking ID unavailable'}) from ${placement.institution} has been assigned to ${delegateUser.name} at ${delegateUser.institution} for monitoring at ${placement.companyName}.`,
+            link: '/activity-log',
+            dedupeKey: `cross-region-delegation:${placement._id}:${updatedPlacement.workflowVersion}`,
+        });
+        await logAuditEvent({
+            req,
+            action: 'CREATE',
+            entityType: 'CrossRegionDelegation',
+            entityId: placement._id,
+            summary: `Assigned ${delegateUser.name} to monitor ${placement.learner?.name || 'a learner'} in ${placementRegion}`,
+            after: {
+                placement: placement._id,
+                learner: placement.learner?._id || placement.learner,
+                learnerName: placement.learner?.name || '',
+                trackingId: placement.learner?.trackingId || '',
+                workplace: placement.companyName,
+                originatingInstitution: placement.institution,
+                placementRegion,
+                delegate: delegateUser._id,
+                delegateName: delegateUser.name,
+                delegateInstitution: delegateUser.institution,
+                assignedAt: updatedPlacement.delegatedAt,
+            },
+            metadata: {
+                regionalAdminRecipientCount: regionalAdminIds.length,
+                workflowVersion: updatedPlacement.workflowVersion,
+            },
+            changedFields: ['delegate', 'delegatedAt', 'delegatedBy', 'delegateInstitution'],
+            scope: { institution: delegateUser.institution, region: placementRegion },
         });
 
         const populatedPlacement = await Placement.findById(placement._id)
