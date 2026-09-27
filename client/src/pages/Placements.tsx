@@ -177,6 +177,8 @@ export default function Placements() {
     const [delegateSearch, setDelegateSearch] = useState('')
     const [delegateLoading, setDelegateLoading] = useState(false)
     const [delegateSaving, setDelegateSaving] = useState(false)
+    const [selectedDelegate, setSelectedDelegate] = useState<DelegateUser | null>(null)
+    const [delegateConfirmOpen, setDelegateConfirmOpen] = useState(false)
     const delegatedView = searchParams.get("view") === "delegated" || location.pathname === "/delegated-placements"
     const initialTab = delegatedView ? "delegated" : "all"
     const [activeTab, setActiveTab] = useState(initialTab)
@@ -454,24 +456,33 @@ export default function Placements() {
         }
     }
 
-    const handleSelectDelegate = async (delegateId: string) => {
-        if (!delegatePlacement) return
+    const handleSelectDelegate = (delegate: DelegateUser) => {
+        setSelectedDelegate(delegate)
+        setDelegateConfirmOpen(true)
+    }
+
+    const confirmDelegateAssignment = async () => {
+        if (!delegatePlacement || !selectedDelegate) return
         setDelegateSaving(true)
         try {
             const res = await authFetch(`/api/placements/${delegatePlacement._id}/delegate`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ delegateId, sourceVersion: delegatePlacement.workflowVersion || 0 }),
+                body: JSON.stringify({ delegateId: selectedDelegate._id, sourceVersion: delegatePlacement.workflowVersion || 0 }),
             })
             if (!res.ok) {
                 const err = await res.json()
                 throw new Error(err.message || 'Failed to assign delegate')
             }
             toast.success("Delegate assigned successfully")
+            setDelegateConfirmOpen(false)
             setDelegateOpen(false)
+            setSelectedDelegate(null)
             setRefreshKey(prev => prev + 1)
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Failed to assign delegate")
+            setDelegateConfirmOpen(false)
+            setSelectedDelegate(null)
         } finally {
             setDelegateSaving(false)
         }
@@ -1110,7 +1121,13 @@ export default function Placements() {
             />
 
             {/* Delegate Assignment Dialog */}
-            <Dialog open={delegateOpen} onOpenChange={setDelegateOpen}>
+            <Dialog open={delegateOpen} onOpenChange={(open) => {
+                setDelegateOpen(open)
+                if (!open) {
+                    setDelegateConfirmOpen(false)
+                    setSelectedDelegate(null)
+                }
+            }}>
                 <DialogContent overlayClassName="bg-black/45 backdrop-blur-md" className="sm:max-w-[500px] overflow-y-auto max-h-[90vh]">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
@@ -1181,7 +1198,7 @@ export default function Placements() {
                                             <button
                                                 key={u._id}
                                                 type="button"
-                                                onClick={() => handleSelectDelegate(u._id)}
+                                                onClick={() => handleSelectDelegate(u)}
                                                 disabled={delegateSaving}
                                                 className="w-full text-left flex items-center justify-between p-3 rounded-xl hover:bg-indigo-50 transition-colors border border-transparent hover:border-indigo-200"
                                             >
@@ -1198,6 +1215,45 @@ export default function Placements() {
                     )}
                 </DialogContent>
             </Dialog>
+
+            <ConfirmationDialog
+                open={delegateConfirmOpen}
+                onOpenChange={(open) => {
+                    setDelegateConfirmOpen(open)
+                    if (!open && !delegateSaving) setSelectedDelegate(null)
+                }}
+                title="Confirm Cross-Region Delegate"
+                description="Review the assignment before granting this officer access to monitor the learner's placement."
+                confirmLabel="Assign Delegate"
+                variant="warning"
+                onConfirm={confirmDelegateAssignment}
+            >
+                {delegatePlacement && selectedDelegate && (
+                    <div className="space-y-3 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm">
+                        <div>
+                            <p className="text-xs font-black uppercase tracking-wider text-gray-500">Learner and workplace</p>
+                            <p className="mt-1 font-bold text-gray-900">{delegatePlacement.learner?.name || 'Learner'}</p>
+                            <p className="text-gray-600">{delegatePlacement.companyName}</p>
+                        </div>
+                        <div className="grid gap-3 border-t border-gray-200 pt-3 sm:grid-cols-2">
+                            <div>
+                                <p className="text-xs font-black uppercase tracking-wider text-gray-500">Placement region</p>
+                                <p className="mt-1 font-semibold text-gray-900">{delegatePlacement.placementRegion}</p>
+                            </div>
+                            <div>
+                                <p className="text-xs font-black uppercase tracking-wider text-gray-500">Delegate</p>
+                                <p className="mt-1 font-semibold text-gray-900">{selectedDelegate.name}</p>
+                                <p className="text-xs text-gray-600">{selectedDelegate.institution} · {selectedDelegate.role}</p>
+                            </div>
+                        </div>
+                        {delegatePlacement.delegate && delegatePlacement.delegate._id !== selectedDelegate._id && (
+                            <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">
+                                This will replace {delegatePlacement.delegate.name} as the current delegate.
+                            </p>
+                        )}
+                    </div>
+                )}
+            </ConfirmationDialog>
 
             {/* Delete Confirmation Dialog */}
             <ConfirmationDialog
