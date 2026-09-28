@@ -43,7 +43,7 @@ export async function advancePartnerImport(job, req) {
     let status = 'Created', message = 'Registered and approved';
     if (!partner) {
       try {
-        partner = await IndustryPartner.create({ ...entry.data, _id: entry.partnerId, usedSlots: 0, linkedInstitutions: [],
+        partner = await IndustryPartner.create({ ...entry.data, _id: entry.partnerId, usedSlots: 0, linkedInstitutions: [], submittedByInstitution: '',
           approvalStatus: 'Approved', approvalRequestedAt: new Date(), approvalReviewedAt: new Date(),
           approvalReviewedBy: job.addedBy, approvalComment: 'Bulk registered by HQ', addedBy: job.addedBy });
       } catch (error) {

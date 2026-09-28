@@ -66,6 +66,7 @@ const industryPartnerSchema = new mongoose.Schema({
   programs: [{ type: String }],
   mouDocumentUrl: { type: String },
   addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  submittedByInstitution: { type: String, default: '', trim: true },
   linkedInstitutions: [{ type: String }],
 }, { timestamps: true });
 

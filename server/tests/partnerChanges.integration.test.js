@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
 import express from 'express';
-import { registerPartnerChanges, normalizePartnerChanges, canReadPartnerChangeDocument } from '../utils/partnerChanges.js';
+import { registerPartnerChanges, normalizePartnerChanges, canReadPartnerChangeDocument, canInstitutionRequestPartnerChanges } from '../utils/partnerChanges.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { Institution } from '../models/Institution.js';
 import { Document } from '../models/Document.js';
@@ -14,6 +14,9 @@ test('partner changes whitelist shared fields and validate values', () => {
   assert.equal(canHQRequest('HQManager', 'PUT', '/partner-change-requests/id/approve'), true);
   assert.equal(canHQRequest('HQManager', 'PUT', '/partner-change-requests/id/resubmit'), false);
   assert.equal(canHQRequest('HQStaff', 'PUT', '/partner-change-requests/id/approve'), false);
+  assert.equal(canInstitutionRequestPartnerChanges({ role: 'Manager', institution: 'QA' }, { submittedByInstitution: 'QA' }), true);
+  assert.equal(canInstitutionRequestPartnerChanges({ role: 'Staff', institution: 'Other' }, { submittedByInstitution: 'QA' }), false);
+  assert.equal(canInstitutionRequestPartnerChanges({ role: 'Admin', institution: 'Legacy' }, { addedBy: { institution: 'Legacy' } }), true);
 });
 
 test('partner review lifecycle, scope, conflicts and atomic decisions', { skip: process.env.PARTNER_MONGO_INTEGRATION !== '1' }, async t => {
@@ -25,7 +28,7 @@ test('partner review lifecycle, scope, conflicts and atomic decisions', { skip: 
     const manager = { ...staff, _id: id(), name: 'QA Manager', role: 'Manager' };
     const hq = { _id: id(), name: 'HQ Reviewer', role: 'HQManager', hqScopeType: 'National' };
     await Institution.collection.insertMany([{ name: 'QA', region: 'Greater Accra' }, { name: 'Other', region: 'Greater Accra' }]);
-    const partner = await IndustryPartner.create({ name: 'Shared employer', sector: 'IT', region: 'Greater Accra', linkedInstitutions: ['QA'], approvalStatus: 'Approved', totalSlots: 10, usedSlots: 3, contactPhone: '0200000000' });
+    const partner = await IndustryPartner.create({ name: 'Shared employer', sector: 'IT', region: 'Greater Accra', linkedInstitutions: ['QA'], submittedByInstitution: 'QA', addedBy: manager._id, approvalStatus: 'Approved', totalSlots: 10, usedSlots: 3, contactPhone: '0200000000' });
     const call = async (path, method, actor, body = {}, params = {}) => {
       const handler = router.stack.find(l => l.route?.path === path && l.route.methods[method]).route.stack.at(-1).handle;
       const res = { code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
@@ -37,6 +40,7 @@ test('partner review lifecycle, scope, conflicts and atomic decisions', { skip: 
     await t.test('submission validates scope, evidence and duplicate pending requests', async () => {
       assert.equal((await submit(hq, { name: 'Bad' })).code, 403);
       assert.equal((await submit({ ...staff, institution: 'Elsewhere', region: 'Ashanti' }, { name: 'Bad' })).code, 404);
+      assert.equal((await submit({ ...manager, institution: 'Other' }, { contactPhone: 'unauthorized' })).code, 403);
       assert.equal((await submit(staff, { contactPhone: 'new' }, { attachmentIds: [String(id())] })).code, 400);
       assert.equal((await submit(staff, { mouDocumentUrl: 'https://example.test/file.pdf' })).code, 400);
     });

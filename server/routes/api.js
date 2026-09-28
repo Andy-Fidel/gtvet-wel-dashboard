@@ -9,7 +9,7 @@ import { Learner } from '../models/Learner.js';
 import { Placement } from '../models/Placement.js';
 import { PlacementTransfer } from '../models/PlacementTransfer.js';
 import { registerPlacementTransfers } from '../utils/placementTransfers.js';
-import { registerPartnerChanges } from '../utils/partnerChanges.js';
+import { registerPartnerChanges, canInstitutionRequestPartnerChanges } from '../utils/partnerChanges.js';
 import { learnerSearchFilter } from '../utils/learnerSearch.js';
 import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
@@ -12995,12 +12995,16 @@ router.get('/industry-partners', async (req, res) => {
         const capacityAwarePartners = req.user.institution && ['Admin', 'Manager', 'Staff'].includes(req.user.role)
             ? await decoratePartnerCapacities(partners, req.user.institution, capacityDate)
             : partners;
+        const partnersWithPermissions = capacityAwarePartners.map(partner => ({
+            ...partner,
+            canRequestChanges: canInstitutionRequestPartnerChanges(req.user, partner),
+        }));
 
         if (usePagination) {
             const summary = summaryCounts?.[0] || { total: 0, pending: 0, approved: 0, rejected: 0 };
             const safeTotal = total || 0;
             return res.json({
-                items: capacityAwarePartners,
+                items: partnersWithPermissions,
                 total: safeTotal,
                 page,
                 pageSize,
@@ -13009,7 +13013,7 @@ router.get('/industry-partners', async (req, res) => {
             });
         }
 
-        res.json(capacityAwarePartners);
+        res.json(partnersWithPermissions);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
@@ -13293,7 +13297,8 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
             approvalReviewedAt: approvalStatus === 'Approved' ? new Date() : undefined,
             approvalReviewedBy: approvalStatus === 'Approved' ? req.user._id : undefined,
             approvalComment: approvalStatus === 'Approved' ? 'Created directly by HQ' : '',
-            addedBy: req.user._id
+            addedBy: req.user._id,
+            submittedByInstitution: req.user.institution || '',
         });
         
         if (req.user.institution) {

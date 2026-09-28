@@ -80,6 +80,7 @@ export interface IndustryPartner {
   approvalRequestedAt?: string;
   approvalReviewedAt?: string;
   approvalComment?: string;
+  canRequestChanges?: boolean;
   programs: string[];
 }
 

@@ -15,6 +15,12 @@ const fail = (message, status = 400) => { throw Object.assign(new Error(message)
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const event = (req, action, comment, extra = {}) => ({ action, actor: req.user._id, actorName: req.user.name, comment, at: new Date(), ...extra });
 
+export function canInstitutionRequestPartnerChanges(user, partner) {
+  if (!institutionRoles.includes(user?.role) || !user?.institution) return false;
+  const submittingInstitution = String(partner?.submittedByInstitution || partner?.addedBy?.institution || '').trim();
+  return Boolean(submittingInstitution) && submittingInstitution === user.institution;
+}
+
 export function normalizePartnerChanges(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('Provide the proposed fields.');
   const result = {};
@@ -133,8 +139,9 @@ export function registerPartnerChanges(router) {
     if (!institutionRoles.includes(req.user.role)) fail('Only institution users may submit changes.', 403);
     const partnerScope = await scope(req.user);
     const filter = { $and: [{ _id: req.params.id }, partnerScope] };
-    const partner = await IndustryPartner.findOne(filter).lean();
+    const partner = await IndustryPartner.findOne(filter).populate('addedBy', 'institution').lean();
     if (!partner) fail('Partner not found.', 404);
+    if (!canInstitutionRequestPartnerChanges(req.user, partner)) fail('Only the institution that submitted this partner may request changes.', 403);
     if (partner.approvalStatus && partner.approvalStatus !== 'Approved') fail('Only approved partners can receive change requests.');
     const data = await proposal(req, partner);
     const change = { _id: new mongoose.Types.ObjectId(), ...data, institution: req.user.institution, requester: req.user._id, requesterName: req.user.name, status: req.user.role === 'Staff' ? 'InstitutionReview' : 'HQReview', version: 0, createdAt: new Date(), updatedAt: new Date(), history: [event(req, 'Submitted', data.reason, data)] };
@@ -145,7 +152,7 @@ export function registerPartnerChanges(router) {
   }));
   router.put('/partner-change-requests/:id/:action', handler(async (req, res) => {
     const partnerScope = await reviewScope(req.user);
-    const partner = await IndustryPartner.findOne({ $and: [partnerScope, { 'changeRequests._id': req.params.id }] }).select('+changeRequests').lean();
+    const partner = await IndustryPartner.findOne({ $and: [partnerScope, { 'changeRequests._id': req.params.id }] }).select('+changeRequests').populate('addedBy', 'institution').lean();
     const change = partner?.changeRequests.find(c => String(c._id) === req.params.id);
     if (!change || !requestVisible(req.user, change)) fail('Request not found.', 404);
     if (!Number.isInteger(req.body.version) || req.body.version !== change.version) fail('This request changed. Reload before continuing.', 409);
@@ -155,7 +162,7 @@ export function registerPartnerChanges(router) {
     const hqReview = ['SuperAdmin', 'HQManager'].includes(req.user.role) && change.status === 'HQReview' && !own;
     let status, data = {}, comment = '';
     if (action === 'withdraw' && own && pending.includes(change.status)) status = 'Withdrawn';
-    else if (action === 'resubmit' && own && institutionRoles.includes(req.user.role) && change.status === 'Returned') {
+    else if (action === 'resubmit' && own && canInstitutionRequestPartnerChanges(req.user, partner) && change.status === 'Returned') {
       data = await proposal(req, partner);
       status = req.user.role === 'Staff' ? 'InstitutionReview' : 'HQReview';
       comment = data.reason;

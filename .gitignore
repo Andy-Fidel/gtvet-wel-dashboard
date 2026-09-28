@@ -29,6 +29,7 @@ client/playwright-report/
 # Scripts
 server/scripts/*
 !server/scripts/audit_placement_integrity.js
+!server/scripts/backfill_partner_submitter_institutions.js
 seed_*.js
 fix_*.js
 migrate_*.js

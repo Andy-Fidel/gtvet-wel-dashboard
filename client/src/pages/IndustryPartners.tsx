@@ -256,7 +256,7 @@ export default function IndustryPartners() {
                     {partner.institutionCapacity && <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 text-xs"><span><strong className="block text-gray-900">{partner.institutionCapacity.reservedAvailable}</strong> reserved available</span><span><strong className="block text-gray-900">{partner.institutionCapacity.sharedAvailable}</strong> shared available</span></div>}
                 </div>
 
-                {['Admin', 'Manager', 'Staff'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3"><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></div>}
+                {['Admin', 'Manager', 'Staff'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3">{partner.canRequestChanges && <Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button>}<Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></div>}
                 {(user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') && (
                     <div className="flex gap-2 pt-2 border-t border-gray-100 mt-4">
                          <Button
