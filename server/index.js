@@ -10,6 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { csrfProtection, inspectionReadOnlyGuard } from './middleware/auth.js';
+import { createSensitiveAuthLimiter } from './middleware/authRateLimit.js';
+import { logSecurityEvent } from './utils/securityEvents.js';
 
 dotenv.config();
 
@@ -140,18 +142,31 @@ const createApp = () => {
   const globalLimiter = rateLimit({
     windowMs: GLOBAL_RATE_LIMIT_WINDOW_MS,
     max: GLOBAL_RATE_LIMIT_MAX,
-    message: { message: "Too many requests from this IP, please try again after 15 minutes" },
     standardHeaders: true,
     legacyHeaders: false,
+    handler: (req, res, _next, options) => {
+      const resetTime = req.rateLimit?.resetTime?.getTime?.();
+      const retryAfterSeconds = resetTime
+        ? Math.max(1, Math.ceil((resetTime - Date.now()) / 1000))
+        : Math.ceil(GLOBAL_RATE_LIMIT_WINDOW_MS / 1000);
+      logSecurityEvent('global_rate_limit_rejected', req, {
+        status: options.statusCode,
+        limit: GLOBAL_RATE_LIMIT_MAX,
+        windowMs: GLOBAL_RATE_LIMIT_WINDOW_MS,
+        retryAfterSeconds,
+      });
+      res.status(options.statusCode).json({
+        message: 'Too many requests from this network. Please wait and try again.',
+        retryAfterSeconds,
+      });
+    },
   });
 
-  // Strict Rate Limiting for Auth Routes
-  const authLimiter = rateLimit({
+  // Account-scoped limiting protects credential operations without making
+  // unrelated users on a shared institution connection consume one bucket.
+  const authLimiter = createSensitiveAuthLimiter({
     windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
     max: AUTH_RATE_LIMIT_MAX,
-    message: { message: "Too many authentication attempts, please try again later" },
-    standardHeaders: true,
-    legacyHeaders: false,
   });
 
   app.use('/api', globalLimiter);

@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, ty
 import { toast } from '@/lib/toast';
 import { useQueryClient } from '@tanstack/react-query';
 import { AUTH_CONTEXT_KEY, endInspection, INSPECTION_KEY } from '@/lib/inspection';
+import { ensureCsrfToken } from '@/lib/csrf';
 
 interface User {
   _id: string;
@@ -284,30 +285,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const syncInFlightRef = useRef(false);
   const isLoggingInRef = useRef(false);
 
-  const getCsrfTokenFromCookie = useCallback(() => {
-    if (typeof document === 'undefined') return null;
-    const cookie = document.cookie
-      .split(';')
-      .map((entry) => entry.trim())
-      .find((entry) => entry.startsWith('gtvets_csrf='));
-    if (!cookie) return null;
-    return decodeURIComponent(cookie.slice('gtvets_csrf='.length));
-  }, []);
-
-  const ensureCsrfToken = useCallback(async (forceRefresh = false) => {
-    const existingToken = getCsrfTokenFromCookie();
-    if (existingToken && !forceRefresh) return existingToken;
-
-    const response = await fetch(`${API_BASE}/auth/csrf`, {
-      credentials: 'include',
-    });
-    if (!response.ok) {
-      throw new Error('Failed to initialize security token');
-    }
-    const payload = await response.json().catch(() => ({}));
-    return payload.csrfToken || getCsrfTokenFromCookie() || null;
-  }, [getCsrfTokenFromCookie]);
-
   const loadOfflineState = useCallback((scope = getActiveOfflineScope()) => {
     const queue = readOfflineQueue(scope);
     const history = readOfflineSyncHistory(scope);
@@ -426,7 +403,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return { passwordChangeRequired: data.passwordChangeRequired || false, mfaRequired: false };
-  }, [activateOfflineScope, ensureCsrfToken, hydrateSessionUser, queryClient]);
+  }, [activateOfflineScope, hydrateSessionUser, queryClient]);
 
   const register = useCallback(async (registerData: RegisterData) => {
     const csrfToken = await ensureCsrfToken();
@@ -448,7 +425,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await res.json();
     setUser(data.user);
     activateOfflineScope(getOfflineScopeForUser(data.user));
-  }, [activateOfflineScope, ensureCsrfToken]);
+  }, [activateOfflineScope]);
 
   const logout = useCallback(async () => {
     if (user?.inspection || localStorage.getItem(INSPECTION_KEY) === 'true') {
@@ -490,7 +467,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOfflineSyncHistory([]);
     setPasswordChangeRequired(false);
     setIsLoading(false);
-  }, [ensureCsrfToken, queryClient, user?.inspection]);
+  }, [queryClient, user?.inspection]);
 
   const syncOfflineQueue = useCallback(async () => {
     if (!user || user.inspection || localStorage.getItem(INSPECTION_KEY) === 'true' || typeof window === 'undefined' || !window.navigator.onLine || syncInFlightRef.current) {
@@ -592,7 +569,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (syncedCount > 0) {
       toast.success(`${syncedCount} offline action${syncedCount === 1 ? '' : 's'} synced successfully.`);
     }
-  }, [ensureCsrfToken, user]);
+  }, [user]);
 
   const removeOfflineQueueItem = useCallback((id: string) => {
     const nextQueue = readOfflineQueue().filter((item) => item.id !== id);
@@ -685,7 +662,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       throw error;
     }
-  }, [ensureCsrfToken, queryClient, user]);
+  }, [queryClient, user]);
 
   const changePassword = useCallback(async (newPassword: string, currentPassword?: string) => {
     const res = await authFetch(`${API_BASE}/auth/change-password`, {

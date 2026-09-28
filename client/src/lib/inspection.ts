@@ -1,4 +1,5 @@
 import { API_BASE } from '@/config'
+import { ensureCsrfToken } from '@/lib/csrf'
 
 export const INSPECTION_KEY = 'gtvets-inspection-active'
 export const AUTH_CONTEXT_KEY = 'gtvets-auth-context-change'
@@ -13,9 +14,7 @@ export function switchInspectionContext(active: boolean, destination: string) {
 }
 
 export async function endInspection() {
-  const csrfResponse = await fetch(`${API_BASE}/auth/csrf`, { credentials: 'include' })
-  if (!csrfResponse.ok) throw new Error('Unable to initialize security token. Try again.')
-  const { csrfToken } = await csrfResponse.json()
+  const csrfToken = await ensureCsrfToken()
   const response = await fetch(`${API_BASE}/auth/inspection/stop`, {
     method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': csrfToken },
   })

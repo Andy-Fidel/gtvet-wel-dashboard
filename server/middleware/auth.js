@@ -6,6 +6,7 @@ import { credentialVersion } from '../utils/authSessions.js';
 import { MfaCredential } from '../models/MfaCredential.js';
 import { inspectionParent } from '../utils/inspection.js';
 import { inspectionContext } from '../utils/inspectionContext.js';
+import { logSecurityEvent } from '../utils/securityEvents.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
@@ -194,6 +195,11 @@ export const csrfProtection = (req, res, next) => {
   const csrfHeader = req.headers['x-csrf-token'];
 
   if (!tokensMatch(csrfCookie, csrfHeader)) {
+    logSecurityEvent('csrf_validation_failed', req, {
+      status: 403,
+      hasCookieToken: typeof csrfCookie === 'string',
+      hasHeaderToken: typeof csrfHeader === 'string',
+    });
     return res.status(403).json({ message: 'Invalid CSRF token' });
   }
 

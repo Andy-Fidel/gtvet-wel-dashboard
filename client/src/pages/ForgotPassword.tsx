@@ -5,15 +5,7 @@ import { Input } from '@/components/ui/input';
 import { API_BASE } from '@/config';
 import { ArrowLeft, Mail } from 'lucide-react';
 import { toast } from '@/lib/toast';
-
-const ensureCsrfToken = async () => {
-  const response = await fetch(`${API_BASE}/auth/csrf`, { credentials: 'include' });
-  if (!response.ok) {
-    throw new Error('Failed to initialize security token');
-  }
-  const payload = await response.json().catch(() => ({}));
-  return payload.csrfToken as string | undefined;
-};
+import { ensureCsrfToken } from '@/lib/csrf';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');

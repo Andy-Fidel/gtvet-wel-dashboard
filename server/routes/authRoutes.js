@@ -12,6 +12,7 @@ import securityRoutes from './securityRoutes.js';
 import { MfaCredential } from '../models/MfaCredential.js';
 import { consumeMfaCode } from '../utils/mfa.js';
 import inspectionRoutes from './inspectionRoutes.js';
+import { logSecurityEvent } from '../utils/securityEvents.js';
 
 const router = express.Router();
 router.use('/inspection', inspectionRoutes);
@@ -24,10 +25,18 @@ async function issueSession(user, req, res, mfaVerified = false) {
 }
 
 router.get('/csrf', (req, res) => {
-  res.set('Cache-Control', 'no-store, max-age=0');
-  res.set('Pragma', 'no-cache');
-  const csrfToken = issueCsrfToken(res);
-  res.json({ csrfToken });
+  try {
+    res.set('Cache-Control', 'no-store, max-age=0');
+    res.set('Pragma', 'no-cache');
+    const csrfToken = issueCsrfToken(res);
+    res.json({ csrfToken });
+  } catch (error) {
+    logSecurityEvent('csrf_initialization_failed', req, {
+      status: 503,
+      errorName: error?.name || 'Error',
+    });
+    res.status(503).json({ message: 'The security service is temporarily unavailable. Please try again.' });
+  }
 });
 
 // POST /api/auth/register (SuperAdmin only - used to create initial Institution Admins)
