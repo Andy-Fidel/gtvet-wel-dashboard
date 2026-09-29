@@ -72,22 +72,12 @@ interface AuthContextType {
     passwordChangeRequired: boolean;
     mfaRequired?: boolean;
   }>;
-  register: (data: RegisterData) => Promise<void>;
   logout: () => Promise<void>;
   authFetch: (url: string, options?: RequestInit) => Promise<Response>;
   changePassword: (newPassword: string) => Promise<void>;
   syncOfflineQueue: () => Promise<void>;
   removeOfflineQueueItem: (id: string) => void;
   clearOfflineQueue: () => void;
-}
-
-interface RegisterData {
-  name: string;
-  email: string;
-  password: string;
-  institution: string;
-  role?: string;
-  phone?: string;
 }
 
 import { API_BASE } from '@/config';
@@ -405,28 +395,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { passwordChangeRequired: data.passwordChangeRequired || false, mfaRequired: false };
   }, [activateOfflineScope, hydrateSessionUser, queryClient]);
 
-  const register = useCallback(async (registerData: RegisterData) => {
-    const csrfToken = await ensureCsrfToken();
-    const res = await fetch(`${API_BASE}/auth/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-      },
-      credentials: 'include',
-      body: JSON.stringify(registerData),
-    });
-
-    if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.message || 'Registration failed');
-    }
-
-    const data = await res.json();
-    setUser(data.user);
-    activateOfflineScope(getOfflineScopeForUser(data.user));
-  }, [activateOfflineScope]);
-
   const logout = useCallback(async () => {
     if (user?.inspection || localStorage.getItem(INSPECTION_KEY) === 'true') {
       await endInspection();
@@ -707,7 +675,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     offlineSyncHistory,
     isSyncingOfflineQueue,
     login,
-    register,
     logout,
     authFetch,
     changePassword,

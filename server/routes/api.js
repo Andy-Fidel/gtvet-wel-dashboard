@@ -11352,12 +11352,17 @@ router.get('/my-institution', async (req, res) => {
 router.get('/institutions', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
         const filter = {};
-        // RegionalAdmin can only see their own region's institutions
         if (req.user.role === 'RegionalAdmin') {
             filter.region = req.user.region;
-        } else if (req.query.region) {
-            // SuperAdmin can filter by region via query param
+        } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
+            filter.name = req.user.institution;
+        } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
+            filter.region = req.user.region;
+        }
+        if (req.query.region && !filter.region) {
             filter.region = req.query.region;
+        } else if (req.query.region && filter.region !== req.query.region) {
+            return res.json([]);
         }
         const institutions = await Institution.find(filter).sort({ name: 1 }).lean();
         res.json(institutions);
@@ -11366,9 +11371,30 @@ router.get('/institutions', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 'R
     }
 });
 
+const institutionConflict = async (name, code, excludeId) => Institution.findOne({
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    $or: [
+        { name: new RegExp(`^${escapeRegex(name)}$`, 'i') },
+        { code: new RegExp(`^${escapeRegex(code)}$`, 'i') },
+    ],
+}).select('_id');
+
+const institutionInputError = (error, res, fallback) => {
+    if (error?.code === 11000) return res.status(409).json({ message: 'Institution name, code, or IDMS mapping is already in use' });
+    if (error?.name === 'ValidationError' || error?.name === 'CastError') {
+        return res.status(400).json({ message: Object.values(error.errors || {})[0]?.message || error.message });
+    }
+    console.error(fallback, error);
+    return res.status(500).json({ message: fallback });
+};
+
 router.post('/institutions', requireRole('SuperAdmin'), async (req, res) => {
     try {
         const newInstitution = new Institution(req.body);
+        await newInstitution.validate();
+        if (await institutionConflict(newInstitution.name, newInstitution.code)) {
+            return res.status(409).json({ message: 'Institution name or code already exists' });
+        }
         await newInstitution.save();
         await logAuditEvent({
             req,
@@ -11380,10 +11406,7 @@ router.post('/institutions', requireRole('SuperAdmin'), async (req, res) => {
         });
         res.status(201).json(newInstitution);
     } catch (error) {
-        if (error.code === 11000) {
-            return res.status(400).json({ message: 'Institution or Code already exists' });
-        }
-        res.status(500).json({ message: 'Error creating institution' });
+        return institutionInputError(error, res, 'Error creating institution');
     }
 });
 
@@ -11420,7 +11443,11 @@ const parseInstitutionCsv = (csvText = '') => {
     if (row.some((value) => value)) rows.push(row);
     if (rows.length < 2) return [];
 
-    const headers = rows[0].map((header) => header.trim().toLowerCase());
+    const aliases = { institution: 'name', 'inst. code': 'code', 'institution code': 'code', 'programs (code - name)': 'programs' };
+    const headers = rows[0].map((header) => {
+        const normalized = header.replace(/^\uFEFF/, '').trim().toLowerCase();
+        return aliases[normalized] || normalized;
+    });
     return rows.slice(1).map((values) => {
         const record = {};
         headers.forEach((header, index) => {
@@ -11441,10 +11468,15 @@ router.post('/institutions/import-csv', requireRole('SuperAdmin'), async (req, r
         if (records.length === 0) {
             return res.status(400).json({ message: 'CSV must include a header row and at least one institution row' });
         }
-
-        const created = [];
-        const skipped = [];
+        const headers = Object.keys(records[0]);
         const requiredFields = ['name', 'code', 'region', 'district', 'location'];
+        const missingHeaders = requiredFields.filter((field) => !headers.includes(field));
+        if (missingHeaders.length) {
+            return res.status(400).json({ message: `CSV is missing columns: ${missingHeaders.join(', ')}` });
+        }
+
+        let createdCount = 0;
+        const skipped = [];
 
         for (const [index, record] of records.entries()) {
             const missingFields = requiredFields.filter((field) => !record[field]);
@@ -11453,29 +11485,45 @@ router.post('/institutions/import-csv', requireRole('SuperAdmin'), async (req, r
                 continue;
             }
 
-            const existing = await Institution.findOne({
-                $or: [{ name: record.name }, { code: record.code }],
-            }).select('_id name code');
-            if (existing) {
-                skipped.push({ row: index + 2, reason: 'Institution name or code already exists' });
-                continue;
-            }
-
-            const institution = await Institution.create({
+            const institution = new Institution({
                 name: record.name,
                 code: record.code,
-                region: record.region,
+                region: record.region === 'G. Accra' ? 'Greater Accra' : record.region,
                 district: record.district,
                 location: record.location,
-                category: ['A', 'B', 'C'].includes(record.category) ? record.category : 'B',
-                status: record.status || 'Day',
-                gender: ['Boys', 'Girls', 'Mixed'].includes(record.gender) ? record.gender : 'Mixed',
-                calendarType: ['Single Track', 'Transitional'].includes(record.calendartype || record.calendar_type)
-                    ? (record.calendartype || record.calendar_type)
-                    : 'Single Track',
-                programs: (record.programs || '').split(/[|;]/).map((program) => program.trim()).filter(Boolean),
+                category: record.category || 'B',
+                status: record.status?.toLowerCase().replace(/\s*\/\s*/g, '/') === 'day/boarding'
+                    ? 'Day/Boarding' : (record.status || 'Day'),
+                gender: record.gender || 'Mixed',
+                calendarType: record.calendartype || record.calendar_type || 'Single Track',
+                programs: (record.programs || '').split(/\r?\n|[|;]/).map((program) => program.trim()).filter(Boolean),
             });
-            created.push(institution);
+            const validationError = institution.validateSync();
+            if (validationError) {
+                skipped.push({ row: index + 2, reason: Object.values(validationError.errors)[0]?.message || 'Invalid row' });
+                continue;
+            }
+            try {
+                if (await institutionConflict(institution.name, institution.code)) {
+                    skipped.push({ row: index + 2, reason: 'Institution name or code already exists' });
+                    continue;
+                }
+                await institution.save();
+            } catch (error) {
+                if (error?.code === 11000) {
+                    skipped.push({ row: index + 2, reason: 'Institution name, code, or IDMS mapping already exists' });
+                    continue;
+                }
+                console.error('Institution CSV import stopped:', error);
+                return res.status(createdCount ? 207 : 500).json({
+                    message: 'Import stopped after a database error; rows already created were retained',
+                    createdCount,
+                    skippedCount: skipped.length,
+                    skipped,
+                    failedRow: index + 2,
+                });
+            }
+            createdCount += 1;
 
             await logAuditEvent({
                 req,
@@ -11488,7 +11536,7 @@ router.post('/institutions/import-csv', requireRole('SuperAdmin'), async (req, r
         }
 
         res.status(201).json({
-            createdCount: created.length,
+            createdCount,
             skippedCount: skipped.length,
             skipped,
         });
@@ -11501,44 +11549,33 @@ router.post('/institutions/import-csv', requireRole('SuperAdmin'), async (req, r
 router.put('/institutions/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
         const existingInstitution = await Institution.findById(req.params.id);
-        const { name, code, region, district, location, category, status, gender, calendarType, programs, idmsInstitutionId, idmsInstitutionName, idmsSyncEnabled } = req.body;
-        const updatedInstitution = await Institution.findByIdAndUpdate(req.params.id, { name, code, region, district, location, category, status, gender, calendarType, programs, idmsInstitutionId, idmsInstitutionName, idmsSyncEnabled }, { returnDocument: 'after', runValidators: true });
-        if (updatedInstitution && existingInstitution) {
-            await logAuditEvent({
-                req,
-                action: 'UPDATE',
-                entityType: 'Institution',
-                entityId: updatedInstitution._id,
-                summary: `Updated institution ${updatedInstitution.name}`,
-                before: existingInstitution,
-                after: updatedInstitution,
-            });
+        if (!existingInstitution) return res.status(404).json({ message: 'Institution not found' });
+        if (req.body.name !== undefined && req.body.name !== existingInstitution.name) {
+            return res.status(409).json({ message: 'Institution name cannot be changed because existing records reference it by name' });
         }
-        res.json(updatedInstitution);
+        const before = existingInstitution.toObject();
+        const editable = ['code', 'region', 'district', 'location', 'category', 'status', 'gender', 'calendarType', 'programs', 'idmsInstitutionId', 'idmsInstitutionName', 'idmsSyncEnabled'];
+        for (const field of editable) if (Object.hasOwn(req.body, field)) existingInstitution[field] = req.body[field];
+        await existingInstitution.validate();
+        if (await institutionConflict(existingInstitution.name, existingInstitution.code, existingInstitution._id)) {
+            return res.status(409).json({ message: 'Institution name or code already exists' });
+        }
+        await existingInstitution.save();
+        await logAuditEvent({ req, action: 'UPDATE', entityType: 'Institution', entityId: existingInstitution._id,
+            summary: `Updated institution ${existingInstitution.name}`, before, after: existingInstitution });
+        res.json(existingInstitution);
     } catch (error) {
-        if (error.code === 11000) {
-            return res.status(400).json({ message: 'Institution code, name, or IDMS mapping is already in use' });
-        }
-        res.status(500).json({ message: 'Error updating institution' });
+        return institutionInputError(error, res, 'Error updating institution');
     }
 });
 
 router.delete('/institutions/:id', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        const deletedInstitution = await Institution.findByIdAndDelete(req.params.id);
-        if (deletedInstitution) {
-            await logAuditEvent({
-                req,
-                action: 'DELETE',
-                entityType: 'Institution',
-                entityId: deletedInstitution._id,
-                summary: `Deleted institution ${deletedInstitution.name}`,
-                before: deletedInstitution,
-            });
-        }
-        res.json({ message: 'Institution deleted' });
+        const institution = await Institution.findById(req.params.id).select('_id');
+        if (!institution) return res.status(404).json({ message: 'Institution not found' });
+        return res.status(409).json({ message: 'Institutions cannot be deleted while records use their names as identifiers' });
     } catch (error) {
-        res.status(500).json({ message: 'Error deleting institution' });
+        return institutionInputError(error, res, 'Error deleting institution');
     }
 });
 

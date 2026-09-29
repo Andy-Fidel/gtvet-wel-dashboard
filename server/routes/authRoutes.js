@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { User } from '../models/User.js';
+import { Institution } from '../models/Institution.js';
 import { auth, JWT_SECRET, clearSessionCookies, issueCsrfToken, setSessionCookies } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { logAuditEvent } from '../utils/audit.js';
@@ -47,7 +48,14 @@ router.post('/register', auth, (req, res, next) => {
   next();
 }, async (req, res) => {
   try {
-    const { name, email, password, institution, role, phone } = req.body;
+    const { name, email, password, institution, phone } = req.body;
+    if (typeof institution !== 'string' || !institution.trim()) {
+      return res.status(400).json({ message: 'A registered institution is required' });
+    }
+    const registeredInstitution = await Institution.findOne({ name: institution.trim() }).select('_id');
+    if (!registeredInstitution) {
+      return res.status(400).json({ message: 'Institution must be registered before creating its administrator' });
+    }
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -59,8 +67,8 @@ router.post('/register', auth, (req, res, next) => {
       name,
       email,
       password,
-      institution,
-      role: role || 'Staff',
+      institution: institution.trim(),
+      role: 'Admin',
       phone,
     });
 
@@ -84,6 +92,8 @@ router.post('/register', auth, (req, res, next) => {
     });
   } catch (error) {
     console.error('Registration error:', error);
+    if (error?.name === 'ValidationError') return res.status(400).json({ message: Object.values(error.errors)[0]?.message || 'Invalid user' });
+    if (error?.code === 11000) return res.status(409).json({ message: 'Email already registered' });
     res.status(500).json({ message: 'Error registering user' });
   }
 });

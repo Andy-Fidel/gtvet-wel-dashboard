@@ -47,6 +47,14 @@ interface InstitutionDetail extends Partial<InstitutionFormValues> {
   programs?: string[];
 }
 
+interface InstitutionImportResult {
+  createdCount: number;
+  skippedCount: number;
+  skipped: Array<{ row: number; reason: string }>;
+  failedRow?: number;
+  message?: string;
+}
+
 interface PartnerDetail {
   _id: string;
   name: string;
@@ -237,6 +245,7 @@ export default function SuperAdminDashboard() {
   const [partnerSearch, setPartnerSearch] = useState('');
   const [institutionBreakdownPage, setInstitutionBreakdownPage] = useState(1);
   const [csvImporting, setCsvImporting] = useState(false);
+  const [institutionImportResult, setInstitutionImportResult] = useState<InstitutionImportResult | null>(null);
   const [notifyingDeadlineKeys, setNotifyingDeadlineKeys] = useState<string[]>([]);
   const [expandedRegions, setExpandedRegions] = useState<string[]>([]);
   const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "semesterOverSemesterPercent">("placementRate");
@@ -293,6 +302,7 @@ export default function SuperAdminDashboard() {
     if (!file) return;
 
     setCsvImporting(true);
+    setInstitutionImportResult(null);
     try {
       const csv = await file.text();
       const response = await authFetch('/api/institutions/import-csv', {
@@ -300,10 +310,16 @@ export default function SuperAdminDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ csv }),
       });
-      const result = await response.json().catch(() => ({}));
+      const result = await response.json().catch(() => ({})) as InstitutionImportResult;
       if (!response.ok) throw new Error(result.message || 'Failed to import institutions');
-
-      toast.success(`Imported ${result.createdCount || 0} institutions${result.skippedCount ? `, skipped ${result.skippedCount}` : ''}`);
+      setInstitutionImportResult(result);
+      if (result.failedRow) {
+        toast.error(`Import stopped at row ${result.failedRow}; ${result.createdCount} institutions were retained`);
+      } else if (result.skippedCount) {
+        toast.warning(`Imported ${result.createdCount} institutions; ${result.skippedCount} rows skipped. Review details below.`);
+      } else {
+        toast.success(`Imported ${result.createdCount} institutions`);
+      }
       setRefreshKey((prev) => prev + 1);
     } catch (error) {
       console.error('Error importing institutions CSV:', error);
@@ -1726,6 +1742,21 @@ export default function SuperAdminDashboard() {
                 </Button>
               </div> : <Badge className="border border-slate-200 bg-slate-50 text-slate-600">View only</Badge>}
             </div>
+
+            {institutionImportResult && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                <p className="font-semibold">Import result: {institutionImportResult.createdCount} created, {institutionImportResult.skippedCount} skipped{institutionImportResult.failedRow ? `; stopped at row ${institutionImportResult.failedRow}` : ''}.</p>
+                {institutionImportResult.message && <p>{institutionImportResult.message}</p>}
+                {institutionImportResult.skipped.length > 0 && (
+                  <details className="mt-2 max-h-40 overflow-y-auto">
+                    <summary className="cursor-pointer font-semibold">View skipped rows</summary>
+                    <ul className="mt-2 list-disc pl-5">
+                      {institutionImportResult.skipped.map((item) => <li key={item.row}>Row {item.row}: {item.reason}</li>)}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
 
             {/* Summary Stats */}
             <div className="grid grid-cols-3 gap-4 mt-6">

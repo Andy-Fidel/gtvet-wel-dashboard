@@ -26,18 +26,20 @@ import { useAuth } from "@/context/AuthContext"
 import { toast } from "@/lib/toast"
 
 const formSchema = z.object({
-  name: z.string().min(2, "Name is required"),
-  code: z.string().min(2, "Code is required"),
-  district: z.string().min(2, "District is required"),
-  region: z.string().min(1, "Region is required"),
-  location: z.string().min(2, "Location is required"),
+  name: z.string().trim().min(2, "Name is required"),
+  code: z.string().trim().min(2, "Code is required"),
+  district: z.string().trim().min(2, "District is required"),
+  region: z.string().trim().min(1, "Region is required"),
+  location: z.string().trim().min(2, "Location is required"),
   category: z.enum(["A", "B", "C"]),
-  status: z.enum(["Day", "Boarding"]),
+  status: z.enum(["Day", "Boarding", "Day/Boarding"]),
   gender: z.enum(["Boys", "Girls", "Mixed"]),
   calendarType: z.enum(["Single Track", "Transitional"]),
   idmsInstitutionId: z.string().trim().optional(),
   idmsInstitutionName: z.string().trim().optional(),
   idmsSyncEnabled: z.boolean(),
+}).refine((value) => !value.idmsSyncEnabled || Boolean(value.idmsInstitutionId?.trim()), {
+  path: ["idmsInstitutionId"], message: "IDMS institution ID is required when sync is enabled",
 })
 
 export type InstitutionFormValues = z.infer<typeof formSchema>
@@ -59,7 +61,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
       district: initialData?.district ?? "",
       region: initialData?.region ?? "",
       location: initialData?.location ?? "",
-      category: initialData?.category ?? "A",
+      category: initialData?.category ?? "B",
       status: initialData?.status ?? "Day",
       gender: initialData?.gender ?? "Mixed",
       calendarType: initialData?.calendarType ?? "Single Track",
@@ -99,7 +101,8 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
             <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-800">Institution Name</FormLabel>
-                  <FormControl><Input placeholder="Ghana Tech Institute" {...field} /></FormControl>
+                  <FormControl><Input placeholder="Ghana Tech Institute" disabled={Boolean(initialData?._id)} {...field} /></FormControl>
+                  {initialData?._id && <p className="text-xs text-gray-500">Names are locked because existing records reference them.</p>}
                   <FormMessage />
                 </FormItem>
             )} />
@@ -196,6 +199,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
                     <SelectContent>
                       <SelectItem value="Day">Day</SelectItem>
                       <SelectItem value="Boarding">Boarding</SelectItem>
+                      <SelectItem value="Day/Boarding">Day/Boarding</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
