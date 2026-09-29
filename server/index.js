@@ -202,18 +202,21 @@ const createApp = () => {
 };
 
 import authRoutes from './routes/authRoutes.js';
-import apiRoutes, { processDuePlacementTransfers } from './routes/api.js';
+import apiRoutes, { processDuePlacementTransfers, processDueNotifications } from './routes/api.js';
 import uploadRoutes from './routes/uploads.js';
 import idmsRoutes from './routes/idmsRoutes.js';
 import { AuthSession } from './models/AuthSession.js';
 import { MfaCredential } from './models/MfaCredential.js';
+import { NotificationSchedule } from './models/NotificationSchedule.js';
+import { Notification } from './models/Notification.js';
+import { processPendingNotificationDeliveries } from './utils/notifications.js';
 
 const startWorker = async () => {
   const app = createApp();
   try {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/gtvet-wel');
     // MFA enrollment requires a unique credential per account; TTL cleanup is secondary.
-    await Promise.all([AuthSession.init(), MfaCredential.init()]);
+    await Promise.all([AuthSession.init(), MfaCredential.init(), Notification.init(), NotificationSchedule.init()]);
     console.log(`MongoDB connected (worker ${process.pid})`);
     let transfersRunning = false;
     const processTransfers = async () => {
@@ -225,6 +228,25 @@ const startWorker = async () => {
     };
     void processTransfers();
     setInterval(processTransfers, 60000).unref();
+    let notificationsRunning = false;
+    const processNotifications = async () => {
+      if (notificationsRunning) return;
+      notificationsRunning = true;
+      try {
+        await NotificationSchedule.updateOne({ key: 'due-notifications' }, { $setOnInsert: { nextRunAt: new Date(0) } }, { upsert: true });
+        const now = new Date();
+        const lease = await NotificationSchedule.findOneAndUpdate(
+          { key: 'due-notifications', nextRunAt: { $lte: now } },
+          { $set: { nextRunAt: new Date(now.getTime() + 15 * 60000) } },
+          { returnDocument: 'after' }
+        );
+        if (lease) await processDueNotifications();
+        await processPendingNotificationDeliveries();
+      } catch (error) { console.error('Notification processing failed:', error); }
+      finally { notificationsRunning = false; }
+    };
+    void processNotifications();
+    setInterval(processNotifications, 60000).unref();
   } catch (err) {
     console.error(`MongoDB connection error (worker ${process.pid}):`, err);
     process.exit(1);

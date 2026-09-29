@@ -22,7 +22,7 @@ export function Navbar() {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, logout, offlineQueueCount, isSyncingOfflineQueue } = useAuth()
-  const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications()
+  const { notifications, unreadCount, markAsRead, markAllAsRead, isError } = useNotifications()
   const isGuardian = user?.role === "Guardian"
   
   const getPageTitle = (pathname: string) => {
@@ -138,7 +138,9 @@ export function Navbar() {
                 )}
               </div>
               <div className="max-h-[400px] overflow-y-auto overflow-x-hidden">
-                {notifications.length === 0 ? (
+                {isError ? (
+                  <p role="alert" className="p-4 text-sm text-rose-700">Notifications could not be loaded.</p>
+                ) : notifications.length === 0 ? (
                   <div className="p-8 text-center flex flex-col items-center justify-center space-y-3">
                     <div className="h-12 w-12 bg-gray-50 rounded-full flex items-center justify-center text-gray-400">
                       <Bell className="h-5 w-5" />

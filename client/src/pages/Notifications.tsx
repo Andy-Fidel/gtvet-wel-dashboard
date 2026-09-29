@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 
 export default function Notifications() {
-  const { notifications, markAsRead, markAllAsRead, unreadCount } = useNotifications();
+  const { notifications, markAsRead, markAllAsRead, unreadCount, isLoading, isError, hasMore, loadingMore, loadMoreError, loadMore } = useNotifications();
   const navigate = useNavigate();
 
   return (
@@ -21,7 +21,11 @@ export default function Notifications() {
       </div>
 
       <div className="bg-white rounded-[2rem] p-6 md:p-10 shadow-xl border border-gray-100 flex flex-col gap-4">
-        {notifications.length === 0 ? (
+        {isError ? (
+            <p role="alert" className="text-rose-700">Notifications could not be loaded. Please try again.</p>
+        ) : isLoading ? (
+            <p className="text-gray-500">Loading notifications…</p>
+        ) : notifications.length === 0 ? (
             <div className="py-20 text-center flex flex-col items-center justify-center space-y-4">
                 <div className="h-20 w-20 bg-gray-50 rounded-full flex items-center justify-center text-gray-300">
                     <Bell className="h-10 w-10" />
@@ -48,6 +52,12 @@ export default function Notifications() {
                 </div>
             ))
         )}
+        {hasMore && !isError ? (
+          <Button variant="outline" disabled={loadingMore} onClick={() => void loadMore()}>
+            {loadingMore ? 'Loading…' : 'Load older notifications'}
+          </Button>
+        ) : null}
+        {loadMoreError ? <p role="alert" className="text-sm text-rose-700">Could not load older notifications. Please try again.</p> : null}
       </div>
     </div>
   );

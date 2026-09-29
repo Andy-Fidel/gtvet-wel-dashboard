@@ -1,180 +1,156 @@
 import { User } from '../models/User.js';
 import { Notification } from '../models/Notification.js';
-import { sendWhatsAppMessage } from './whatsapp.js';
+import { sendWhatsAppMessage, canSendWhatsApp } from './whatsapp.js';
 import { isWebPushConfigured, sendWebPushToUser } from './webPush.js';
 
-const notificationPreferenceKeyByType = {
-  system: 'systemUpdates',
-  placement: 'placementUpdates',
-  visit: 'visitUpdates',
-  assessment: 'assessmentUpdates',
-  report: 'reportReminders',
-  partner: 'partnerUpdates',
+const preferenceByType = {
+  system: 'systemUpdates', placement: 'placementUpdates', visit: 'visitUpdates',
+  assessment: 'assessmentUpdates', report: 'reportReminders', partner: 'partnerUpdates',
   support: 'supportUpdates',
 };
+const channels = ['push', 'whatsApp'];
+const maxAttempts = 5;
+const retryDelay = (attempt) => Math.min(60 * 60 * 1000, 30 * 1000 * 2 ** (attempt - 1));
 
-/**
- * Robust notification dispatcher.
- * Intelligently resolves recipients based on explicit IDs, roles, regions, institutions, or partner associations.
- * Creates deduplicated notifications in the database.
- */
-export async function notifyUsers({
-  recipientIds = [],
-  roles = [],
-  region = null,
-  institution = null,
-  partnerId = null,
-  sender = null,
-  type = 'system',
-  title,
-  message,
-  link = null,
-  dedupeKey = null,
-}) {
+async function deliverChannel(notification, channel) {
+  const status = `${channel}Status`;
+  const attempts = `${channel}Attempts`;
+  const nextAttempt = `${channel}NextAttemptAt`;
+  const lockedUntil = `${channel}LockedUntil`;
+  const sentAt = `${channel}SentAt`;
+  const errorField = `${channel}Error`;
+  const now = new Date();
+  const claimed = await Notification.findOneAndUpdate({
+    _id: notification._id,
+    [status]: { $in: ['pending', 'failed'] },
+    $and: [
+      { $or: [{ [attempts]: { $exists: false } }, { [attempts]: { $lt: maxAttempts } }] },
+      { $or: [{ [nextAttempt]: { $exists: false } }, { [nextAttempt]: { $lte: now } }] },
+      { $or: [{ [lockedUntil]: { $exists: false } }, { [lockedUntil]: { $lte: now } }] },
+    ],
+  }, { $set: { [lockedUntil]: new Date(now.getTime() + 30000) }, $inc: { [attempts]: 1 } }, { returnDocument: 'after' });
+  if (!claimed) return null;
+
+  let outcome = { ok: false, skipped: false, error: 'Delivery failed' };
   try {
-    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-    let targetUserIds = [...recipientIds];
-
-    // Build dynamic query if targeting loosely
-    if (roles.length > 0 || region || institution || partnerId) {
-      const query = {};
-      if (roles.length > 0) query.role = { $in: roles };
-      if (region) query.region = region;
-      if (institution) query.institution = institution;
-      if (partnerId) query.partnerId = partnerId;
-
-      const users = await User.find(query).select('_id');
-      targetUserIds = [...targetUserIds, ...users.map(u => u._id.toString())];
-    }
-
-    // Deduplicate
-    targetUserIds = [...new Set(targetUserIds.map(id => id.toString()))];
-
-    // Filter out sender from receiving their own notification
-    if (sender) {
-      targetUserIds = targetUserIds.filter(id => id !== sender.toString());
-    }
-
-    if (targetUserIds.length === 0) return;
-
-    const preferenceKey = notificationPreferenceKeyByType[type] || 'systemUpdates';
-    const eligibleRecipients = await User.find({
-      _id: { $in: targetUserIds },
-      [`notificationPreferences.${preferenceKey}`]: { $ne: false },
-    }).select('_id name phone notificationPreferences');
-
-    if (eligibleRecipients.length === 0) return;
-
-    const recipientChannelMap = new Map();
-    eligibleRecipients.forEach((user) => {
-      const channels = [];
-      if (user.notificationPreferences?.inApp !== false) channels.push('inApp');
-      if (user.notificationPreferences?.whatsApp === true && user.phone?.trim()) channels.push('whatsApp');
-      if (user.notificationPreferences?.push !== false && isWebPushConfigured()) channels.push('push');
-      if (channels.length > 0) {
-        recipientChannelMap.set(user._id.toString(), {
-          user,
-          channels,
-        });
-      }
-    });
-
-    targetUserIds = Array.from(recipientChannelMap.keys());
-
-    if (targetUserIds.length === 0) return;
-
-    if (dedupeKey) {
-      const existingNotifications = await Notification.find({
-        recipient: { $in: targetUserIds },
-        dedupeKey,
-      }).select('recipient');
-
-      const existingRecipients = new Set(existingNotifications.map((notification) => notification.recipient.toString()));
-      targetUserIds = targetUserIds.filter((userId) => !existingRecipients.has(userId));
-    }
-
-    if (targetUserIds.length === 0) return;
-
-    const notifications = targetUserIds.map((userId) => {
-      const channelInfo = recipientChannelMap.get(userId);
-      const channels = channelInfo?.channels || [];
-      return {
-        recipient: userId,
-        sender,
-        type,
-        title,
-        message,
-        link,
-        dedupeKey,
-        visibleInApp: channels.includes('inApp'),
-        deliveryChannels: channels,
-        whatsAppStatus: channels.includes('whatsApp') ? 'pending' : undefined,
-        pushStatus: channels.includes('push') ? 'pending' : undefined,
-      };
-    });
-
-    const insertedNotifications = await Notification.insertMany(notifications);
-
-    await Promise.all(insertedNotifications.map(async (notification) => {
-      if (notification.deliveryChannels?.includes('push')) {
-        const delivery = await sendWebPushToUser(notification.recipient, notification).catch((error) => ({
-          sent: 0,
-          failed: 1,
-          skipped: false,
-          error: error instanceof Error ? error.message : 'Push delivery failed',
-        }));
-
-        const pushUpdate = {
-          pushStatus: delivery.skipped ? 'skipped' : delivery.sent > 0 ? 'sent' : 'failed',
-          pushError: delivery.error || '',
-        };
-        if (delivery.sent > 0) pushUpdate.pushSentAt = new Date();
-
-        await Notification.updateOne(
-          { _id: notification._id },
-          { $set: pushUpdate }
-        );
-      }
-
-      if (!notification.deliveryChannels?.includes('whatsApp')) return;
-
-      const channelInfo = recipientChannelMap.get(notification.recipient.toString());
-      const user = channelInfo?.user;
-      if (!user?.phone) return;
-
-      const delivery = await sendWhatsAppMessage({
-        to: user.phone,
-        body: `${title}\n\n${message}${link ? `\n\nOpen: ${link.startsWith('http') ? link : `${frontendBase}${link}`}` : ''}`,
-      }).catch((error) => ({
-        ok: false,
-        skipped: false,
-        error: error instanceof Error ? error.message : 'WhatsApp send failed',
-      }));
-
-      if (delivery.ok) {
-        await Notification.updateOne(
-          { _id: notification._id },
-          {
-            $set: {
-              whatsAppStatus: 'sent',
-              whatsAppSentAt: new Date(),
-              whatsAppError: '',
-            },
-          }
-        );
+    const user = await User.findOne({ _id: claimed.recipient, status: 'Active' }).select('phone notificationPreferences');
+    const category = preferenceByType[claimed.type] || 'systemUpdates';
+    if (!user || user.notificationPreferences?.[category] === false) {
+      outcome = { ok: false, skipped: true, error: 'Recipient or notification category is no longer active' };
+    } else if (channel === 'push') {
+      if (user.notificationPreferences?.push === false || !isWebPushConfigured()) {
+        outcome = { ok: false, skipped: true, error: 'Push is disabled' };
       } else {
-        await Notification.updateOne(
-          { _id: notification._id },
-          {
-            $set: {
-              whatsAppStatus: 'failed',
-              whatsAppError: delivery.error || 'WhatsApp send failed',
-            },
-          }
-        );
+        const result = await sendWebPushToUser(claimed.recipient, claimed);
+        outcome = { ok: result.sent > 0, skipped: result.skipped, error: result.error || '' };
       }
-    }));
+    } else if (!user.notificationPreferences?.whatsApp || !user.phone?.trim() || !canSendWhatsApp()) {
+      outcome = { ok: false, skipped: true, error: 'WhatsApp is disabled' };
+    } else {
+      const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+      const link = claimed.link && claimed.link.startsWith('/') ? `${frontendBase}${claimed.link}` : '';
+      const result = await sendWhatsAppMessage({
+        to: user.phone,
+        body: `${claimed.title}\n\n${claimed.message}${link ? `\n\nOpen: ${link}` : ''}`,
+      });
+      outcome = { ok: result.ok, skipped: result.skipped, error: result.error || '' };
+    }
   } catch (error) {
-    console.error('Error dispatching notifications:', error);
+    outcome = { ok: false, skipped: false, error: error instanceof Error ? error.message : 'Delivery failed' };
+  }
+
+  const update = {
+    [status]: outcome.ok ? 'sent' : outcome.skipped ? 'skipped' : 'failed',
+    [errorField]: outcome.error,
+    [lockedUntil]: null,
+    [nextAttempt]: outcome.ok || outcome.skipped || claimed[attempts] >= maxAttempts
+      ? null : new Date(Date.now() + retryDelay(claimed[attempts])),
+  };
+  if (outcome.ok) update[sentAt] = new Date();
+  await Notification.updateOne({ _id: claimed._id }, { $set: update });
+  if (!outcome.ok && !outcome.skipped) {
+    console.error(`Notification ${channel} delivery failed`, { notificationId: String(claimed._id), attempts: claimed[attempts], error: outcome.error });
+  }
+  return outcome;
+}
+
+export async function processPendingNotificationDeliveries(limit = 50) {
+  const now = new Date();
+  for (const channel of channels) {
+    const status = `${channel}Status`;
+    const attempts = `${channel}Attempts`;
+    const nextAttempt = `${channel}NextAttemptAt`;
+    const pending = await Notification.find({
+      [status]: { $in: ['pending', 'failed'] },
+      $and: [
+        { $or: [{ [attempts]: { $exists: false } }, { [attempts]: { $lt: maxAttempts } }] },
+        { $or: [{ [nextAttempt]: { $exists: false } }, { [nextAttempt]: { $lte: now } }] },
+      ],
+    }).select('_id').sort({ [nextAttempt]: 1 }).limit(limit).lean();
+    for (const notification of pending) await deliverChannel(notification, channel);
+  }
+}
+
+async function dispatchNotifications({
+  recipientIds = [], roles = [], region = null, institution = null, partnerId = null,
+  sender = null, type = 'system', title, message, link = null, dedupeKey = null,
+}) {
+  const targetIds = new Set(recipientIds.filter(Boolean).map(String));
+  if (roles.length > 0 || region || institution || partnerId) {
+    const query = { status: 'Active' };
+    if (roles.length > 0) query.role = { $in: roles };
+    if (region) query.region = region;
+    if (institution) query.institution = institution;
+    if (partnerId) query.partnerId = partnerId;
+    const users = await User.find(query).select('_id');
+    users.forEach((user) => targetIds.add(String(user._id)));
+  }
+  if (sender) targetIds.delete(String(sender));
+  if (!targetIds.size) return { created: 0, pushSent: 0, pushFailed: 0 };
+
+  const category = preferenceByType[type] || 'systemUpdates';
+  const recipients = await User.find({
+    _id: { $in: [...targetIds] }, status: 'Active',
+    [`notificationPreferences.${category}`]: { $ne: false },
+  }).select('_id phone notificationPreferences');
+  const created = [];
+  for (const user of recipients) {
+    const deliveryChannels = [];
+    if (user.notificationPreferences?.inApp !== false) deliveryChannels.push('inApp');
+    if (user.notificationPreferences?.whatsApp === true && user.phone?.trim() && canSendWhatsApp()) deliveryChannels.push('whatsApp');
+    if (user.notificationPreferences?.push !== false && isWebPushConfigured()) deliveryChannels.push('push');
+    if (!deliveryChannels.length) continue;
+    const identity = dedupeKey ? `${String(user._id)}:${dedupeKey}` : undefined;
+    if (identity && await Notification.exists({ recipient: user._id, dedupeKey })) continue;
+    try {
+      created.push(await Notification.create({
+        recipient: user._id, sender, type, title, message, link, dedupeKey,
+        ...(identity ? { dedupeIdentity: identity } : {}),
+        visibleInApp: deliveryChannels.includes('inApp'), deliveryChannels,
+        ...(deliveryChannels.includes('push') ? { pushStatus: 'pending', pushNextAttemptAt: new Date() } : {}),
+        ...(deliveryChannels.includes('whatsApp') ? { whatsAppStatus: 'pending', whatsAppNextAttemptAt: new Date() } : {}),
+      }));
+    } catch (error) {
+      if (identity && error?.code === 11000) continue;
+      throw error;
+    }
+  }
+
+  const deliveries = await Promise.all(created.flatMap((notification) => channels
+    .filter((channel) => notification.deliveryChannels.includes(channel))
+    .map(async (channel) => ({ channel, result: await deliverChannel(notification, channel) }))));
+  return {
+    created: created.length,
+    pushSent: deliveries.filter(({ channel, result }) => channel === 'push' && result?.ok).length,
+    pushFailed: deliveries.filter(({ channel, result }) => channel === 'push' && result && !result.ok).length,
+  };
+}
+
+export async function notifyUsers(options) {
+  try {
+    return await dispatchNotifications(options);
+  } catch (error) {
+    console.error('Notification dispatch failed:', error);
+    return { created: 0, pushSent: 0, pushFailed: 0, error: 'Notification dispatch failed' };
   }
 }

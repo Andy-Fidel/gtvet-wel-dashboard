@@ -3,6 +3,18 @@ import { PushSubscription } from '../models/PushSubscription.js';
 
 let configuredKeyPair = '';
 
+export const isTrustedPushEndpoint = (value) => {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.port || url.username || url.password || url.hash) return false;
+    const host = url.hostname.toLowerCase();
+    return host === 'fcm.googleapis.com'
+      || host === 'updates.push.services.mozilla.com'
+      || host === 'web.push.apple.com'
+      || (host.endsWith('.notify.windows.com') && host !== '.notify.windows.com');
+  } catch { return false; }
+};
+
 const getConfiguration = () => ({
   publicKey: process.env.VAPID_PUBLIC_KEY?.trim(),
   privateKey: process.env.VAPID_PRIVATE_KEY?.trim(),
@@ -45,11 +57,15 @@ export async function sendWebPushToUser(userId, notification) {
 
   const results = await Promise.all(subscriptions.map(async (subscription) => {
     try {
+      if (!isTrustedPushEndpoint(subscription.endpoint)) {
+        await PushSubscription.deleteOne({ _id: subscription._id });
+        return { ok: false, error: 'Untrusted push endpoint' };
+      }
       await webpush.sendNotification({
         endpoint: subscription.endpoint,
         expirationTime: subscription.expirationTime,
         keys: subscription.keys,
-      }, payload, { TTL: 60 * 60 * 24, urgency: 'normal' });
+      }, payload, { TTL: 60 * 60 * 24, urgency: 'normal', timeout: 10000 });
       await PushSubscription.updateOne(
         { _id: subscription._id },
         { $set: { lastUsedAt: new Date() } }

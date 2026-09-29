@@ -133,12 +133,16 @@ test('operational mutations are denied except explicit HQ Manager decisions', ()
     '/partner-change-requests/:id/:action',
     '/notifications/read-all', '/notifications/:id/read',
   ]);
+  const personal = new Set([
+    'post /push/subscribe', 'delete /push/subscribe', 'post /push/test',
+    'put /settings/notifications', 'post /settings/notifications/test-whatsapp',
+  ]);
   for (const layer of router.stack.filter((entry) => entry.route)) {
     const route = layer.route;
     for (const method of Object.keys(route.methods).filter((value) => !['get', 'head', 'options'].includes(value))) {
       const path = route.path.replaceAll(':id', 'record-id').replace(':action', 'approve');
-      assert.equal(canHQRequest('HQManager', method.toUpperCase(), path), method === 'put' && allowed.has(route.path), `${method} ${path}`);
-      assert.equal(canHQRequest('HQStaff', method.toUpperCase(), path), method === 'put' && path.startsWith('/notifications/'), `${method} ${path}`);
+      assert.equal(canHQRequest('HQManager', method.toUpperCase(), path), (method === 'put' && allowed.has(route.path)) || personal.has(`${method} ${route.path}`), `${method} ${path}`);
+      assert.equal(canHQRequest('HQStaff', method.toUpperCase(), path), (method === 'put' && path.startsWith('/notifications/')) || personal.has(`${method} ${route.path}`), `${method} ${path}`);
     }
   }
   assert.equal(canHQRequest('HQStaff', 'POST', '/documents/upload'), false);

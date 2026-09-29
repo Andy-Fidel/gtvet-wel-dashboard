@@ -17,6 +17,10 @@ export const canHQRequest = (role, method, path) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
   // Personal notification state remains editable for read-only users.
   if (method === 'PUT' && /^\/notifications\/(read-all|[^/]+\/read)$/.test(path)) return true;
+  if (method === 'POST' && /^\/push\/(subscribe|test)$/.test(path)) return true;
+  if (method === 'DELETE' && path === '/push/subscribe') return true;
+  if (method === 'PUT' && path === '/settings/notifications') return true;
+  if (method === 'POST' && path === '/settings/notifications/test-whatsapp') return true;
   return hasHQPermission(role, 'hq:approve') && method === 'PUT' && (
     /^\/semester-reports\/[^/]+\/(hq-approve|reject)$/.test(path)
     || /^\/industry-partners\/[^/]+\/hq-(approve|reject)$/.test(path)

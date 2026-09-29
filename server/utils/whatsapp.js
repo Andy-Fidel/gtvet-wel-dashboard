@@ -48,6 +48,7 @@ export const sendWhatsAppMessage = async ({ to, body }) => {
 
   const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
     method: 'POST',
+    signal: AbortSignal.timeout(10000),
     headers: {
       Authorization: `Basic ${authHeader}`,
       'Content-Type': 'application/x-www-form-urlencoded',

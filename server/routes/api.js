@@ -51,7 +51,7 @@ import crypto from 'crypto';
 import { Notification } from '../models/Notification.js';
 import { PushSubscription } from '../models/PushSubscription.js';
 import { notifyUsers } from '../utils/notifications.js';
-import { getVapidPublicKey, isWebPushConfigured } from '../utils/webPush.js';
+import { getVapidPublicKey, isWebPushConfigured, isTrustedPushEndpoint } from '../utils/webPush.js';
 import { logAuditEvent } from '../utils/audit.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
@@ -143,10 +143,28 @@ const getHQPartnerFilter = async (user) => {
   return { region: partnerRegionMatch(user.region) };
 };
 
+export const getScopedHQRecipients = async ({ institution, region, linkedInstitutions = [], roles = ['SuperAdmin', 'HQManager'] }) => {
+    const users = await User.find({ role: { $in: roles }, status: 'Active' })
+        .select('_id role hqScopeType institution region email notificationPreferences');
+    return users.filter((user) => {
+        if (user.role === 'SuperAdmin') return true;
+        if (!user.hqScopeType || user.hqScopeType === 'National') return true;
+        if (user.hqScopeType === 'Institution') {
+            return Boolean(user.institution && (user.institution === institution || linkedInstitutions.includes(user.institution)));
+        }
+        return Boolean(region && partnerRegionMatch(user.region).test(region));
+    });
+};
+
+const getInstitutionRegion = async (institutionName) => {
+    const institution = await Institution.findOne({ name: institutionName }).select('region').lean();
+    return institution?.region || null;
+};
+
 // Helper: Notify Institution Admins
 const notifyInstitutionAdmins = async (institutionName, emailFn, ...args) => {
     try {
-        const admins = await User.find({ role: 'Admin', institution: institutionName });
+        const admins = await User.find({ role: 'Admin', institution: institutionName, status: 'Active', 'notificationPreferences.email': true });
         const emails = admins.map(u => u.email).filter(e => e).join(',');
         if (emails) {
             await emailFn(emails, ...args);
@@ -980,8 +998,9 @@ const markSupportTicketReadForUser = (ticket, userId) => {
 
 const notifyHQOfPartnerSubmission = async ({ partner, sender }) => {
     try {
+        const hqRecipients = await getScopedHQRecipients({ region: partner.region, linkedInstitutions: partner.linkedInstitutions || [] });
         await notifyUsers({
-            roles: ['SuperAdmin', 'HQManager'],
+            recipientIds: hqRecipients.map((user) => user._id),
             sender: sender?._id || null,
             type: 'partner',
             title: 'New industry partner awaiting HQ approval',
@@ -990,15 +1009,8 @@ const notifyHQOfPartnerSubmission = async ({ partner, sender }) => {
             dedupeKey: `partner-hq-submission:${partner._id}`,
         });
 
-        const hqRecipients = await User.find({
-            role: { $in: ['SuperAdmin', 'HQManager'] },
-            status: 'Active',
-            email: { $exists: true, $ne: '' },
-            'notificationPreferences.email': true,
-            'notificationPreferences.partnerUpdates': { $ne: false },
-        }).select('email');
-
-        const emails = hqRecipients.map((user) => user.email).filter(Boolean).join(',');
+        const emails = hqRecipients.filter((user) => user.notificationPreferences?.email && user.notificationPreferences?.partnerUpdates !== false)
+            .map((user) => user.email).filter(Boolean).join(',');
         if (emails) {
             await sendHQIndustryPartnerSubmissionEmail(emails, partner, sender);
         }
@@ -1922,6 +1934,15 @@ const ensurePartnerEvaluationNotifications = async (user) => {
   }
 };
 
+export const processDueNotifications = async () => {
+  const institutions = await User.distinct('institution', { role: { $in: INSTITUTION_NOTIFICATION_ROLES }, status: 'Active', institution: { $nin: ['', 'N/A', null] } });
+  for (const institution of institutions) {
+    await ensureInstitutionExceptionNotifications({ role: 'Admin', institution });
+  }
+  const partners = await User.find({ role: 'IndustryPartner', status: 'Active', partnerId: { $ne: null } }).select('_id role partnerId');
+  for (const partner of partners) await ensurePartnerEvaluationNotifications(partner);
+};
+
 const buildLearnerReadiness = (learner, documents = []) => {
   const missingFields = [];
 
@@ -2193,7 +2214,7 @@ router.post('/push/subscribe', async (req, res) => {
         if (
             typeof endpoint !== 'string'
             || endpoint.length > 2048
-            || !endpoint.startsWith('https://')
+            || !isTrustedPushEndpoint(endpoint)
             || typeof keys?.p256dh !== 'string'
             || typeof keys?.auth !== 'string'
             || keys.p256dh.length > 512
@@ -2252,13 +2273,14 @@ router.post('/push/test', async (req, res) => {
             return res.status(400).json({ message: 'Enable push notifications on this device first' });
         }
 
-        await notifyUsers({
+        const result = await notifyUsers({
             recipientIds: [req.user._id],
             type: 'system',
             title: 'Push notifications are working',
             message: 'You will now receive important GTVETS WEL updates on this device.',
             link: '/notifications',
         });
+        if (!result.pushSent) return res.status(502).json({ message: 'Push delivery was not accepted by a push service. Check your subscription and try again.' });
         res.json({ message: 'Test notification sent' });
     } catch (error) {
         console.error('Error sending test push notification:', error);
@@ -2268,22 +2290,28 @@ router.post('/push/test', async (req, res) => {
 
 router.get('/notifications', async (req, res) => {
     try {
-        await ensureInstitutionExceptionNotifications(req.user);
-        await ensurePartnerEvaluationNotifications(req.user);
-
         const archivedOnly = req.query.archived === 'true';
         const includeArchived = req.query.includeArchived === 'true';
+        const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+        const before = req.query.before;
+        if (before && !mongoose.isValidObjectId(before)) return res.status(400).json({ message: 'Invalid notification cursor' });
 
-        const notifications = await Notification.find({
+        const filter = {
             recipient: req.user._id,
             visibleInApp: { $ne: false },
             ...buildArchiveQueryFilter({ includeArchived, archivedOnly }),
-        })
-            .sort({ createdAt: -1 })
-            .limit(50)
-            .populate('sender', 'name role profilePicture');
-        
-        res.json(notifications);
+            ...(before ? { _id: { $lt: before } } : {}),
+        };
+        const [notifications, unreadCount] = await Promise.all([
+          Notification.find(filter)
+            .sort({ _id: -1 })
+            .limit(limit + 1)
+            .populate('sender', 'name role profilePicture'),
+          Notification.countDocuments({ recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, read: false }),
+        ]);
+        const hasMore = notifications.length > limit;
+        if (hasMore) notifications.pop();
+        res.json({ items: notifications, unreadCount, nextCursor: hasMore ? String(notifications.at(-1)._id) : null });
     } catch (error) {
         res.status(500).json({ message: 'Error fetching notifications' });
     }
@@ -2352,7 +2380,7 @@ router.get('/settings/notifications/whatsapp-status', requireRole('HQManager', '
     }
 });
 
-router.put('/settings/notifications', requireRole(...ADMIN_ROLES), async (req, res) => {
+router.put('/settings/notifications', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
     try {
         const allowedKeys = [
             'inApp',
@@ -2398,7 +2426,7 @@ router.put('/settings/notifications', requireRole(...ADMIN_ROLES), async (req, r
     }
 });
 
-router.post('/settings/notifications/test-whatsapp', requireRole(...ADMIN_ROLES), async (req, res) => {
+router.post('/settings/notifications/test-whatsapp', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('name phone notificationPreferences');
         if (!user) {
@@ -3452,7 +3480,7 @@ router.post('/support-tickets', async (req, res) => {
                 message: ticketType === 'Incident'
                     ? `${req.user.name} reported a ${incidentType} incident${institution && institution !== 'N/A' ? ` for ${institution}` : ''}: ${ticket.subject}.`
                     : `${req.user.name} submitted a ${priority.toLowerCase()} priority support request: ${ticket.subject}.`,
-                link: req.user.role === 'Guardian' ? '/guardian-dashboard' : `/support-center?ticket=${ticket._id}`,
+                link: `/support-center?ticket=${ticket._id}`,
             };
 
             await notifyUsers({
@@ -3461,12 +3489,15 @@ router.post('/support-tickets', async (req, res) => {
             });
 
             if (ticketType === 'Incident' || req.user.role === 'Guardian') {
-                await notifyUsers({
-                    recipientIds,
-                    roles: ['Admin', 'Manager'],
-                    institution: institution !== 'N/A' ? institution : null,
-                    ...notificationPayload,
-                });
+                if (institution && institution !== 'N/A') {
+                    await notifyUsers({
+                        recipientIds,
+                        roles: ['Admin', 'Manager'],
+                        institution,
+                        ...notificationPayload,
+                        link: `/support-center?ticket=${ticket._id}`,
+                    });
+                }
             }
         }
 
@@ -4405,7 +4436,7 @@ router.post('/monitoring-visits', async (req, res) => {
         });
 
         if (visitData.industryPartner) {
-            notifyUsers({
+            await notifyUsers({
                 partnerId: visitData.industryPartner,
                 sender: req.user._id,
                 type: 'visit',
@@ -4417,7 +4448,7 @@ router.post('/monitoring-visits', async (req, res) => {
 
         // Notify the originating officer if this is a delegated visit
         if (delegationFields.isDelegatedVisit && delegationFields.delegatedFromOfficer) {
-            notifyUsers({
+            await notifyUsers({
                 recipientIds: [delegationFields.delegatedFromOfficer.toString()],
                 sender: req.user._id,
                 type: 'visit',
@@ -5375,8 +5406,7 @@ router.post('/dashboard/bulk-reminders', async (req, res) => {
 
             await notifyUsers({
               recipientIds,
-              institution: req.user.institution,
-              roles: recipientIds.length > 0 ? [] : INSTITUTION_NOTIFICATION_ROLES,
+              ...(recipientIds.length === 0 ? { institution: req.user.institution, roles: INSTITUTION_NOTIFICATION_ROLES } : {}),
               sender: req.user._id,
               type: signal.type.startsWith('assessment') ? 'assessment' : signal.type === 'monitoringOverdue' ? 'visit' : 'report',
               title: `Reminder: ${signal.title}`,
@@ -6551,9 +6581,10 @@ router.put('/semester-reports/:id/submit', requireRole(...INSTITUTION_MANAGEMENT
             after: report,
         });
 
-        notifyUsers({
+        const reportRegion = await getInstitutionRegion(report.institution);
+        await notifyUsers({
             roles: ['RegionalAdmin'],
-            region: report.region,
+            region: reportRegion || '__unassigned__',
             sender: req.user._id,
             type: 'report',
             title: 'Term Closure Report Submitted',
@@ -6591,8 +6622,9 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
             after: report,
         });
 
-        notifyUsers({
-            roles: ['SuperAdmin', 'HQManager'],
+        const hqRecipients = await getScopedHQRecipients({ institution: report.institution, region: await getInstitutionRegion(report.institution) });
+        await notifyUsers({
+            recipientIds: hqRecipients.map((user) => user._id),
             sender: req.user._id,
             type: 'report',
             title: 'Report Endorsed Regionally',
@@ -6631,11 +6663,13 @@ router.put('/semester-reports/:id/hq-approve', requireRole('HQManager', 'SuperAd
         });
         
         // Notify
-        notifyInstitutionAdmins(report.institution, sendReportStatusEmail, `${report.semester}${report.yearGroup && report.yearGroup !== 'All' ? ` · ${report.yearGroup}` : ''}`, report.academicYear, 'HQ_Approved');
+        await notifyInstitutionAdmins(report.institution, sendReportStatusEmail, `${report.semester}${report.yearGroup && report.yearGroup !== 'All' ? ` · ${report.yearGroup}` : ''}`, report.academicYear, 'HQ_Approved');
         
-        notifyUsers({
+        const regionalAdmins = await User.find({ role: 'RegionalAdmin', region: await getInstitutionRegion(report.institution) || '__unassigned__', status: 'Active' }).select('_id');
+        await notifyUsers({
+            recipientIds: regionalAdmins.map((user) => user._id),
             institution: report.institution,
-            roles: ['Admin', 'RegionalAdmin'],
+            roles: ['Admin'],
             sender: req.user._id,
             type: 'report',
             title: 'Report Approved by HQ',
@@ -6675,11 +6709,13 @@ router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin'
             after: report,
         });
 
-        notifyInstitutionAdmins(report.institution, sendReportStatusEmail, `${report.semester}${report.yearGroup && report.yearGroup !== 'All' ? ` · ${report.yearGroup}` : ''}`, report.academicYear, 'Rejected');
+        await notifyInstitutionAdmins(report.institution, sendReportStatusEmail, `${report.semester}${report.yearGroup && report.yearGroup !== 'All' ? ` · ${report.yearGroup}` : ''}`, report.academicYear, 'Rejected');
 
-        notifyUsers({
+        const regionalAdmins = await User.find({ role: 'RegionalAdmin', region: await getInstitutionRegion(report.institution) || '__unassigned__', status: 'Active' }).select('_id');
+        await notifyUsers({
+            recipientIds: regionalAdmins.map((user) => user._id),
             institution: report.institution,
-            roles: ['Admin', 'Manager', 'RegionalAdmin'],
+            roles: ['Admin', 'Manager'],
             sender: req.user._id,
             type: 'report',
             title: 'Report Rejected',
@@ -6865,7 +6901,7 @@ router.post('/assessments', async (req, res) => {
             after: newAssessment,
         });
 
-        notifyUsers({
+        await notifyUsers({
             institution: req.user.institution,
             roles: ['Admin', 'Manager'],
             sender: req.user._id,
@@ -8108,7 +8144,7 @@ router.get('/guardian-portal/dashboard', requireRole('Guardian'), async (req, re
         .populate('reviewedBy', 'name')
         .sort({ signedAt: -1, createdAt: -1 })
         .lean(),
-      Notification.find({ recipient: req.user._id })
+      Notification.find({ recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null })
         .sort({ createdAt: -1 })
         .limit(10)
         .lean(),
@@ -8241,7 +8277,7 @@ router.get('/guardian-portal/dashboard', requireRole('Guardian'), async (req, re
       learners: learnerCards,
       notifications,
       tickets,
-      unreadNotificationCount: notifications.filter((notification) => !notification.read).length,
+      unreadNotificationCount: await Notification.countDocuments({ recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, read: false }),
     });
   } catch (error) {
     console.error('Error fetching guardian portal dashboard:', error);
@@ -9571,12 +9607,12 @@ async function preparePlacementActivation(req, input, ids, excludeId = null) {
     return { documents, override };
 }
 
-function notifyPlacementActivation(req, plan) {
+async function notifyPlacementActivation(req, plan) {
     if (plan.replayed) return;
     const count = plan.placements.length;
-    for (const partnerId of [...new Set(plan.partnerIds.map(String))]) notifyUsers({ partnerId, sender: req.user._id, type: 'placement', title: 'New Learners Placed', message: `${count} learner(s) from ${req.user.institution} have been placed with your organization.`, link: '/partner-dashboard?view=mine' });
-    notifyUsers({ institution: req.user.institution, roles: ['Admin', 'Manager'], sender: req.user._id, type: 'placement', title: 'Placement Activated', message: `${count} learner placement(s) activated successfully.`, link: '/placements' });
-    if (plan.request) notifyInstitutionAdmins(req.user.institution, sendPlacementApprovalEmail, `${count} selected learner(s)`, plan.placements[0]?.values?.companyName || 'Host organization', 'See Placement Requests');
+    for (const partnerId of [...new Set(plan.partnerIds.map(String))]) await notifyUsers({ partnerId, sender: req.user._id, type: 'placement', title: 'New Learners Placed', message: `${count} learner(s) from ${req.user.institution} have been placed with your organization.`, link: '/partner-dashboard?view=mine' });
+    await notifyUsers({ institution: req.user.institution, roles: ['Admin', 'Manager'], sender: req.user._id, type: 'placement', title: 'Placement Activated', message: `${count} learner placement(s) activated successfully.`, link: '/placements' });
+    if (plan.request) await notifyInstitutionAdmins(req.user.institution, sendPlacementApprovalEmail, `${count} selected learner(s)`, plan.placements[0]?.values?.companyName || 'Host organization', 'See Placement Requests');
 }
 
 router.post('/placements', async (req, res) => {
@@ -9596,7 +9632,7 @@ router.post('/placements', async (req, res) => {
             };
         });
         const placements = await Placement.find({ _id: { $in: plan.placements.map(item => item.id) }, institution: req.user.institution });
-        notifyPlacementActivation(req, plan);
+        await notifyPlacementActivation(req, plan);
         await logAuditEvent({ req, action: 'CREATE', entityType: 'Placement', entityId: plan.placements.map(item => item.id).join(','), summary: 'Activated placement batch', metadata: { operationKey: key, replayed: !!plan.replayed, welWindowOverride: plan.override }, after: placements });
         res.status(plan.replayed ? 200 : 201).json(placements);
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
@@ -13148,9 +13184,10 @@ router.post('/industry-partners/:id/slot-allocations', requireRole('Admin', 'Man
         });
         await logAuditEvent({ req, action: 'CREATE', entityType: 'PartnerSlotAllocation', entityId: allocation._id, summary: `Requested ${slots} reserved slots with ${partner.name}`, after: allocation });
         const notification = { sender: req.user._id, type: 'partner', title: 'Reserved slot request', message: `${req.user.institution} requested ${slots} reserved slots with ${partner.name}.` };
+        const hqRecipients = await getScopedHQRecipients({ institution: req.user.institution, region: partner.region, linkedInstitutions: [req.user.institution] });
         await Promise.all([
             notifyUsers({ ...notification, partnerId: partner._id, roles: ['IndustryPartner'], link: '/partner-dashboard' }),
-            notifyUsers({ ...notification, roles: ['SuperAdmin', 'HQManager'], link: '/industry-partners' }),
+            notifyUsers({ ...notification, recipientIds: hqRecipients.map((user) => user._id), link: '/industry-partners' }),
         ]);
         res.status(201).json(allocation);
     } catch (error) { res.status(error.name === 'ValidationError' ? 400 : 500).json({ message: error.message || 'Unable to request reserved slots.' }); }
@@ -14636,7 +14673,7 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
             };
         });
         await logAuditEvent({ req, action: 'CREATE', entityType: 'Placement', entityId: plan.placements.map(item => item.id).join(','), summary: 'Activated placement request', metadata: { operationKey: key, placementRequestId: request._id, replayed: !!plan.replayed, welWindowOverride: plan.override } });
-        notifyPlacementActivation(req, plan);
+        await notifyPlacementActivation(req, plan);
         res.json(await PlacementRequest.findOne(filter).populate('partner', 'name sector region totalSlots usedSlots partnerType operatingModel locationVerificationStatus coordinates').populate('learners', 'firstName lastName trackingId'));
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });

@@ -628,7 +628,7 @@ export default function Layout() {
             )}
           </NavLink>}
 
-          {isAdmin && !isSuperAdmin && <NavLink
+          {(isAdmin || isHQRole(user?.role)) && !isSuperAdmin && <NavLink
             to="/settings" 
             className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
             onClick={() => setIsMobileMenuOpen(false)}
