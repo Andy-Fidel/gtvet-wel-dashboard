@@ -55,6 +55,8 @@ const learnerSchema = new mongoose.Schema({
     },
     fromYear: { type: String, default: '' },
     toYear: { type: String, default: '' },
+    fromAcademicStatus: { type: String, default: '' },
+    fromProgram: { type: String, default: '' },
     note: { type: String, default: '' },
     changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     changedAt: { type: Date, default: Date.now },

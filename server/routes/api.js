@@ -15,6 +15,7 @@ import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
 import { MonitoringVisit } from '../models/MonitoringVisit.js';
 import { SemesterReport } from '../models/SemesterReport.js';
+import { UNRESOLVED_REPORT_STATUSES, learnerYearAt, learnerAcademicStatusAt, learnerProgramAt, placementOverlapsPeriod, isReportSubmittedForDeadline } from '../utils/termClosure.js';
 import { User } from '../models/User.js';
 import { Institution } from '../models/Institution.js';
 import { CompetencyAssessment } from '../models/CompetencyAssessment.js';
@@ -482,6 +483,7 @@ const runAutomaticLearnerProgression = async (user) => {
     ]);
 
     for (const learner of year1Learners) {
+      const fromAcademicStatus = learner.academicStatus;
       learner.year = 'Year 2';
       learner.academicStatus = 'Active';
       learner.progressionHistory.push({
@@ -489,6 +491,7 @@ const runAutomaticLearnerProgression = async (user) => {
         action: 'Promoted',
         fromYear: 'Year 1',
         toYear: 'Year 2',
+        fromAcademicStatus,
         note: 'Automatically promoted after Semester 2 completion',
         changedBy: user._id,
       });
@@ -496,6 +499,7 @@ const runAutomaticLearnerProgression = async (user) => {
     }
 
     for (const learner of year2Learners) {
+      const fromAcademicStatus = learner.academicStatus;
       learner.year = 'Year 3';
       learner.academicStatus = 'Active';
       learner.progressionHistory.push({
@@ -503,6 +507,7 @@ const runAutomaticLearnerProgression = async (user) => {
         action: 'Promoted',
         fromYear: 'Year 2',
         toYear: 'Year 3',
+        fromAcademicStatus,
         note: 'Automatically promoted after Semester 2 completion',
         changedBy: user._id,
       });
@@ -510,6 +515,7 @@ const runAutomaticLearnerProgression = async (user) => {
     }
 
     for (const learner of year3Learners) {
+      const fromAcademicStatus = learner.academicStatus;
       learner.academicStatus = 'Graduated';
       learner.graduationAcademicYear = progressionTerm.academicYear;
       learner.graduatedAt = learner.graduatedAt || new Date();
@@ -518,6 +524,7 @@ const runAutomaticLearnerProgression = async (user) => {
         action: 'Graduated',
         fromYear: learner.year,
         toYear: learner.year,
+        fromAcademicStatus,
         note: 'Automatically graduated after Semester 2 completion',
         changedBy: user._id,
       });
@@ -2548,7 +2555,7 @@ router.post('/settings/rollover/semester', requireRole('SuperAdmin'), async (req
             });
         }
 
-        const openReportStatuses = ['Draft', 'Generated', 'Certified', 'Submitted', 'Regional_Approved'];
+        const openReportStatuses = UNRESOLVED_REPORT_STATUSES;
         const openReportCount = await SemesterReport.countDocuments({
             academicTerm: currentTerm._id,
             status: { $in: openReportStatuses },
@@ -2642,7 +2649,7 @@ router.post('/settings/rollover/academic-year', requireRole('SuperAdmin'), async
             });
         }
 
-        const openReportStatuses = ['Draft', 'Generated', 'Certified', 'Submitted', 'Regional_Approved'];
+        const openReportStatuses = UNRESOLVED_REPORT_STATUSES;
         const openReportCount = await SemesterReport.countDocuments({
             academicYear: progressionTerm.academicYear,
             status: { $in: openReportStatuses },
@@ -6129,29 +6136,85 @@ router.post('/academic-calendar/bootstrap-wel-template', requireRole('SuperAdmin
 // ==================== TERM CLOSURE REPORTS ====================
 
 // Helper: Build metrics, summary, and exceptions for a term closure report
-const buildTermClosureData = async (institution, start, end, yearGroup = null) => {
-    // Learner stats
-    const learnerFilter = { institution, createdAt: { $lte: end } };
-    if (yearGroup) learnerFilter.year = { $in: studyYearAliases(yearGroup) };
-    const learners = await Learner.find(learnerFilter);
-    const academicActive = learners.filter((l) => l.academicStatus === 'Active').length;
-    const academicGraduating = learners.filter((l) => l.academicStatus === 'Graduating').length;
-    const academicGraduated = learners.filter((l) => l.academicStatus === 'Graduated').length;
-    const academicDropped = learners.filter((l) => l.academicStatus === 'Dropped').length;
+const reportMutationError = (res, error, message) => res.status(error?.name === 'VersionError' ? 409 : 500)
+    .json({ message: error?.name === 'VersionError' ? 'Report changed during this request. Refresh and retry.' : message });
+
+const activityWindowSignature = windows => JSON.stringify((windows || []).map(window => [
+    new Date(window.startDate).toISOString(), new Date(window.endDate).toISOString(), window.label,
+]));
+
+const closureActivityWindows = async (institution, academicYear, semester, yearGroup, start, end) => {
+    const periodEnd = new Date(end);
+    periodEnd.setUTCHours(23, 59, 59, 999);
+    const windows = [{ startDate: new Date(start), endDate: periodEnd, label: 'Academic term' }];
+    if (!academicYear || !semester) return windows;
+    const institutionCalendarType = await getInstitutionCalendarType(institution);
+    const welWindows = await AcademicCalendar.find({
+        isActive: true,
+        eventType: 'WEL Window',
+        academicYear,
+        semester,
+        institutionCalendarType,
+        targetYearGroup: yearGroup || { $in: YEAR_GROUPS },
+    }).select('startDate endDate title').lean();
+    for (const window of welWindows) {
+        const windowEnd = new Date(window.endDate);
+        windowEnd.setUTCHours(23, 59, 59, 999);
+        windows.push({ startDate: new Date(window.startDate), endDate: windowEnd, label: window.title || 'WEL window' });
+    }
+    return windows.sort((a, b) => a.startDate - b.startDate);
+};
+
+const activityDateFilter = (field, windows) => ({ $or: windows.map(window => ({
+    [field]: { $gte: window.startDate, $lte: window.endDate },
+})) });
+
+const currentClosureWindows = report => closureActivityWindows(
+    report.institution, report.academicYear, report.semester,
+    report.yearGroup === 'All' ? null : report.yearGroup,
+    report.periodStart, report.periodEnd,
+);
+
+const closureWindowsAreCurrent = async report => activityWindowSignature(await currentClosureWindows(report))
+    === activityWindowSignature(report.activityWindows);
+
+export const buildTermClosureData = async (institution, start, end, yearGroup = null, capturedCohort = null, cycle = null) => {
+    const cutoff = new Date(end);
+    cutoff.setUTCHours(23, 59, 59, 999);
+    const learnerFilter = { institution, createdAt: { $lte: cutoff } };
+    const candidates = await Learner.find(learnerFilter);
+    const snapshotById = capturedCohort && new Map(capturedCohort.map(item => [String(item.learner), item]));
+    const learners = candidates.filter(learner => {
+        const historicalYear = snapshotById?.get(String(learner._id))?.yearGroup || learnerYearAt(learner, cutoff);
+        return !yearGroup || normalizeStudyYear(historicalYear) === yearGroup;
+    });
+    const cohortLearners = learners.map(learner => ({
+        learner: learner._id,
+        yearGroup: snapshotById?.get(String(learner._id))?.yearGroup || learnerYearAt(learner, cutoff),
+        academicStatus: snapshotById?.get(String(learner._id))?.academicStatus || learnerAcademicStatusAt(learner, cutoff),
+        program: snapshotById?.get(String(learner._id))?.program || learnerProgramAt(learner, cutoff),
+    }));
+    const academicActive = cohortLearners.filter(item => item.academicStatus === 'Active').length;
+    const academicGraduating = cohortLearners.filter(item => item.academicStatus === 'Graduating').length;
+    const academicGraduated = cohortLearners.filter(item => item.academicStatus === 'Graduated').length;
+    const academicDropped = cohortLearners.filter(item => item.academicStatus === 'Dropped').length;
     const currentEnrolled = academicActive + academicGraduating;
-    const placed = learners.filter(l => l.status === 'Placed').length;
-    const pending = learners.filter(l => l.status === 'Pending').length;
-    const completed = learners.filter(l => l.status === 'Completed').length;
-    const dropped = learners.filter(l => l.status === 'Dropped').length;
 
     // Program breakdown
     const programMap = {};
-    learners.forEach(l => {
-        programMap[l.program] = (programMap[l.program] || 0) + 1;
+    cohortLearners.forEach(item => {
+        programMap[item.program] = (programMap[item.program] || 0) + 1;
     });
     const programBreakdown = Object.entries(programMap).map(([program, count]) => ({ program, count }));
 
     const learnerIds = learners.map(l => l._id);
+    const activityWindows = await closureActivityWindows(institution, cycle?.academicYear, cycle?.semester, yearGroup, start, end);
+    const activityEnd = new Date(Math.max(...activityWindows.map(window => window.endDate.getTime())));
+    const visitDates = activityDateFilter('visitDate', activityWindows);
+    const assessmentDates = activityDateFilter('assessmentDate', activityWindows);
+    const attendanceDates = activityDateFilter('periodEnd', activityWindows);
+    const ticketOpenedDates = activityDateFilter('createdAt', activityWindows);
+    const ticketResolvedDates = activityDateFilter('resolvedAt', activityWindows);
 
     // Bulk-fetch related data in parallel
     const [
@@ -6162,27 +6225,33 @@ const buildTermClosureData = async (institution, start, end, yearGroup = null) =
         ticketsResolved,
         placements,
     ] = await Promise.all([
-        MonitoringVisit.find({ institution, learner: { $in: learnerIds }, visitDate: { $gte: start, $lte: end } }).select('learner visitDate').lean(),
-        CompetencyAssessment.find({ institution, learner: { $in: learnerIds }, createdAt: { $gte: start, $lte: end } }).select('learner assessmentDate').lean(),
-        AttendanceLog.find({ institution, learner: { $in: learnerIds }, periodEnd: { $gte: start, $lte: end } }).select('learner placement hoursWorked').lean(),
-        SupportTicket.countDocuments({ institution, learner: { $in: learnerIds }, createdAt: { $gte: start, $lte: end } }),
-        SupportTicket.countDocuments({ institution, learner: { $in: learnerIds }, createdAt: { $gte: start, $lte: end }, status: { $in: ['Resolved', 'Closed'] } }),
-        Placement.find({ institution, learner: { $in: learnerIds }, createdAt: { $lte: end } }).select('learner status').lean(),
+        MonitoringVisit.find({ institution, learner: { $in: learnerIds }, ...visitDates }).select('learner visitDate').lean(),
+        CompetencyAssessment.find({ institution, learner: { $in: learnerIds }, ...assessmentDates }).select('learner assessmentDate').lean(),
+        AttendanceLog.find({ institution, learner: { $in: learnerIds }, status: 'SignedOff', ...attendanceDates }).select('learner placement hoursWorked').lean(),
+        SupportTicket.countDocuments({ institution, learner: { $in: learnerIds }, ...ticketOpenedDates }),
+        SupportTicket.countDocuments({ institution, learner: { $in: learnerIds }, $and: [ticketOpenedDates, ticketResolvedDates] }),
+        Placement.find({ institution, learner: { $in: learnerIds }, $or: [{ startDate: { $lte: activityEnd } }, { startDate: null, createdAt: { $lte: activityEnd } }] }).select('learner status startDate endDate createdAt closedAt').lean(),
     ]);
 
     // Index by learner for exception building
     const visitsByLearner = new Set(monitoringVisits.map(v => v.learner.toString()));
     const assessmentsByLearner = new Set(assessments.map(a => a.learner.toString()));
     const attendanceByLearner = new Set(attendanceLogs.map(a => a.learner.toString()));
-    const placedLearnerIds = new Set(placements.map(p => p.learner.toString()));
+    const periodPlacements = placements.filter(placement => activityWindows.some(window => placementOverlapsPeriod(placement, window.startDate, window.endDate)));
+    const placedLearnerIds = new Set(periodPlacements.map(p => p.learner.toString()));
+    const completedLearnerIds = new Set(periodPlacements.filter(p => p.status === 'Completed' && p.closedAt && new Date(p.closedAt) <= activityEnd).map(p => p.learner.toString()));
+    const placed = placedLearnerIds.size - completedLearnerIds.size;
+    const completed = completedLearnerIds.size;
+    const dropped = academicDropped;
+    const pending = Math.max(0, learners.length - placedLearnerIds.size - dropped);
 
     // Health scores: compute avg for placed learners
     const placedLearnerCount = placedLearnerIds.size;
-    const learnersWithVisits = learnerIds.filter(id => visitsByLearner.has(id.toString())).length;
-    const learnersWithAssessments = learnerIds.filter(id => assessmentsByLearner.has(id.toString())).length;
+    const learnersWithVisits = [...placedLearnerIds].filter(id => visitsByLearner.has(id)).length;
+    const learnersWithAssessments = [...placedLearnerIds].filter(id => assessmentsByLearner.has(id)).length;
 
     const totalHoursLogged = attendanceLogs.reduce((sum, a) => sum + (a.hoursWorked || 0), 0);
-    const placementRate = learners.length > 0 ? Math.round((placed / learners.length) * 100) : 0;
+    const placementRate = learners.length > 0 ? Math.round((placedLearnerCount / learners.length) * 100) : 0;
     const visitCoverage = placedLearnerCount > 0 ? Math.round((learnersWithVisits / placedLearnerCount) * 100) : 0;
     const assessmentCoverage = placedLearnerCount > 0 ? Math.round((learnersWithAssessments / placedLearnerCount) * 100) : 0;
     const ticketResolutionRate = ticketsOpened > 0 ? Math.round((ticketsResolved / ticketsOpened) * 100) : 100;
@@ -6191,10 +6260,9 @@ const buildTermClosureData = async (institution, start, end, yearGroup = null) =
     const exceptions = [];
     for (const learner of learners) {
         const lid = learner._id.toString();
-        if (learner.status !== 'Placed' && learner.status !== 'Completed') continue;
+        if (!placedLearnerIds.has(lid)) continue;
 
         const reasons = [];
-        if (!placedLearnerIds.has(lid)) reasons.push('No placement record');
         if (!attendanceByLearner.has(lid)) reasons.push('No attendance logs');
         if (!visitsByLearner.has(lid)) reasons.push('No monitoring visits');
         if (!assessmentsByLearner.has(lid)) reasons.push('No competency assessments');
@@ -6247,6 +6315,8 @@ const buildTermClosureData = async (institution, start, end, yearGroup = null) =
             ticketResolutionRate,
         },
         exceptions,
+        cohortLearners,
+        activityWindows,
     };
 };
 
@@ -6276,7 +6346,7 @@ router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_
         const start = new Date(schedule.startDate);
         const end = new Date(schedule.endDate);
 
-        const { summary, metrics, exceptions } = await buildTermClosureData(institution, start, end, yearGroup);
+        const { summary, metrics, exceptions, cohortLearners, activityWindows } = await buildTermClosureData(institution, start, end, yearGroup, null, { academicYear: term.academicYear, semester: term.termType || term.name });
 
         const report = new SemesterReport({
             institution,
@@ -6285,12 +6355,15 @@ router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_
             yearGroup,
             periodStart: start,
             periodEnd: end,
+            activityWindows,
             generatedBy: req.user._id,
             academicTerm: term._id,
             status: 'Draft',
             summary,
             metrics,
             exceptions,
+            cohortLearners,
+            cohortCapturedAt: new Date(),
             commentary: { challenges: '', highlights: '', recommendations: '' },
         });
 
@@ -6326,6 +6399,9 @@ router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_
 
         const start = new Date(periodStart);
         const end = new Date(periodEnd);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+            return res.status(400).json({ message: 'Provide a valid reporting period with the end after the start.' });
+        }
 
         if (![...YEAR_GROUPS, 'All'].includes(yearGroup)) return res.status(400).json({ message: 'Invalid yearGroup.' });
         const exists = await SemesterReport.findOne({
@@ -6340,7 +6416,7 @@ router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_
             return res.status(409).json({ message: 'A report for this semester and academic year already exists.' });
         }
 
-        const { summary, metrics, exceptions } = await buildTermClosureData(institution, start, end, yearGroup === 'All' ? null : yearGroup);
+        const { summary, metrics, exceptions, cohortLearners, activityWindows } = await buildTermClosureData(institution, start, end, yearGroup === 'All' ? null : yearGroup, null, { academicYear, semester });
 
         const report = new SemesterReport({
             institution,
@@ -6349,11 +6425,14 @@ router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_
             yearGroup,
             periodStart: start,
             periodEnd: end,
+            activityWindows,
             generatedBy: req.user._id,
             status: 'Draft',
             summary,
             metrics,
             exceptions,
+            cohortLearners,
+            cohortCapturedAt: new Date(),
             commentary: { challenges: '', highlights: '', recommendations: '' },
         });
 
@@ -6468,6 +6547,7 @@ router.get('/semester-reports/:id', requireRole('HQManager', 'HQStaff', ...MANAG
             .populate('generatedBy', 'name email')
             .populate('reviewedByRegional', 'name email')
             .populate('reviewedByHQ', 'name email')
+            .populate('reviewHistory.reviewer', 'name email')
             .populate('certifiedBy', 'name email')
             .populate('academicTerm');
         if (!report) return res.status(404).json({ message: 'Report not found' });
@@ -6483,17 +6563,29 @@ router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_M
         const scopeFilter = await getFilter(req.user);
         const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
-        if (report.status !== 'Draft') {
-            return res.status(400).json({ message: 'Metrics can only be refreshed in Draft status.' });
+        if (!['Draft', 'Rejected', 'Generated', 'Certified'].includes(report.status)) {
+            return res.status(400).json({ message: 'Metrics can only be refreshed while preparing or correcting a report.' });
         }
 
         const start = new Date(report.periodStart);
         const end = new Date(report.periodEnd);
-        const { summary, metrics, exceptions } = await buildTermClosureData(report.institution, start, end, report.yearGroup && report.yearGroup !== 'All' ? report.yearGroup : null);
+        const periodEnd = new Date(end);
+        periodEnd.setUTCHours(23, 59, 59, 999);
+        const previousCohort = report.cohortCapturedAt && new Date(report.cohortCapturedAt) > periodEnd
+            ? report.cohortLearners : null;
+        const { summary, metrics, exceptions, cohortLearners, activityWindows } = await buildTermClosureData(report.institution, start, end, report.yearGroup && report.yearGroup !== 'All' ? report.yearGroup : null, previousCohort, { academicYear: report.academicYear, semester: report.semester });
 
         report.summary = summary;
         report.metrics = metrics;
         report.exceptions = exceptions;
+        report.cohortLearners = cohortLearners;
+        report.activityWindows = activityWindows;
+        report.cohortCapturedAt = new Date();
+        if (report.status === 'Generated' || report.status === 'Certified') {
+            report.status = 'Draft';
+            report.certifiedBy = undefined;
+            report.certifiedAt = undefined;
+        }
         await report.save();
 
         await logAuditEvent({
@@ -6507,11 +6599,12 @@ router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_M
         const populated = await SemesterReport.findById(report._id)
             .populate('generatedBy', 'name email')
             .populate('certifiedBy', 'name email')
+            .populate('reviewHistory.reviewer', 'name email')
             .populate('academicTerm');
         res.json(populated);
     } catch (error) {
         console.error('Error refreshing metrics:', error);
-        res.status(500).json({ message: 'Failed to refresh metrics' });
+        reportMutationError(res, error, 'Failed to refresh metrics');
     }
 });
 
@@ -6523,6 +6616,13 @@ router.put('/semester-reports/:id/certify', requireRole(...INSTITUTION_MANAGEMEN
         if (!report) return res.status(404).json({ message: 'Report not found' });
         if (report.status !== 'Draft' && report.status !== 'Rejected') {
             return res.status(400).json({ message: 'Report can only be certified from Draft or Rejected status.' });
+        }
+        const currentActivityWindows = await currentClosureWindows(report);
+        if (activityWindowSignature(currentActivityWindows) !== activityWindowSignature(report.activityWindows)) {
+            return res.status(409).json({ message: 'The reporting windows changed. Refresh metrics before certification.' });
+        }
+        if (currentActivityWindows.some(window => window.endDate > new Date())) {
+            return res.status(409).json({ message: 'The academic term and WEL activity windows must end before the closure report can be certified.' });
         }
 
         const { commentary } = req.body;
@@ -6536,6 +6636,19 @@ router.put('/semester-reports/:id/certify', requireRole(...INSTITUTION_MANAGEMEN
         report.certifiedBy = req.user._id;
         report.certifiedAt = new Date();
         report.status = 'Certified';
+        if (!report.reviewHistory.length) {
+            if (report.reviewedByRegional) report.reviewHistory.push({
+                stage: 'Regional', decision: report.reviewedByHQ ? 'Approved' : 'Rejected',
+                reviewer: report.reviewedByRegional, comment: report.regionalComment || '',
+            });
+            if (report.reviewedByHQ) report.reviewHistory.push({
+                stage: 'HQ', decision: 'Rejected', reviewer: report.reviewedByHQ, comment: report.hqComment || '',
+            });
+        }
+        report.reviewedByRegional = undefined;
+        report.reviewedByHQ = undefined;
+        report.regionalComment = '';
+        report.hqComment = '';
         await report.save();
 
         await logAuditEvent({
@@ -6551,11 +6664,12 @@ router.put('/semester-reports/:id/certify', requireRole(...INSTITUTION_MANAGEMEN
         const populated = await SemesterReport.findById(report._id)
             .populate('generatedBy', 'name email')
             .populate('certifiedBy', 'name email')
+            .populate('reviewHistory.reviewer', 'name email')
             .populate('academicTerm');
         res.json(populated);
     } catch (error) {
         console.error('Error certifying report:', error);
-        res.status(500).json({ message: 'Failed to certify report' });
+        reportMutationError(res, error, 'Failed to certify report');
     }
 });
 
@@ -6565,9 +6679,11 @@ router.put('/semester-reports/:id/submit', requireRole(...INSTITUTION_MANAGEMENT
         const scopeFilter = await getFilter(req.user);
         const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
-        // Allow submit from Certified (new flow) or Generated/Rejected (legacy)
-        if (!['Certified', 'Generated', 'Rejected'].includes(report.status)) {
+        if (report.status !== 'Certified') {
             return res.status(400).json({ message: 'Report must be certified before submission.' });
+        }
+        if (!await closureWindowsAreCurrent(report)) {
+            return res.status(409).json({ message: 'Reporting windows changed. Refresh metrics and certify again before submission.' });
         }
         report.status = 'Submitted';
         await report.save();
@@ -6594,7 +6710,7 @@ router.put('/semester-reports/:id/submit', requireRole(...INSTITUTION_MANAGEMENT
 
         res.json(report);
     } catch (error) {
-        res.status(500).json({ message: 'Failed to submit report' });
+        reportMutationError(res, error, 'Failed to submit report');
     }
 });
 
@@ -6607,10 +6723,14 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
         if (report.status !== 'Submitted') {
             return res.status(400).json({ message: 'Report must be in Submitted status to approve regionally.' });
         }
+        if (!await closureWindowsAreCurrent(report)) {
+            return res.status(409).json({ message: 'Reporting windows changed. Return this report to the institution for a metric refresh.' });
+        }
         const before = report.toObject();
         report.status = 'Regional_Approved';
         report.reviewedByRegional = req.user._id;
         report.regionalComment = req.body.comment || '';
+        report.reviewHistory.push({ stage: 'Regional', decision: 'Approved', reviewer: req.user._id, comment: report.regionalComment, reviewedAt: new Date() });
         await report.save();
         await logAuditEvent({
             req,
@@ -6632,9 +6752,10 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
             link: `/semester-reports/${report._id}`
         });
 
+        await report.populate('reviewHistory.reviewer', 'name email');
         res.json(report);
     } catch (error) {
-        res.status(500).json({ message: 'Failed to approve report' });
+        reportMutationError(res, error, 'Failed to approve report');
     }
 });
 
@@ -6647,10 +6768,14 @@ router.put('/semester-reports/:id/hq-approve', requireRole('HQManager', 'SuperAd
         if (report.status !== 'Regional_Approved') {
             return res.status(400).json({ message: 'Report must be Regional_Approved before HQ approval.' });
         }
+        if (!await closureWindowsAreCurrent(report)) {
+            return res.status(409).json({ message: 'Reporting windows changed. Return this report to the institution for a metric refresh.' });
+        }
         const before = report.toObject();
         report.status = 'HQ_Approved';
         report.reviewedByHQ = req.user._id;
         report.hqComment = req.body.comment || '';
+        report.reviewHistory.push({ stage: 'HQ', decision: 'Approved', reviewer: req.user._id, comment: report.hqComment, reviewedAt: new Date() });
         await report.save();
         await logAuditEvent({
             req,
@@ -6677,9 +6802,10 @@ router.put('/semester-reports/:id/hq-approve', requireRole('HQManager', 'SuperAd
             link: `/semester-reports/${report._id}`
         });
 
+        await report.populate('reviewHistory.reviewer', 'name email');
         res.json(report);
     } catch (error) {
-        res.status(500).json({ message: 'Failed to approve report' });
+        reportMutationError(res, error, 'Failed to approve report');
     }
 });
 
@@ -6689,14 +6815,20 @@ router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin'
         const scopeFilter = await getFilter(req.user);
         const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
         if (!report) return res.status(404).json({ message: 'Report not found' });
+        const expectedStatus = req.user.role === 'RegionalAdmin' ? 'Submitted' : 'Regional_Approved';
+        if (report.status !== expectedStatus) {
+            return res.status(409).json({ message: `Only ${expectedStatus} reports can be rejected at this review stage.` });
+        }
         const before = report.toObject();
         report.status = 'Rejected';
         if (isHQRole(req.user.role)) {
             report.reviewedByHQ = req.user._id;
             report.hqComment = req.body.comment || 'Rejected by HQ';
+            report.reviewHistory.push({ stage: 'HQ', decision: 'Rejected', reviewer: req.user._id, comment: report.hqComment, reviewedAt: new Date() });
         } else {
             report.reviewedByRegional = req.user._id;
             report.regionalComment = req.body.comment || 'Rejected by Regional';
+            report.reviewHistory.push({ stage: 'Regional', decision: 'Rejected', reviewer: req.user._id, comment: report.regionalComment, reviewedAt: new Date() });
         }
         await report.save();
         await logAuditEvent({
@@ -6723,9 +6855,10 @@ router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin'
             link: `/semester-reports/${report._id}`
         });
 
+        await report.populate('reviewHistory.reviewer', 'name email');
         res.json(report);
     } catch (error) {
-        res.status(500).json({ message: 'Failed to reject report' });
+        reportMutationError(res, error, 'Failed to reject report');
     }
 });
 
@@ -7520,7 +7653,7 @@ router.put('/learners/:id', async (req, res) => {
         }
 
         const payload = { ...req.body };
-        ['idmsLearnerId', 'idmsProgrammeId', 'idmsAcademicStatus', 'recordSource', 'idmsUpdatedAt', 'lastIdmsSyncAt', 'idmsSyncStatus']
+        ['idmsLearnerId', 'idmsProgrammeId', 'idmsAcademicStatus', 'recordSource', 'idmsUpdatedAt', 'lastIdmsSyncAt', 'idmsSyncStatus', 'progressionHistory']
             .forEach((field) => delete payload[field]);
         if (payload.dateOfBirth === '') {
             payload.dateOfBirth = null;
@@ -7536,7 +7669,22 @@ router.put('/learners/:id', async (req, res) => {
             payload.graduatedAt = payload.graduatedAt || new Date();
         }
 
-        const updatedLearner = await Learner.findOneAndUpdate({ _id: req.params.id, ...filter }, payload, { returnDocument: 'after' });
+        const yearChanged = payload.year && payload.year !== existingLearner.year;
+        const statusChanged = payload.academicStatus && payload.academicStatus !== existingLearner.academicStatus;
+        const programChanged = payload.program && payload.program !== existingLearner.program;
+        const progressionEntry = yearChanged || statusChanged || programChanged ? {
+            academicYear: await resolveCurrentAcademicYear(),
+            action: yearChanged ? 'Promoted' : payload.academicStatus === 'Graduated' ? 'Graduated' : payload.academicStatus === 'Dropped' ? 'Dropped' : 'StatusAdjusted',
+            fromYear: existingLearner.year,
+            toYear: payload.year || existingLearner.year,
+            fromAcademicStatus: existingLearner.academicStatus,
+            fromProgram: existingLearner.program,
+            note: 'Updated from learner registry',
+            changedBy: req.user._id,
+            changedAt: new Date(),
+        } : null;
+        const update = progressionEntry ? { $set: payload, $push: { progressionHistory: progressionEntry } } : payload;
+        const updatedLearner = await Learner.findOneAndUpdate({ _id: req.params.id, ...filter }, update, { returnDocument: 'after' });
         if (updatedLearner && existingLearner) {
             await logAuditEvent({
                 req,
@@ -7583,6 +7731,7 @@ router.post('/learners/promote-year', async (req, res) => {
         }
 
         for (const learner of learners) {
+            const fromAcademicStatus = learner.academicStatus;
             learner.year = toYear;
             learner.academicStatus = 'Active';
             learner.progressionHistory.push({
@@ -7590,6 +7739,7 @@ router.post('/learners/promote-year', async (req, res) => {
                 action: 'Promoted',
                 fromYear,
                 toYear,
+                fromAcademicStatus,
                 note: `Promoted from ${fromYear} to ${toYear}`,
                 changedBy: req.user._id,
             });
@@ -7635,6 +7785,7 @@ router.post('/learners/graduate', async (req, res) => {
         }
 
         for (const learner of learners) {
+            const fromAcademicStatus = learner.academicStatus;
             learner.academicStatus = 'Graduated';
             learner.graduationAcademicYear = academicYear;
             learner.graduatedAt = new Date();
@@ -7643,6 +7794,7 @@ router.post('/learners/graduate', async (req, res) => {
                 action: 'Graduated',
                 fromYear: learner.year,
                 toYear: learner.year,
+                fromAcademicStatus,
                 note: 'Marked as graduated after completing final year',
                 changedBy: req.user._id,
             });
@@ -12079,28 +12231,32 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                 institution: { $in: institutions.map((institution) => institution.name) },
                 semester: currentCycleDeadline.semester,
                 academicYear: currentCycleDeadline.academicYear,
-            }).select('institution status updatedAt');
+            }).select('institution yearGroup status updatedAt');
 
             const reportByInstitution = cycleReports.reduce((acc, report) => {
-                acc[report.institution] = report;
+                (acc[report.institution] ||= []).push(report);
                 return acc;
             }, {});
 
-            const isSubmittedForCycle = (report) => report && !['Generated', 'Rejected'].includes(report.status);
+            const isSubmittedForCycle = (reports) => isReportSubmittedForDeadline(reports || [], currentCycleDeadline.targetYearGroup);
+            const displayCycleStatus = (reports) => {
+                if (!reports?.length) return null;
+                return reports.find(report => ['Rejected', 'Generated', 'Draft', 'Certified'].includes(report.status))?.status || 'Incomplete';
+            };
             const daysUntilDeadline = Math.ceil((currentCycleDeadline.endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
             const overdueInstitutionSubmissions = institutions
                 .filter((institution) => {
-                    const report = reportByInstitution[institution.name];
-                    return currentCycleDeadline.endDate < now && !isSubmittedForCycle(report);
+                    const reports = reportByInstitution[institution.name];
+                    return currentCycleDeadline.endDate < now && !isSubmittedForCycle(reports);
                 })
                 .map((institution) => {
-                    const report = reportByInstitution[institution.name];
+                    const reports = reportByInstitution[institution.name];
                     return {
                         _id: institution._id,
                         institution: institution.name,
                         region: institution.region,
-                        status: report?.status || 'Missing',
+                        status: displayCycleStatus(reports) || 'Missing',
                         code: institution.code,
                     };
                 })
@@ -12108,16 +12264,16 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
 
             const atRiskInstitutions = institutions
                 .filter((institution) => {
-                    const report = reportByInstitution[institution.name];
-                    return currentCycleDeadline.endDate >= now && daysUntilDeadline <= 14 && !isSubmittedForCycle(report);
+                    const reports = reportByInstitution[institution.name];
+                    return currentCycleDeadline.endDate >= now && daysUntilDeadline <= 14 && !isSubmittedForCycle(reports);
                 })
                 .map((institution) => {
-                    const report = reportByInstitution[institution.name];
+                    const reports = reportByInstitution[institution.name];
                     return {
                         _id: institution._id,
                         institution: institution.name,
                         region: institution.region,
-                        status: report?.status || 'Not started',
+                        status: displayCycleStatus(reports) || 'Not started',
                         code: institution.code,
                         daysRemaining: Math.max(0, daysUntilDeadline),
                     };

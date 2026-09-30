@@ -18,8 +18,20 @@ const semesterReportSchema = new mongoose.Schema({
   },
   periodStart: { type: Date, required: true },
   periodEnd: { type: Date, required: true },
+  activityWindows: [{
+    startDate: { type: Date, required: true },
+    endDate: { type: Date, required: true },
+    label: { type: String, required: true },
+  }],
   generatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   academicTerm: { type: mongoose.Schema.Types.ObjectId, ref: 'AcademicTerm' },
+  cohortLearners: [{
+    learner: { type: mongoose.Schema.Types.ObjectId, ref: 'Learner', required: true },
+    yearGroup: String,
+    academicStatus: String,
+    program: String,
+  }],
+  cohortCapturedAt: Date,
   status: {
     type: String,
     enum: ['Generated', 'Draft', 'Certified', 'Submitted', 'Regional_Approved', 'HQ_Approved', 'Rejected'],
@@ -29,6 +41,13 @@ const semesterReportSchema = new mongoose.Schema({
   reviewedByHQ: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   regionalComment: String,
   hqComment: String,
+  reviewHistory: [{
+    stage: { type: String, enum: ['Regional', 'HQ'], required: true },
+    decision: { type: String, enum: ['Approved', 'Rejected'], required: true },
+    reviewer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    comment: { type: String, default: '' },
+    reviewedAt: Date,
+  }],
 
   // Auto-generated summary (kept for backward compat with old reports)
   summary: {
@@ -77,7 +96,7 @@ const semesterReportSchema = new mongoose.Schema({
   // Certification
   certifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   certifiedAt: { type: Date },
-}, { timestamps: true });
+}, { timestamps: true, optimisticConcurrency: true });
 
 // Indexes for efficient lookups
 semesterReportSchema.index({ institution: 1, academicYear: 1, semester: 1 });

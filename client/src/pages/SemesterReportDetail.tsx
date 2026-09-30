@@ -55,6 +55,7 @@ interface ReportData {
   yearGroup?: 'Year 1' | 'Year 2' | 'Year 3' | 'All';
   periodStart: string;
   periodEnd: string;
+  activityWindows?: Array<{ startDate: string; endDate: string; label: string }>;
   status: string;
   generatedBy: { _id: string; name: string; email: string };
   reviewedByRegional?: { _id: string; name: string; email: string };
@@ -63,6 +64,7 @@ interface ReportData {
   certifiedAt?: string;
   regionalComment?: string;
   hqComment?: string;
+  reviewHistory?: Array<{ stage: 'Regional' | 'HQ'; decision: 'Approved' | 'Rejected'; reviewer?: { name: string }; comment?: string; reviewedAt?: string }>;
   createdAt: string;
   academicTerm?: { _id: string; name: string; academicYear: string; termType: string };
   summary: {
@@ -225,7 +227,8 @@ export default function SemesterReportDetail() {
   const isSubmitted = report.status === 'Submitted';
   const isRegionalApproved = report.status === 'Regional_Approved';
   const isApproved = report.status === 'HQ_Approved';
-  const canEdit = (isDraft || isRejected) && !isHQRole(user?.role) && user?.role !== 'RegionalAdmin';
+  const canPrepare = !isHQRole(user?.role) && user?.role !== 'RegionalAdmin';
+  const canEdit = (isDraft || isRejected) && canPrepare;
   const currentWorkflowIndex = Math.max(0, reportWorkflowStages.findIndex((stage) => stage.status === report.status));
   const rejectedAtIndex = report.reviewedByHQ ? 3 : report.reviewedByRegional ? 2 : 0;
 
@@ -249,7 +252,7 @@ export default function SemesterReportDetail() {
             {report.institution} • {format(new Date(report.periodStart), 'dd MMM yyyy')} – {format(new Date(report.periodEnd), 'dd MMM yyyy')}
           </p>
         </div>
-        {isDraft && (
+        {(isDraft || isRejected || isCertified || report.status === 'Generated') && canPrepare && (
           <Button
             variant="outline"
             onClick={handleRefreshMetrics}
@@ -257,7 +260,7 @@ export default function SemesterReportDetail() {
             className="rounded-xl border-gray-200 font-bold shrink-0"
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh Metrics
+            {isCertified ? 'Refresh & Recertify' : 'Refresh Metrics'}
           </Button>
         )}
       </div>
@@ -369,6 +372,11 @@ export default function SemesterReportDetail() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-amber-600">{s.totalMonitoringVisits}</div>
+            {report.activityWindows && report.activityWindows.length > 1 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Includes matching WEL windows through {format(new Date(Math.max(...report.activityWindows.map(window => new Date(window.endDate).getTime()))), 'dd MMM yyyy')}
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-sm">
@@ -637,23 +645,33 @@ export default function SemesterReportDetail() {
       )}
 
       {/* --- Review History --- */}
-      {(report.reviewedByRegional || report.reviewedByHQ || report.regionalComment || report.hqComment) && (
+      {(report.reviewHistory?.length || report.reviewedByRegional || report.reviewedByHQ || report.regionalComment || report.hqComment) && (
         <Card data-help-id="semester-report-detail-review-history" className="bg-white border-gray-100 rounded-[2rem] shadow-xl">
           <CardHeader className="p-8 pb-0">
             <CardTitle className="text-xl font-black">Review History</CardTitle>
           </CardHeader>
           <CardContent className="p-8 space-y-4">
-            {report.reviewedByRegional && (
-              <div className="p-4 bg-amber-50 rounded-2xl">
-                <p className="text-sm font-bold text-amber-700">Regional Review by {report.reviewedByRegional.name}</p>
-                {report.regionalComment && <p className="text-sm text-amber-600 mt-1">{report.regionalComment}</p>}
+            {report.reviewHistory?.length ? report.reviewHistory.map((review, index) => (
+              <div key={`${review.reviewedAt}-${index}`} className={`p-4 rounded-2xl ${review.decision === 'Rejected' ? 'bg-red-50' : review.stage === 'HQ' ? 'bg-green-50' : 'bg-amber-50'}`}>
+                <p className="text-sm font-bold text-gray-800">{review.stage} {review.decision.toLowerCase()} by {review.reviewer?.name || 'Reviewer'}</p>
+                {review.reviewedAt && <p className="text-xs text-gray-500 mt-1">{format(new Date(review.reviewedAt), 'dd MMM yyyy, HH:mm')}</p>}
+                {review.comment && <p className="text-sm text-gray-700 mt-2">{review.comment}</p>}
               </div>
-            )}
-            {report.reviewedByHQ && (
-              <div className="p-4 bg-green-50 rounded-2xl">
-                <p className="text-sm font-bold text-green-700">HQ Review by {report.reviewedByHQ.name}</p>
-                {report.hqComment && <p className="text-sm text-green-600 mt-1">{report.hqComment}</p>}
-              </div>
+            )) : (
+              <>
+                {report.reviewedByRegional && (
+                  <div className="p-4 bg-amber-50 rounded-2xl">
+                    <p className="text-sm font-bold text-amber-700">Regional Review by {report.reviewedByRegional.name}</p>
+                    {report.regionalComment && <p className="text-sm text-amber-600 mt-1">{report.regionalComment}</p>}
+                  </div>
+                )}
+                {report.reviewedByHQ && (
+                  <div className="p-4 bg-green-50 rounded-2xl">
+                    <p className="text-sm font-bold text-green-700">HQ Review by {report.reviewedByHQ.name}</p>
+                    {report.hqComment && <p className="text-sm text-green-600 mt-1">{report.hqComment}</p>}
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
