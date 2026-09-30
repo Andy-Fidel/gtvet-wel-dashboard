@@ -399,15 +399,15 @@ export default function CompetencyAssessments() {
                         </p>
                     </div>
                 </div>
-                <div className="flex items-center space-x-3">
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                     {isOversightPortal ? (
                         <Badge className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">{oversightPortalLabel} · Read only</Badge>
                     ) : null}
-                    <Button onClick={handleExport} variant="outline" className="rounded-xl border-gray-200 bg-white hover:bg-gray-50 text-gray-700 shadow-sm font-semibold">
+                    <Button onClick={handleExport} variant="outline" className="order-2 min-h-11 w-full rounded-xl border-gray-200 bg-white font-semibold text-gray-700 shadow-sm hover:bg-gray-50 sm:order-none sm:w-auto">
                         <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
                     {!isOversightPortal ? (
-                        <Button onClick={() => { setEditingAssessment(null); setOpen(true) }} className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 shadow-sm font-bold">
+                        <Button onClick={() => { setEditingAssessment(null); setOpen(true) }} className="order-1 min-h-11 w-full rounded-xl bg-[#FFB800] font-bold text-gray-900 shadow-sm hover:bg-[#e5a600] sm:order-none sm:w-auto">
                             <Plus className="mr-2 h-4 w-4" /> New Assessment
                         </Button>
                     ) : null}
@@ -460,28 +460,28 @@ export default function CompetencyAssessments() {
 
             {/* Stat Cards */}
             {isOversightPortal && hqSection !== 'overview' ? null : loading ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 px-4 sm:px-0">
-                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[180px] rounded-[2rem]" />)}
+                <div className="grid grid-cols-2 gap-2 px-4 sm:gap-4 sm:px-0 xl:grid-cols-4">
+                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[112px] rounded-2xl xl:h-[180px] xl:rounded-[2rem]" />)}
                 </div>
             ) : stats ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 px-4 sm:px-0">
+                <div className="grid grid-cols-2 gap-2 px-4 sm:gap-4 sm:px-0 xl:grid-cols-4">
                     {assessmentStatCards.map(({ label, value, Icon, detail }) => (
                         <div
                             key={label}
-                            className="relative isolate flex min-h-[180px] overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-5 text-gray-950 shadow-xl shadow-[#C98200]/20"
+                            className="relative isolate flex min-h-[112px] overflow-hidden rounded-2xl bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-3 text-gray-950 shadow-xl shadow-[#C98200]/20 xl:min-h-[180px] xl:rounded-[2rem] xl:p-5"
                         >
                             <div className="absolute -bottom-16 -right-10 -z-10 h-40 w-40 rounded-full bg-[#C77700]/25 blur-2xl" />
                             <div className="flex w-full flex-col justify-between">
                                 <div className="flex items-start justify-between gap-3">
-                                    <p className="pt-1 text-sm font-black uppercase tracking-wider text-gray-900/65">{label}</p>
-                                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
+                                    <p className="pt-1 text-xs font-black uppercase tracking-wide text-gray-900/65 xl:text-sm xl:tracking-wider">{label}</p>
+                                    <span className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm xl:flex" aria-hidden="true">
                                         <ArrowUpRight className="h-6 w-6" strokeWidth={2.75} />
                                     </span>
                                 </div>
 
-                                <p className="text-5xl font-black leading-none tracking-tight">{value}</p>
+                                <p className="text-3xl font-black leading-none tracking-tight xl:text-5xl">{value}</p>
 
-                                <div className="flex items-center gap-3 text-sm font-bold text-gray-900/70">
+                                <div className="hidden items-center gap-3 text-sm font-bold text-gray-900/70 xl:flex">
                                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-950/10 text-gray-950">
                                         <Icon className="h-4 w-4" strokeWidth={2.5} />
                                     </span>
@@ -913,15 +913,15 @@ export default function CompetencyAssessments() {
 
             {/* Form Dialog */}
             <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent className="max-h-[90vh] overflow-y-auto rounded-2xl border border-gray-200 bg-white p-0 text-gray-900 shadow-2xl sm:max-w-[800px] [&>button]:bg-gray-100 [&>button]:text-gray-600 [&>button:hover]:bg-gray-200 [&>button:hover]:text-gray-900">
-                    <div className="p-8">
+                <DialogContent className="max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-white p-0 text-gray-900 shadow-2xl sm:max-h-[90vh] sm:max-w-[800px] [&>button]:bg-gray-100 [&>button]:text-gray-600 [&>button:hover]:bg-gray-200 [&>button:hover]:text-gray-900">
+                    <div className="p-4 sm:p-8">
                         <DialogHeader className="mb-6">
                         <DialogTitle className="text-2xl font-black text-gray-900">{isEditingExistingAssessment ? 'Edit Assessment' : 'New Competency Assessment'}</DialogTitle>
                         <DialogDescription className="font-medium text-gray-500">
                             {isEditingExistingAssessment ? 'Update evaluation details.' : 'Register a new skills evaluation.'}
                         </DialogDescription>
                         </DialogHeader>
-                        <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+                        <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-8">
                             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                             <CompetencyAssessmentForm onSuccess={handleSuccess} initialData={editingAssessment as any} />
                         </div>

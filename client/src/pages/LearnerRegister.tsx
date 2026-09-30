@@ -108,6 +108,7 @@ export default function LearnerRegister() {
   const [analytics, setAnalytics] = useState<LearnerRegisterResponse["analytics"]>(undefined)
   const [lifecycleSummary, setLifecycleSummary] = useState({ year1: 0, year2: 0, year3: 0, graduated: 0 })
   const [open, setOpen] = useState(false)
+  const [showMobileFilters, setShowMobileFilters] = useState(false)
   const [csvOpen, setCsvOpen] = useState(false)
   const [editingLearner, setEditingLearner] = useState<Learner | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -427,31 +428,32 @@ export default function LearnerRegister() {
   const regionalExceptionCount = regionalSection === "exceptions"
     ? totalLearners
     : analytics?.welStatus.find((item) => item.name === "Pending")?.value || 0
+  const activeFilterCount = [programFilter, academicStatusFilter, yearFilter, welStatusFilter, intakeYearFilter, institutionFilter].filter(Boolean).length
 
   return (
-    <div className="h-full flex-1 flex-col space-y-4 md:space-y-8 pt-16 px-0 pb-4 sm:p-4 md:p-8 flex">
+    <div className="h-full flex-1 flex-col space-y-4 lg:space-y-8 pt-16 px-0 pb-4 sm:p-4 lg:p-8 flex">
       {(!isRegionalOversight || regionalSection === "overview") ? (
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 sm:px-0">
+      <div className="grid grid-cols-2 gap-2 sm:gap-4 xl:grid-cols-4 px-4 sm:px-0">
         {loading ? (
-          <>{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-[180px] rounded-[2rem]" />)}</>
+          <>{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-[112px] rounded-2xl xl:h-[180px] xl:rounded-[2rem]" />)}</>
         ) : (
           lifecycleStats.map(({ label, value, Icon, detail }) => (
             <div
               key={label}
-              className="relative isolate flex min-h-[180px] overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-5 text-gray-950 shadow-xl shadow-[#C98200]/20"
+              className="relative isolate flex min-h-[112px] xl:min-h-[180px] overflow-hidden rounded-2xl xl:rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-3 xl:p-5 text-gray-950 shadow-xl shadow-[#C98200]/20"
             >
               <div className="absolute -bottom-16 -right-10 -z-10 h-40 w-40 rounded-full bg-[#C77700]/25 blur-2xl" />
               <div className="flex w-full flex-col justify-between">
                 <div className="flex items-start justify-between gap-3">
-                  <p className="pt-1 text-sm font-black uppercase tracking-wider text-gray-900/65">{label}</p>
-                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
+                  <p className="pt-1 text-xs xl:text-sm font-black uppercase tracking-wide xl:tracking-wider text-gray-900/65">{label}</p>
+                  <span className="hidden xl:flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
                     <ArrowUpRight className="h-6 w-6" strokeWidth={2.75} />
                   </span>
                 </div>
 
-                <p className="text-5xl font-black leading-none tracking-tight">{value}</p>
+                <p className="text-3xl xl:text-5xl font-black leading-none tracking-tight">{value}</p>
 
-                <div className="flex items-center gap-3 text-sm font-bold text-gray-900/70">
+                <div className="hidden xl:flex items-center gap-3 text-sm font-bold text-gray-900/70">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-950/10 text-gray-950">
                     <Icon className="h-4 w-4" strokeWidth={2.5} />
                   </span>
@@ -481,7 +483,7 @@ export default function LearnerRegister() {
             </p>
           ) : null}
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
            {isRegionalOversight ? (
              <Badge className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-indigo-700">Regional · Read only</Badge>
            ) : null}
@@ -520,7 +522,7 @@ export default function LearnerRegister() {
 
            {/* Add Learner Dialog */}
            <Dialog open={open && !isRegionalOversight} onOpenChange={setOpen}>
-               <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] bg-white text-gray-900 rounded-2xl border-none shadow-2xl [&>button]:text-gray-500 [&>button]:opacity-100 [&>button:hover]:text-gray-900">
+           <DialogContent className="max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] overflow-y-auto rounded-2xl border-none bg-white p-4 text-gray-900 shadow-2xl sm:max-h-[90vh] sm:max-w-[800px] sm:p-8 [&>button]:text-gray-500 [&>button]:opacity-100 [&>button:hover]:text-gray-900">
                 <DialogHeader className="pt-2">
                   <DialogTitle className="text-gray-900">{editingLearner ? 'Edit Learner' : 'Add New Learner'}</DialogTitle>
                   <DialogDescription className="text-gray-500">
@@ -835,7 +837,7 @@ export default function LearnerRegister() {
 
       {(!isRegionalOversight || regionalSection !== "overview") ? (
       <>
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-8 gap-4 px-4 sm:px-0">
+      <div className="grid grid-cols-1 xl:grid-cols-8 gap-4 px-4 sm:px-0">
         <div className="xl:col-span-2 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
           <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">Search Learners</label>
           <div className="relative">
@@ -852,8 +854,12 @@ export default function LearnerRegister() {
               </button>
             )}
           </div>
+          <button type="button" className="mt-3 min-h-11 text-sm font-bold text-indigo-700 xl:hidden" aria-expanded={showMobileFilters} onClick={() => setShowMobileFilters(value => !value)}>
+            {showMobileFilters ? 'Hide filters' : 'More filters'}
+            {activeFilterCount > 0 ? ` (${activeFilterCount} active)` : ''}
+          </button>
         </div>
-        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+        <div className={`${showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
           <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">Program</label>
           <Select
             value={programFilter || ALL_PROGRAMS}
@@ -870,7 +876,7 @@ export default function LearnerRegister() {
             </SelectContent>
           </Select>
         </div>
-        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+        <div className={`${showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
           <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">Academic Status</label>
           <Select
             value={academicStatusFilter || ALL_ACADEMIC_STATUSES}
@@ -889,7 +895,7 @@ export default function LearnerRegister() {
             </SelectContent>
           </Select>
         </div>
-        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+        <div className={`${showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
           <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">Year</label>
           <Select
             value={yearFilter || ALL_YEARS}
@@ -906,7 +912,7 @@ export default function LearnerRegister() {
             </SelectContent>
           </Select>
         </div>
-        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+        <div className={`${showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
           <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">WEL Status</label>
           <Select
             value={welStatusFilter || ALL_WEL_STATUSES}
@@ -924,7 +930,7 @@ export default function LearnerRegister() {
             </SelectContent>
           </Select>
         </div>
-        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+        <div className={`${showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
           <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">Intake Year</label>
           <Select
             value={intakeYearFilter || ALL_INTAKE_YEARS}
@@ -942,7 +948,7 @@ export default function LearnerRegister() {
           </Select>
         </div>
         {isRegionalOversight ? (
-          <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+          <div className={`${showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
             <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">Institution</label>
             <Select
               value={institutionFilter || ALL_INSTITUTIONS}

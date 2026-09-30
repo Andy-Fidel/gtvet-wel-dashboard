@@ -318,7 +318,7 @@ export default function AttendanceLogs() {
       : ""
 
   return (
-    <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
+    <div className="flex-1 space-y-4 p-3 sm:p-6 lg:space-y-8 xl:p-8 max-w-7xl mx-auto w-full">
       <Dialog open={open && !isOversightReadOnly} onOpenChange={(next) => {
         setOpen(next)
         if (!next && searchParams.get("offlineReview")) {
@@ -328,8 +328,8 @@ export default function AttendanceLogs() {
           setSearchParams(nextParams, { replace: true })
         }
       }}>
-        <DialogContent className="sm:max-w-[760px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
-          <DialogHeader className="pt-6 px-6 pb-0">
+        <DialogContent className="max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] overflow-y-auto rounded-2xl border-none bg-white p-4 shadow-2xl sm:max-h-[90vh] sm:max-w-[760px] sm:p-8">
+          <DialogHeader className="pt-6 pb-0 sm:px-6">
             <DialogTitle className="text-gray-900">
               {editingLog ? "Edit Attendance Log" : "New Attendance Log"}
             </DialogTitle>
@@ -339,7 +339,7 @@ export default function AttendanceLogs() {
                 : "Record daily or weekly placement hours and send them for supervisor review."}
             </DialogDescription>
           </DialogHeader>
-          <div className="px-6 pb-6">
+          <div className="pb-6 sm:px-6">
             <AttendanceLogForm
               onSuccess={handleSuccess}
               initialData={editingLog}
@@ -437,13 +437,13 @@ export default function AttendanceLogs() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
           {[...Array(4)].map((_, index) => (
             <Skeleton key={index} className="h-28 rounded-[2rem]" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
           <Card className="bg-white border-none shadow-xl rounded-[2rem]">
             <CardContent className="p-6">
               <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
@@ -566,6 +566,40 @@ export default function AttendanceLogs() {
               <p className="text-gray-500 font-medium">No attendance logs found</p>
             </div>
           ) : (
+            <>
+            <div className="space-y-3 p-3 xl:hidden" aria-label="Attendance records">
+              {filteredLogs.map((log) => {
+                const canEdit = !isOversightReadOnly && ((!isIndustryPartner && log.submittedSource === "Partner") || (log.status !== "SignedOff" && (!isIndustryPartner || log.submittedBy?._id === user?._id)))
+                const canSignOff = isIndustryPartner && log.status === "Pending" && log.submittedSource !== "Partner"
+                const isReview = log.status === "SignedOff" && !isIndustryPartner && log.submittedSource === "Partner"
+                return (
+                  <article key={log._id} className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="break-words font-bold text-gray-900">{log.learner.name}</h3>
+                        <p className="text-xs text-gray-500">{log.learner.trackingId}</p>
+                      </div>
+                      {isIndustryPartner && <Checkbox checked={selectedLogIdSet.has(log._id)} onCheckedChange={(checked) => handleToggleSelection(log._id, checked)} disabled={!canSignOff} aria-label={`Select attendance entry for ${log.learner.name}`} />}
+                    </div>
+                    <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-gray-100 pt-3 text-sm">
+                      <div><dt className="text-xs font-semibold text-gray-500">Period</dt><dd>{format(new Date(log.periodStart), "MMM d, yyyy")}{log.entryType === "Weekly" && ` to ${format(new Date(log.periodEnd), "MMM d, yyyy")}`}</dd></div>
+                      <div><dt className="text-xs font-semibold text-gray-500">Hours</dt><dd className="font-bold">{log.hoursWorked}</dd></div>
+                      <div><dt className="text-xs font-semibold text-gray-500">Company</dt><dd className="break-words">{log.placement.companyName}</dd></div>
+                      <div><dt className="text-xs font-semibold text-gray-500">Status</dt><dd>{getStatusBadge(log.status)}</dd></div>
+                      <div><dt className="text-xs font-semibold text-gray-500">Type</dt><dd>{log.entryType}</dd></div>
+                      <div><dt className="text-xs font-semibold text-gray-500">Source</dt><dd>{log.submittedSource}</dd></div>
+                    </dl>
+                    {(canEdit || canSignOff) && <div className="mt-4 flex flex-wrap gap-2 border-t border-gray-100 pt-3">
+                      {canEdit && <Button variant="outline" size="sm" onClick={() => handleEdit(log)}><Pencil className="mr-1 h-4 w-4" />{isReview ? "Review" : "Edit"}</Button>}
+                      {canEdit && !isReview && <Button variant="outline" size="sm" className="border-red-200 text-red-700" onClick={() => handleDelete(log._id)}><Trash2 className="mr-1 h-4 w-4" />Delete</Button>}
+                      {canSignOff && <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => openAttendanceActionDialog("sign-off", log)}>Sign Off</Button>}
+                      {canSignOff && <Button variant="outline" size="sm" className="border-red-200 text-red-700" onClick={() => openAttendanceActionDialog("reject", log)}>Return</Button>}
+                    </div>}
+                  </article>
+                )
+              })}
+            </div>
+            <div className="hidden overflow-x-auto xl:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -678,6 +712,8 @@ export default function AttendanceLogs() {
                 })}
               </TableBody>
             </Table>
+            </div>
+            </>
           )}
         </CardContent>
       </Card>

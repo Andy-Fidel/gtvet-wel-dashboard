@@ -122,6 +122,11 @@ export function DataTable<TData, TValue>({
     return ""
   }
 
+  const getColumnLabel = (column: ReturnType<typeof table.getVisibleLeafColumns>[number]) =>
+    typeof column.columnDef.header === 'string'
+      ? column.columnDef.header
+      : column.id.replace(/([A-Z])/g, ' $1').replace(/^./, value => value.toUpperCase())
+
   const downloadCSV = () => {
     if (!data.length) return;
     
@@ -277,7 +282,43 @@ export function DataTable<TData, TValue>({
           </Button>
         </div>
       </div>
-      <div className="rounded-md border bg-white border-gray-200 shadow-sm overflow-x-auto">
+      <div className="space-y-3 xl:hidden" aria-label="Records">
+        {table.getRowModel().rows.length ? table.getRowModel().rows.map(row => {
+          const cells = row.getVisibleCells()
+          const details = cells.filter(cell => cell.column.id !== 'actions' && cell.column.id !== 'select')
+          const primary = details.find(cell => {
+            const accessorKey = (cell.column.columnDef as { accessorKey?: string }).accessorKey
+            return cell.column.id === 'name' || accessorKey === 'learner.name'
+          }) ?? details[0]
+          const actions = cells.find(cell => cell.column.id === 'actions')
+          const selection = cells.find(cell => cell.column.id === 'select')
+          return (
+            <article key={row.id} className="min-w-0 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 break-words font-bold text-gray-900">
+                  {primary ? flexRender(primary.column.columnDef.cell, primary.getContext()) : 'Record'}
+                </div>
+                {selection ? flexRender(selection.column.columnDef.cell, selection.getContext()) : null}
+              </div>
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3 border-t border-gray-100 pt-3">
+                {details.filter(cell => cell.id !== primary?.id).map(cell => (
+                  <div key={cell.id} className="min-w-0 break-words">
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">{getColumnLabel(cell.column)}</dt>
+                    <dd className="mt-1 text-sm text-gray-800">{flexRender(cell.column.columnDef.cell, cell.getContext())}</dd>
+                  </div>
+                ))}
+              </dl>
+              {actions ? (
+                <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 [&_button]:min-h-11">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Actions</span>
+                  {flexRender(actions.column.columnDef.cell, actions.getContext())}
+                </div>
+              ) : null}
+            </article>
+          )
+        }) : <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">No results.</div>}
+      </div>
+      <div className="hidden rounded-md border border-gray-200 bg-white shadow-sm overflow-x-auto xl:block">
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (

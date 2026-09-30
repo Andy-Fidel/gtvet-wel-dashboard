@@ -315,12 +315,10 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
             <FormField control={form.control} name="performanceRating" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Performance Rating (1-5)</FormLabel>
-                  <FormControl>
-                    <div className="flex items-center bg-[#F5F5FA] rounded-xl h-12 px-3 text-gray-900">
-                       <input type="range" min="1" max="5" step="1" value={normalizeSliderValue(field.value)} onChange={e => field.onChange(Number(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-indigo-500 mx-2" />
+                  <div className="flex items-center bg-[#F5F5FA] rounded-xl min-h-12 px-3 text-gray-900">
+                       <FormControl><input type="range" min="1" max="5" step="1" name={field.name} ref={field.ref} onBlur={field.onBlur} value={normalizeSliderValue(field.value)} onChange={e => field.onChange(Number(e.target.value))} className="min-w-0 flex-1 h-11 cursor-pointer accent-indigo-600" /></FormControl>
                        <span className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm shrink-0">{field.value}</span>
-                    </div>
-                  </FormControl>
+                  </div>
                   <FormMessage />
                 </FormItem>
             )} />

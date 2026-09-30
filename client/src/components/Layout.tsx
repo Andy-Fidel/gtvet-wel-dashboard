@@ -2,8 +2,8 @@ import { isHQRole, canAccessHQPage, getHQScopeLabel } from '@/lib/rbac';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
 import { LayoutDashboard, Users, Briefcase, BriefcaseBusiness, Menu, X, Shield, ClipboardList, FileText, Calendar as CalendarIcon, GraduationCap, Building2, Bell, Activity, Clock3, LifeBuoy, Settings2, WifiOff, HeartHandshake, Archive, ArrowLeft } from 'lucide-react';
-import type { FocusEvent, MouseEvent } from 'react';
-import { useState } from 'react';
+import type { FocusEvent, KeyboardEvent, MouseEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import gtvetsLogo from '@/assets/gtvets_logo.png';
 import { useAuth } from '@/context/AuthContext';
 import { useNotifications } from '@/hooks/useNotifications';
@@ -61,12 +61,60 @@ const REGIONAL_OVERSIGHT_ITEMS = [
 export default function Layout() {
   usePushNotificationEvents();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarTooltip, setSidebarTooltip] = useState<{ label: string; top: number } | null>(null);
   const { user, offlineQueueCount } = useAuth();
   const { unreadCount } = useNotifications();
   const location = useLocation();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)');
+    const update = () => setIsDesktop(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen || isDesktop) return;
+    const previousOverflow = document.body.style.overflow;
+    const menuButton = menuButtonRef.current;
+    document.body.style.overflow = 'hidden';
+    sidebarRef.current?.querySelector<HTMLElement>('a[href]')?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      menuButton?.focus();
+    };
+  }, [isMobileMenuOpen, isDesktop]);
+
+  const closeMobileMenu = () => {
+    setIsMobileMenuOpen(false);
+    menuButtonRef.current?.focus();
+  };
+
+  const handleMobileMenuKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (isDesktop || !isMobileMenuOpen) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMobileMenu();
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [])
+      .filter(element => element.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   const isAdmin = isAdminRole(user?.role);
   const canAccessManagementPages = isManagementRole(user?.role);
@@ -114,8 +162,9 @@ export default function Layout() {
       <div className="min-h-screen flex p-0 sm:p-4 gap-0 sm:gap-4 relative z-10">
       {/* Mobile Menu Button */}
       <button 
-        className="md:hidden fixed top-4 right-4 z-50 p-2 bg-white rounded-lg shadow-sm border border-gray-200"
-        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        ref={menuButtonRef}
+        className="lg:hidden fixed top-4 right-4 z-50 p-2 bg-white rounded-lg shadow-sm border border-gray-200"
+        onClick={() => isMobileMenuOpen ? closeMobileMenu() : setIsMobileMenuOpen(true)}
         aria-label={isMobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
         aria-expanded={isMobileMenuOpen}
       >
@@ -125,24 +174,31 @@ export default function Layout() {
       {/* Mobile Menu Backdrop */}
       {isMobileMenuOpen && (
         <div 
-          className="fixed inset-0 bg-gray-900/60 z-30 md:hidden transition-opacity"
-          onClick={() => setIsMobileMenuOpen(false)}
+          className="fixed inset-0 bg-gray-900/60 z-30 lg:hidden transition-opacity"
+          onClick={closeMobileMenu}
         />
       )}
 
       {/* Sidebar */}
       <aside className={`
         fixed inset-y-4 left-4 z-40 glass-panel rounded-[2rem] flex flex-col transition-[width,transform] duration-200 ease-in-out shadow-xl will-change-[width,transform]
-        ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-[120%] md:translate-x-0'}
+        ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-[120%] lg:translate-x-0'}
         ${isSidebarCollapsed ? 'w-24' : 'w-72'}
-      `}>
+      `}
+        ref={sidebarRef}
+        inert={!isDesktop && !isMobileMenuOpen}
+        role={!isDesktop && isMobileMenuOpen ? 'dialog' : undefined}
+        aria-modal={!isDesktop && isMobileMenuOpen ? true : undefined}
+        aria-label="Main navigation"
+        onKeyDown={handleMobileMenuKeyDown}
+      >
         {/* Desktop Collapse Toggle */}
         <button 
           onClick={() => {
             hideSidebarTooltip();
             setIsSidebarCollapsed(!isSidebarCollapsed);
           }}
-          className="hidden md:flex absolute -right-3 top-8 w-6 h-6 bg-white border border-gray-200 rounded-full items-center justify-center hover:bg-gray-50 shadow-sm z-50 transition-transform"
+          className="hidden lg:flex absolute -right-3 top-8 w-6 h-6 bg-white border border-gray-200 rounded-full items-center justify-center hover:bg-gray-50 shadow-sm z-50 transition-transform"
           title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {isSidebarCollapsed ? <Menu size={14} className="text-gray-500" /> : <X size={14} className="text-gray-500" />}
@@ -684,7 +740,7 @@ export default function Layout() {
       {isSidebarCollapsed && sidebarTooltip ? (
         <div
           role="tooltip"
-          className="pointer-events-none fixed left-[7.5rem] z-50 hidden -translate-y-1/2 whitespace-nowrap rounded-lg bg-gray-950 px-3 py-2 text-sm font-bold text-white shadow-xl md:block"
+          className="pointer-events-none fixed left-[7.5rem] z-50 hidden -translate-y-1/2 whitespace-nowrap rounded-lg bg-gray-950 px-3 py-2 text-sm font-bold text-white shadow-xl lg:block"
           style={{ top: sidebarTooltip.top }}
         >
           {sidebarTooltip.label}
@@ -692,9 +748,9 @@ export default function Layout() {
       ) : null}
 
       {/* Main Content */}
-      <main className={`flex-1 flex flex-col min-w-0 min-h-screen md:min-h-0 relative z-20 transition-[margin] duration-200 ease-in-out ml-0 ${isSidebarCollapsed ? 'md:ml-32' : 'md:ml-80'}`}>
+      <main inert={!isDesktop && isMobileMenuOpen} className={`flex-1 flex flex-col min-w-0 min-h-screen lg:min-h-0 relative z-20 transition-[margin] duration-200 ease-in-out ml-0 ${isSidebarCollapsed ? 'lg:ml-32' : 'lg:ml-80'}`}>
         <Navbar />
-        <div className="flex-1 overflow-auto glass-panel rounded-[1.5rem] md:rounded-[2.5rem] mt-4 p-2 sm:p-4 md:p-8 w-full">
+        <div className="flex-1 overflow-auto glass-panel rounded-[1.5rem] lg:rounded-[2.5rem] mt-4 p-2 sm:p-4 xl:p-8 w-full">
           {showRegionalBackButton ? (
             <div className="mx-2 mb-3 sm:mx-4">
               <button
