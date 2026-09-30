@@ -295,13 +295,27 @@ export default function Layout() {
                 to="/attendance-logs"
                 className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
-                {...collapsedNavTooltip('Attendance Logs')}
+                {...collapsedNavTooltip('Attendance and Tasks')}
               >
                 {({ isActive }) => (
                   <>
                     <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
                     <Clock3 size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">Attendance Logs</span>}
+                    {!isSidebarCollapsed && <span className="text-base">Attendance and Tasks</span>}
+                  </>
+                )}
+              </NavLink>
+              <NavLink
+                to="/assessments"
+                className={({ isActive }) => `relative flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-6'} py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/10 text-[#FFB800] font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50/50'}`}
+                onClick={() => setIsMobileMenuOpen(false)}
+                {...collapsedNavTooltip('Competency Assessments')}
+              >
+                {({ isActive }) => (
+                  <>
+                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
+                    <GraduationCap size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
+                    {!isSidebarCollapsed && <span className="text-base">Competency Assessments</span>}
                   </>
                 )}
               </NavLink>
@@ -371,7 +385,7 @@ export default function Layout() {
                   </>
                 )}
               </NavLink>
-              <NavLink
+              {['Admin', 'Staff'].includes(user?.role || '') && <NavLink
                 to="/graduated-learners"
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
@@ -384,8 +398,8 @@ export default function Layout() {
                     {!isSidebarCollapsed && <span className="text-base">Graduated Learners</span>}
                   </>
                 )}
-              </NavLink>
-              {canAccessManagementPages ? <NavLink
+              </NavLink>}
+              {isAdmin ? <NavLink
                 to="/learner-progress"
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
@@ -417,13 +431,13 @@ export default function Layout() {
                 to="/attendance-logs" 
                 className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
                 onClick={() => setIsMobileMenuOpen(false)}
-                {...collapsedNavTooltip('Attendance Logs')}
+                {...collapsedNavTooltip('Attendance and Tasks')}
               >
                 {({ isActive }) => (
                   <>
                     <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
                     <Clock3 size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">Attendance Logs</span>}
+                    {!isSidebarCollapsed && <span className="text-base">Attendance and Tasks</span>}
                   </>
                 )}
               </NavLink>
@@ -455,20 +469,6 @@ export default function Layout() {
                   </>
                 )}
               </NavLink> : null}
-              <NavLink 
-                to="/assessments" 
-                className={({ isActive }) => `relative flex items-center gap-4 px-6 py-4 rounded-2xl transition-colors duration-150 group ${isActive ? 'bg-[#FFB800]/5 text-gray-900 font-bold' : 'text-gray-400 hover:text-gray-600'}`}
-                onClick={() => setIsMobileMenuOpen(false)}
-                {...collapsedNavTooltip('Assessments')}
-              >
-                {({ isActive }) => (
-                  <>
-                    <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-10 bg-[#FFB800] rounded-l-full transition-opacity duration-300 ${isActive ? 'opacity-100' : 'opacity-0'}`} />
-                    <GraduationCap size={22} className={`group-hover:scale-110 transition-transform ${isSidebarCollapsed ? 'mx-auto' : ''}`} />
-                    {!isSidebarCollapsed && <span className="text-base">Assessments</span>}
-                  </>
-                )}
-              </NavLink>
 
               {/* Industry Portal Links for Institution Admins */}
               <div className="pt-4 pb-2">

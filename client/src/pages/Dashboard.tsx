@@ -19,7 +19,7 @@ import type { AdminOverviewStats, DashboardStats } from "@/types/dashboard"
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton"
 import { AdminDashboardView } from "./AdminDashboardView"
 import { useEffect } from "react";
-import { isManagementRole } from "@/lib/rbac";
+import { isAdminRole, isManagementRole } from "@/lib/rbac";
 
 type DelegatedPlacementSummary = {
   _id: string
@@ -534,7 +534,7 @@ export default function Dashboard() {
                       {cohort.riskReasons && cohort.riskReasons.length > 0 && (
                         <p className="mt-3 text-xs font-bold text-gray-500">{cohort.riskReasons[0]}</p>
                       )}
-                      {canAccessManagementPages && cohort.riskLevel && cohort.riskLevel !== 'low' && (
+                      {isAdminRole(user?.role) && cohort.riskLevel && cohort.riskLevel !== 'low' && (
                         <div className="mt-3">
                           <Button
                             type="button"
@@ -635,11 +635,7 @@ export default function Dashboard() {
                     <p className="mt-1 text-sm font-bold text-sky-800/70">Monitoring coverage rate</p>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => navigate('/assessments')}
-                    className="rounded-[1.5rem] border border-violet-100 bg-violet-50/70 p-5 text-left transition hover:bg-violet-100/70"
-                  >
+                  <div className="rounded-[1.5rem] border border-violet-100 bg-violet-50/70 p-5 text-left">
                     <div className="flex items-start justify-between">
                       <div className="p-3 rounded-2xl bg-white/80">
                         <TrendingUp className="h-5 w-5 text-violet-600" />
@@ -650,7 +646,7 @@ export default function Dashboard() {
                       {institutionPerformance.assessmentCompletionRate}%
                     </div>
                     <p className="mt-1 text-sm font-bold text-violet-800/70">Assessment completion rate</p>
-                  </button>
+                  </div>
 
                   <button
                     type="button"

@@ -110,7 +110,7 @@ function App() {
                 </ErrorBoundary>
               } />
               <Route path="graduated-learners" element={
-                <ProtectedRoute requiredRoles={['Admin', 'Manager', 'Staff']}>
+                <ProtectedRoute requiredRoles={['Admin', 'Staff']}>
                   <ErrorBoundary>
                     <Suspense fallback={<PageSkeleton />}>
                       <GraduatedLearners />
@@ -126,7 +126,7 @@ function App() {
                 </ErrorBoundary>
               } />
               <Route path="learner-progress" element={
-                <ProtectedRoute requiredRoles={MANAGEMENT_ROLES}>
+                <ProtectedRoute requiredRoles={ADMIN_ROLES}>
                   <ErrorBoundary>
                     <Suspense fallback={<PageSkeleton />}>
                       <LearnerProgressDashboard />
@@ -181,11 +181,13 @@ function App() {
                 </ProtectedRoute>
               } />
               <Route path="assessments" element={
-                <ErrorBoundary>
-                  <Suspense fallback={<PageSkeleton />}>
-                    <CompetencyAssessments />
-                  </Suspense>
-                </ErrorBoundary>
+                <ProtectedRoute requiredRoles={['IndustryPartner', 'SuperAdmin', 'RegionalAdmin', 'HQManager', 'HQStaff']}>
+                  <ErrorBoundary>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <CompetencyAssessments />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
               } />
               <Route path="industry-partners" element={
                 <ErrorBoundary>

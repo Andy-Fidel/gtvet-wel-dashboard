@@ -32,7 +32,8 @@ export function Navbar() {
       case '/graduated-learners': return 'Graduated Learners';
       case '/placements': return 'Workplace Placements';
       case '/delegated-placements': return 'Delegated Placements';
-      case '/attendance-logs': return 'Attendance & Hours';
+      case '/attendance-logs': return 'Attendance and Tasks';
+      case '/assessments': return 'Competency Assessments';
       case '/support-center': return 'Help & Support';
       case '/activity-log': return 'Activity & Audit Log';
       case '/offline-sync': return 'Offline Sync';

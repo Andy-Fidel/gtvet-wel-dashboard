@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import router from '../routes/api.js';
 import { Learner } from '../models/Learner.js';
 import { CompetencyAssessment } from '../models/CompetencyAssessment.js';
+import { Placement } from '../models/Placement.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { User } from '../models/User.js';
 import { Institution } from '../models/Institution.js';
@@ -11,10 +12,10 @@ import { assessmentInput, serializeAssessment, validateAssessmentInput } from '.
 const id = '507f1f77bcf86cd799439011';
 const valid = { learner: id, institution: 'Home', assessmentType: 'Practical', assessmentDate: '2026-09-01', technicalSkills: 'Technical skills', softSkills: 'Communication', professionalism: 3, problemSolving: 3, overallScore: 0, assessorName: 'QA Tester' };
 const chain = value => ({ select() { return this; }, populate() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => value, then(resolve) { return Promise.resolve(value).then(resolve); } });
-async function call(method, { path = '/assessments', role = 'Admin', body = {}, query = {}, user = {} } = {}) {
+async function call(method, { path = '/assessments', role = 'IndustryPartner', body = {}, query = {}, user = {} } = {}) {
   const route = router.stack.find(x => x.route?.path === path && x.route.methods[method]).route;
   const res = { statusCode: 200, status(n) { this.statusCode = n; return this; }, json(body) { this.body = body; return this; }, type() { return this; }, attachment() { return this; }, send(body) { this.body = body; return this; } };
-  await route.stack.at(-1).handle({ user: { _id: id, role, institution: 'Home', ...user }, params: { id }, body, query }, res);
+  await route.stack.at(-1).handle({ user: { _id: id, role, partnerId: id, institution: 'Home', ...user }, params: { id }, body, query }, res);
   return res;
 }
 
@@ -24,23 +25,23 @@ test('names serialize from real fields and missing learners are safe', () => {
   assert.equal(serializeAssessment({ learner: { trackingId: 'QA-2' } }).learner.name, 'QA-2');
 });
 
-test('read and mutation roles fail closed, including institution-less staff', async () => {
-  for (const role of ['Partner', 'Guardian', 'Learner', 'Unknown']) {
+test('assessment page is partner-owned while HQ and region retain read-only oversight', async () => {
+  for (const role of ['Admin', 'Manager', 'Staff', 'Partner', 'Guardian', 'Learner', 'Unknown']) {
     assert.equal((await call('get', { role })).statusCode, 403);
     assert.equal((await call('get', { role, path: '/assessments/export' })).statusCode, 403);
   }
-  for (const role of ['SuperAdmin', 'RegionalAdmin', 'HQManager', 'HQStaff', 'Partner', 'Guardian']) {
+  for (const role of ['SuperAdmin', 'RegionalAdmin', 'HQManager', 'HQStaff', 'Admin', 'Manager', 'Staff', 'Partner', 'Guardian']) {
     for (const method of ['post', 'put', 'delete']) {
       assert.equal((await call(method, { role, path: method === 'post' ? '/assessments' : '/assessments/:id' })).statusCode, 403);
     }
   }
-  assert.equal((await call('post', { user: { institution: '' } })).statusCode, 403);
-  assert.equal((await call('delete', { role: 'Staff', path: '/assessments/:id' })).statusCode, 403);
+  assert.equal((await call('post', { user: { partnerId: null } })).statusCode, 403);
+  assert.equal((await call('delete', { path: '/assessments/:id', user: { partnerPortalRole: 'Supervisor' } })).statusCode, 403);
 });
 
-test('create requires a learner in the submitting institution', async t => {
-  t.mock.method(Learner, 'findOne', query => {
-    assert.deepEqual(query, { _id: id, institution: 'Home' });
+test('create requires an active placement belonging to the partner', async t => {
+  t.mock.method(Placement, 'findOne', query => {
+    assert.deepEqual(query, { learner: id, partner: id, status: 'Active' });
     return chain(null);
   });
   t.mock.method(CompetencyAssessment.prototype, 'save', () => assert.fail('must not save'));
@@ -48,13 +49,41 @@ test('create requires a learner in the submitting institution', async t => {
   assert.equal((await call('post', { body: { ...valid, learner: 'invalid' } })).statusCode, 400);
 });
 
+test('supervisors can create only for active placements assigned to them', async t => {
+  t.mock.method(Placement, 'findOne', query => {
+    assert.deepEqual(query, { learner: id, partner: id, status: 'Active', partnerSupervisor: id });
+    return chain(null);
+  });
+  assert.equal((await call('post', { body: valid, user: { partnerPortalRole: 'Supervisor' } })).statusCode, 404);
+});
+
+test('assessment learner options include only active partner placements', async t => {
+  t.mock.method(Placement, 'find', filter => {
+    assert.deepEqual(filter, { partner: id, status: 'Active', partnerSupervisor: id });
+    return { distinct: async field => {
+      assert.equal(field, 'learner');
+      return [id];
+    } };
+  });
+  t.mock.method(Learner, 'find', filter => {
+    assert.deepEqual(filter, { $and: [{ _id: { $in: [id] } }] });
+    return chain([{ _id: id, firstName: 'Ama', lastName: 'Mensah' }]);
+  });
+  const response = await call('get', { path: '/learners/options', query: { purpose: 'assessment' }, user: { partnerPortalRole: 'Supervisor' } });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body[0].name, 'Mensah Ama');
+});
+
 test('create derives identity, preserves zero scores and never completes learner', async t => {
   const learner = new Learner({ _id: id, firstName: 'Ama', lastName: 'Mensah', trackingId: 'REAL-ID', institution: 'Home', status: 'Placed' });
-  t.mock.method(Learner, 'findOne', () => chain(learner));
+  t.mock.method(Placement, 'findOne', () => chain({ _id: id, learner: id, institution: 'Home' }));
+  t.mock.method(Learner, 'findById', () => chain(learner));
   t.mock.method(Learner, 'findByIdAndUpdate', () => assert.fail('must not change learner status'));
   t.mock.method(CompetencyAssessment.prototype, 'save', async function () {
     assert.equal(this.institution, 'Home');
     assert.equal(this.trackingId, 'REAL-ID');
+    assert.equal(String(this.partner), id);
+    assert.equal(String(this.placement), id);
     assert.equal(this.overallScore, 0);
     await this.validate();
     return this;
@@ -79,23 +108,25 @@ test('schema rejects invalid scores, fractional ratings, short skills and invali
 
 test('update prevents reassignment and scopes assessment and learner checks', async t => {
   t.mock.method(CompetencyAssessment, 'findOne', query => {
-    assert.deepEqual(query, { _id: id, institution: 'Home' });
-    return new CompetencyAssessment({ ...valid, _id: id });
+    assert.deepEqual(query, { _id: id, partner: id });
+    return new CompetencyAssessment({ ...valid, _id: id, partner: id, placement: id });
   });
   assert.equal((await call('put', { path: '/assessments/:id', body: { institution: 'Other' } })).statusCode, 400);
   assert.equal((await call('put', { path: '/assessments/:id', body: { learner: '507f1f77bcf86cd799439012' } })).statusCode, 400);
-  t.mock.method(Learner, 'findOne', query => {
-    assert.deepEqual(query, { _id: new CompetencyAssessment(valid).learner, institution: 'Home' });
+  t.mock.method(Placement, 'findOne', query => {
+    assert.equal(String(query._id), id);
+    assert.equal(String(query.partner), id);
     return chain(null);
   });
   assert.equal((await call('put', { path: '/assessments/:id', body: { overallScore: 50 } })).statusCode, 404);
 });
 
 test('updates use allowlisted fields and run validators', async t => {
-  t.mock.method(CompetencyAssessment, 'findOne', async () => new CompetencyAssessment({ ...valid, _id: id }));
-  t.mock.method(Learner, 'findOne', () => chain({ _id: id, firstName: 'Ama', lastName: 'Mensah' }));
+  t.mock.method(CompetencyAssessment, 'findOne', async () => new CompetencyAssessment({ ...valid, _id: id, partner: id, placement: id }));
+  t.mock.method(Placement, 'findOne', () => chain({ _id: id, partner: id }));
+  t.mock.method(Learner, 'findById', () => chain({ _id: id, firstName: 'Ama', lastName: 'Mensah' }));
   t.mock.method(CompetencyAssessment, 'findOneAndUpdate', async (query, update, options) => {
-    assert.deepEqual(query, { _id: id, institution: 'Home' });
+    assert.deepEqual(query, { _id: id, partner: id });
     assert.deepEqual(update, { $set: { overallScore: 50 } });
     assert.equal(options.runValidators, true);
     return new CompetencyAssessment({ ...valid, overallScore: 50 });
@@ -106,7 +137,7 @@ test('updates use allowlisted fields and run validators', async t => {
 
 test('list populates actual name fields, paginated and unpaginated', async t => {
   t.mock.method(CompetencyAssessment, 'find', filter => {
-    assert.equal(filter.institution, 'Home');
+    assert.equal(String(filter.partner), id);
     return { ...chain([{ ...valid, learner: { firstName: 'Ama', lastName: 'Mensah' } }, { ...valid, learner: null }]), populate(path, fields) {
       assert.equal(path, 'learner');
       assert.ok(fields.includes('firstName'));
@@ -122,14 +153,33 @@ test('list populates actual name fields, paginated and unpaginated', async t => 
   assert.equal(paginated.body.items[1].learner, null);
 });
 
+test('supervisor assessment lists are limited to assigned placements', async t => {
+  t.mock.method(Placement, 'find', filter => {
+    assert.deepEqual(filter, { partner: id, partnerSupervisor: id });
+    return { distinct: async field => {
+      assert.equal(field, '_id');
+      return [id];
+    } };
+  });
+  t.mock.method(CompetencyAssessment, 'find', filter => {
+    assert.deepEqual(filter, { partner: id, placement: { $in: [id] } });
+    return chain([]);
+  });
+  assert.equal((await call('get', { user: { partnerPortalRole: 'Supervisor' } })).statusCode, 200);
+});
+
 test('export shares filters, escapes search and neutralizes formula cells', async t => {
+  t.mock.method(Placement, 'find', filter => {
+    assert.equal(String(filter.partner), id);
+    return { distinct: async () => [id] };
+  });
   t.mock.method(Learner, 'find', filter => {
-    assert.equal(filter.institution, 'Home');
+    assert.deepEqual(filter._id.$in, [id]);
     assert.equal(filter.$or[0].trackingId.source, '\\[');
     return chain([{ _id: id }]);
   });
   t.mock.method(CompetencyAssessment, 'find', filter => {
-    assert.deepEqual(filter, { institution: 'Home', learner: { $in: [id] }, assessmentType: 'Practical', overallScore: { $lt: 40 } });
+    assert.deepEqual(filter, { partner: id, learner: { $in: [id] }, assessmentType: 'Practical', overallScore: { $lt: 40 } });
     return chain([{ ...valid, learner: { firstName: '=SUM(1,2)' }, assessorName: '+formula' }]);
   });
   const res = await call('get', { path: '/assessments/export', query: { search: '[', assessmentType: 'Practical', scoreBand: 'low' } });

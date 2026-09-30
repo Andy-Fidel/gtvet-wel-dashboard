@@ -1,5 +1,5 @@
 export const canWriteAssessment = user =>
-  ['Admin', 'Manager', 'Staff'].includes(user?.role) && Boolean(user?.institution?.trim());
+  user?.role === 'IndustryPartner' && Boolean(user?.partnerId);
 
 export const canReadAssessment = user => canWriteAssessment(user)
   || ['SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin'].includes(user?.role);

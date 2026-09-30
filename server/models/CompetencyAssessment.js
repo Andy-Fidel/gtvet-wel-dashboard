@@ -63,13 +63,16 @@ const competencyAssessmentSchema = new mongoose.Schema({
   institution: {
     type: String,
     required: true
-  }
+  },
+  partner: { type: mongoose.Schema.Types.ObjectId, ref: 'IndustryPartner' },
+  placement: { type: mongoose.Schema.Types.ObjectId, ref: 'Placement' }
 }, {
   timestamps: true
 });
 
 competencyAssessmentSchema.index({ learner: 1, assessmentDate: -1 });
 competencyAssessmentSchema.index({ institution: 1, assessmentDate: -1 });
+competencyAssessmentSchema.index({ partner: 1, placement: 1, assessmentDate: -1 });
 competencyAssessmentSchema.index({ trackingId: 1 });
 
 export const CompetencyAssessment = mongoose.model('CompetencyAssessment', competencyAssessmentSchema);

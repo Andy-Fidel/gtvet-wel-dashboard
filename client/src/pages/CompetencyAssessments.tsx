@@ -101,8 +101,8 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
     header: "Score",
     cell: ({ row }) => {
         const score = row.getValue("overallScore") as number;
-        const color = score >= 4 ? 'text-green-600' : score >= 3 ? 'text-amber-600' : 'text-red-600';
-        return <div className={`font-black ${color}`}>{score}/5</div>
+        const color = score >= 70 ? 'text-green-600' : score >= 40 ? 'text-amber-600' : 'text-red-600';
+        return <div className={`font-black ${color}`}>{score}%</div>
     }
   },
   {
@@ -118,10 +118,11 @@ export const columns: ColumnDef<CompetencyAssessment>[] = [
         onDelete: (id: string) => void,
         onView: (assessment: CompetencyAssessment) => void,
         role?: string
+        partnerPortalRole?: string
       }
 
-      const canEdit = ['Admin', 'Manager', 'Staff'].includes(meta?.role || '')
-      const canDelete = ['Admin', 'Manager'].includes(meta?.role || '')
+      const canEdit = meta?.role === 'IndustryPartner'
+      const canDelete = canEdit && meta?.partnerPortalRole !== 'Supervisor'
 
       return (
         <DropdownMenu>
@@ -737,7 +738,8 @@ export default function CompetencyAssessments() {
                             onEdit: handleEdit,
                             onDelete: handleDelete,
                             onView: handleView,
-                            role: user?.role
+                            role: user?.role,
+                            partnerPortalRole: user?.partnerPortalRole
                         }}
                     />
                     </div>

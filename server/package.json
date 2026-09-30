@@ -13,6 +13,7 @@
     "smtp:verify": "node verify_smtp.js",
     "indexes:partner-slots": "node scripts/install_partner_slot_indexes.js",
     "migrate:partner-submitters": "node scripts/backfill_partner_submitter_institutions.js",
+    "migrate:assessment-placements": "node scripts/backfill_assessment_placements.js",
     "generate:vapid": "web-push generate-vapid-keys"
   },
   "keywords": [],

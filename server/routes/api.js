@@ -5253,8 +5253,8 @@ router.get('/dashboard/action-alerts', async (req, res) => {
                         learnerName: l.name,
                         trackingId: l.trackingId,
                         message: 'Placement ending soon. Final assessment required.',
-                        actionUrl: `/assessments?learnerId=${l._id}`,
-                        actionLabel: 'Complete assessment',
+                        actionUrl: `/learners/${l._id}`,
+                        actionLabel: 'Review learner',
                         workflowStage: 'Placement closure',
                         priority: 'High',
                         blockedBy: 'Final assessment missing',
@@ -6865,11 +6865,19 @@ router.put('/semester-reports/:id/reject', requireRole('HQManager', 'SuperAdmin'
 // ==================== COMPETENCY ASSESSMENTS ====================
 
 const getAssessmentFilter = async (user, query = {}) => {
-    const filter = await getFilter(user);
+    const filter = user.role === 'IndustryPartner'
+        ? { partner: getPartnerId(user) }
+        : await getFilter(user);
+    if (user.role === 'IndustryPartner' && getPartnerPortalRole(user) === 'Supervisor') {
+        filter.placement = { $in: await Placement.find({ partner: getPartnerId(user), partnerSupervisor: user._id }).distinct('_id') };
+    }
     const search = String(query.search || '').trim();
     if (search) {
         const regex = new RegExp(escapeRegex(search), 'i');
-        const learners = await Learner.find({ ...filter, $or: ['trackingId', 'firstName', 'middleName', 'lastName'].map(field => ({ [field]: regex })) }).select('_id').lean();
+        const learnerScope = user.role === 'IndustryPartner'
+            ? { _id: { $in: await Placement.find({ partner: getPartnerId(user), ...(filter.placement ? { _id: filter.placement } : {}) }).distinct('learner') } }
+            : filter;
+        const learners = await Learner.find({ ...learnerScope, $or: ['trackingId', 'firstName', 'middleName', 'lastName'].map(field => ({ [field]: regex })) }).select('_id').lean();
         filter.learner = { $in: learners.map(learner => learner._id) };
     }
     if (query.assessmentType) filter.assessmentType = String(query.assessmentType);
@@ -7008,18 +7016,23 @@ router.get('/assessments', async (req, res) => {
 router.post('/assessments', async (req, res) => {
     try {
         if (!canWriteAssessment(req.user)) {
-            return res.status(403).json({ message: 'Only institution staff can record assessments.' });
+            return res.status(403).json({ message: 'Only industry partners can record assessments.' });
         }
         if (!mongoose.isObjectIdOrHexString(req.body?.learner)) return res.status(400).json({ message: 'A valid learner is required' });
         const inputError = validateAssessmentInput(req.body);
         if (inputError) return res.status(400).json({ message: inputError });
-        const learner = await Learner.findOne({ _id: req.body.learner, institution: req.user.institution }).select(assessmentLearnerFields);
-        if (!learner) return res.status(404).json({ message: 'Learner not found in your institution' });
+        const partner = getPartnerId(req.user);
+        const placement = await Placement.findOne({ learner: req.body.learner, partner, status: 'Active', ...(getPartnerPortalRole(req.user) === 'Supervisor' ? { partnerSupervisor: req.user._id } : {}) });
+        if (!placement) return res.status(404).json({ message: 'Active learner placement not found for your partner account' });
+        const learner = await Learner.findById(placement.learner).select(assessmentLearnerFields);
+        if (!learner) return res.status(404).json({ message: 'Learner not found' });
         const newAssessment = new CompetencyAssessment({
             ...assessmentInput(req.body),
             learner: learner._id,
             trackingId: learner.trackingId,
-            institution: req.user.institution,
+            institution: placement.institution,
+            partner,
+            placement: placement._id,
         });
         await newAssessment.save();
         // Recording evidence does not complete a learner or their placement.
@@ -7035,13 +7048,13 @@ router.post('/assessments', async (req, res) => {
         });
 
         await notifyUsers({
-            institution: req.user.institution,
+            institution: placement.institution,
             roles: ['Admin', 'Manager'],
             sender: req.user._id,
             type: 'assessment',
             title: 'Competency Assessment Logged',
             message: `A competency assessment was completed for ${learnerName}.`,
-            link: '/assessments'
+            link: `/learners/${learner._id}`
         });
 
         res.status(201).json(serializeAssessment({ ...newAssessment.toObject(), learner: learner.toObject() }));
@@ -7055,12 +7068,12 @@ router.post('/assessments', async (req, res) => {
 router.put('/assessments/:id', async (req, res) => {
     try {
         if (!canWriteAssessment(req.user)) {
-            return res.status(403).json({ message: 'Only institution staff can edit assessments.' });
+            return res.status(403).json({ message: 'Only industry partners can edit assessments.' });
         }
         if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid assessment ID' });
         const inputError = validateAssessmentInput(req.body);
         if (inputError) return res.status(400).json({ message: inputError });
-        const filter = await getFilter(req.user);
+        const filter = await getAssessmentFilter(req.user);
         const existingAssessment = await CompetencyAssessment.findOne({ _id: req.params.id, ...filter });
         if (!existingAssessment) return res.status(404).json({ message: 'Assessment not found or unauthorized' });
         if ((req.body.learner !== undefined && String(req.body.learner) !== String(existingAssessment.learner))
@@ -7068,8 +7081,10 @@ router.put('/assessments/:id', async (req, res) => {
             || (req.body.trackingId !== undefined && req.body.trackingId !== existingAssessment.trackingId)) {
             return res.status(400).json({ message: 'Assessment learner, tracking ID and institution cannot be changed' });
         }
-        const learner = await Learner.findOne({ _id: existingAssessment.learner, institution: req.user.institution }).select(assessmentLearnerFields).lean();
-        if (!learner) return res.status(404).json({ message: 'Learner not found in your institution' });
+        const placement = await Placement.findOne({ _id: existingAssessment.placement, partner: getPartnerId(req.user), ...(getPartnerPortalRole(req.user) === 'Supervisor' ? { partnerSupervisor: req.user._id } : {}) });
+        if (!placement) return res.status(404).json({ message: 'Assessment placement not found or unauthorized' });
+        const learner = await Learner.findById(existingAssessment.learner).select(assessmentLearnerFields).lean();
+        if (!learner) return res.status(404).json({ message: 'Learner not found' });
         const updatedAssessment = await CompetencyAssessment.findOneAndUpdate(
             { _id: req.params.id, ...filter }, 
             { $set: assessmentInput(req.body) },
@@ -7096,11 +7111,11 @@ router.put('/assessments/:id', async (req, res) => {
 
 router.delete('/assessments/:id', async (req, res) => {
     try {
-        if (!canWriteAssessment(req.user) || !['Admin', 'Manager'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Only institution administrators and managers can delete assessments.' });
+        if (!canWriteAssessment(req.user) || getPartnerPortalRole(req.user) !== 'Coordinator') {
+            return res.status(403).json({ message: 'Only partner coordinators can delete assessments.' });
         }
         if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid assessment ID' });
-        const filter = await getFilter(req.user);
+        const filter = await getAssessmentFilter(req.user);
         const deletedAssessment = await CompetencyAssessment.findOneAndDelete({ _id: req.params.id, ...filter });
         if (!deletedAssessment) return res.status(404).json({ message: 'Assessment not found or unauthorized' });
         await logAuditEvent({
@@ -7370,9 +7385,16 @@ router.get('/learners', async (req, res) => {
 
 router.get('/learners/options', async (req, res) => {
   try {
-    const filter = req.query.purpose === 'monitoring'
-      ? await getMonitoringFilter(req.user, true)
-      : await getFilter(req.user);
+    let filter;
+    if (req.query.purpose === 'assessment' && req.user.role === 'IndustryPartner') {
+      const placementFilter = { partner: getPartnerId(req.user), status: 'Active' };
+      if (getPartnerPortalRole(req.user) === 'Supervisor') placementFilter.partnerSupervisor = req.user._id;
+      filter = { _id: { $in: await Placement.find(placementFilter).distinct('learner') } };
+    } else {
+      filter = req.query.purpose === 'monitoring'
+        ? await getMonitoringFilter(req.user, true)
+        : await getFilter(req.user);
+    }
     const query = { $and: [filter] };
     const { status, academicStatus, year, program, search, institution, limit: requestedLimit } = req.query;
 
@@ -8673,7 +8695,7 @@ router.get('/learners/:id/progress', async (req, res) => {
 });
 
 // GET /api/learners/progress/bulk - Get progress summary for multiple learners
-router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...MANAGEMENT_ROLES), async (req, res) => {
+router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
   try {
     const filter = await getFilter(req.user);
     const {
@@ -8909,7 +8931,7 @@ router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...MAN
 
 // ==================== PLACEMENTS ====================
 
-router.get('/learners/graduated/export', async (req, res) => {
+router.get('/learners/graduated/export', requireRole('Admin', 'Staff'), async (req, res) => {
   try {
     const filter = await getFilter(req.user);
     const query = {
@@ -9026,7 +9048,7 @@ router.get('/learners/graduated/export', async (req, res) => {
   }
 });
 
-router.get('/learners/graduated/annual-report', async (req, res) => {
+router.get('/learners/graduated/annual-report', requireRole('Admin', 'Staff'), async (req, res) => {
   try {
     const filter = await getFilter(req.user);
     const query = {

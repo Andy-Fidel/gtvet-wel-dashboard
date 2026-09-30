@@ -63,7 +63,7 @@ export function CompetencyAssessmentForm({ onSuccess, initialData }: CompetencyA
 
   useEffect(() => {
     let cancelled = false
-    authFetch('/api/learners/options')
+    authFetch('/api/learners/options?purpose=assessment')
         .then(async res => {
           if (!res.ok) throw new Error('Unable to load learners. Please reopen this form to retry.')
           const data = await res.json()

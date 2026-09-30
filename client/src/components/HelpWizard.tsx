@@ -175,7 +175,7 @@ const guideDefinitions: GuideDefinition[] = [
     label: "Progress Tracker",
     launchPath: "/learner-progress",
     catalogSummary: "Find at-risk learners and resolve missing milestone inputs.",
-    roles: MANAGEMENT_ROLES,
+    roles: ["SuperAdmin", "RegionalAdmin", "Admin"],
     match: (pathname) => pathname === "/learner-progress",
     steps: () => [
       {
@@ -230,14 +230,14 @@ const guideDefinitions: GuideDefinition[] = [
   },
   {
     key: "attendance-logs",
-    label: "Attendance & Hours",
+    label: "Attendance and Tasks",
     launchPath: "/attendance-logs",
     catalogSummary: "Review hours, sign-off status, and attendance bottlenecks.",
     roles: ["Admin", "Manager", "Staff", "IndustryPartner"],
     match: (pathname) => pathname === "/attendance-logs",
     steps: () => [
       {
-        title: "Attendance & Hours",
+        title: "Attendance and Tasks",
         description: "This page records attendance submissions and sign-off progress for active placements.",
         targetId: "attendance-logs-filters",
         bullets: [
@@ -363,10 +363,10 @@ const guideDefinitions: GuideDefinition[] = [
   },
   {
     key: "assessments",
-    label: "Assessments",
+    label: "Competency Assessments",
     launchPath: "/assessments",
     catalogSummary: "Track competency assessment coverage and learner readiness evidence.",
-    roles: INSTITUTION_ROLES,
+    roles: ["IndustryPartner", "SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin"],
     match: (pathname) => pathname === "/assessments",
     steps: () => [
       {

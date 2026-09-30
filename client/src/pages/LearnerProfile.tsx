@@ -21,7 +21,6 @@ import {
 } from "@/components/ui/dialog"
 import { UnifiedPlacementForm } from "./UnifiedPlacementForm"
 import { MonitoringVisitForm } from "./MonitoringVisitForm"
-import { CompetencyAssessmentForm } from "./CompetencyAssessmentForm"
 import { LearnerForm } from "./learners/LearnerForm"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -313,7 +312,6 @@ export default function LearnerProfile() {
   const [error, setError] = useState("")
   const [placementOpen, setPlacementOpen] = useState(false)
   const [visitOpen, setVisitOpen] = useState(false)
-  const [assessmentOpen, setAssessmentOpen] = useState(false)
   const [supportOpen, setSupportOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [learnerAgreementOpen, setLearnerAgreementOpen] = useState(false)
@@ -771,9 +769,6 @@ export default function LearnerProfile() {
                            Semester Reports
                       </Button>
                     ) : null}
-                    <Button onClick={() => setAssessmentOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md">
-                        <Plus className="mr-2 h-4 w-4" /> Complete Assessment
-                    </Button>
                 </>
             )}
             {currentStage === 'Completed' && (
@@ -1398,21 +1393,11 @@ export default function LearnerProfile() {
             <div className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="font-bold text-lg flex items-center gap-2"><Award className="h-5 w-5 text-emerald-500"/> Competency Assessments</h3>
-                    {!isOversightReadOnly && (currentStage === 'Placed' || currentStage === 'Monitored') && (
-                        <Button size="sm" onClick={() => setAssessmentOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded-xl h-8 px-3">
-                            <Plus className="mr-1 h-3 w-3" /> Add
-                        </Button>
-                    )}
                 </div>
                 {assessments.length === 0 ? (
                     <div className="text-center py-6">
                         <Award className="h-10 w-10 text-gray-200 mx-auto mb-2" />
                         <p className="text-sm text-gray-400 font-medium">No assessments yet</p>
-                        {!isOversightReadOnly && (currentStage === 'Placed' || currentStage === 'Monitored') && (
-                            <Button variant="ghost" size="sm" onClick={() => setAssessmentOpen(true)} className="mt-2 text-emerald-600 hover:text-emerald-700 text-xs font-bold">
-                                Record first assessment →
-                            </Button>
-                        )}
                     </div>
                 ) : (
                     <div className="space-y-4">
@@ -1583,19 +1568,6 @@ export default function LearnerProfile() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={assessmentOpen && !isOversightReadOnly} onOpenChange={setAssessmentOpen}>
-        <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border border-gray-200 bg-white text-gray-900 shadow-2xl p-0">
-          <div className="p-8">
-            <DialogHeader className="mb-6">
-              <DialogTitle className="text-2xl font-black">Assessment for {learner.name}</DialogTitle>
-              <DialogDescription className="font-bold text-gray-400">Record a competency evaluation for this learner.</DialogDescription>
-            </DialogHeader>
-            <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-              <CompetencyAssessmentForm onSuccess={() => { setAssessmentOpen(false); handleFormSuccess(); }} initialData={{ learner: learner._id }} />
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={Boolean(assessmentPreview)} onOpenChange={(open) => { if (!open) setAssessmentPreview(null) }}>
         <DialogContent className="sm:max-w-[720px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl">

@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-table"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useSearchParams } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { format } from "date-fns"
 import {
@@ -253,7 +253,6 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
         onDelete: (id: string) => void,
         onManageGps?: (visit: MonitoringVisit) => void,
         onCreateBlocker?: (visit: MonitoringVisit) => void,
-        onStartAssessment?: (visit: MonitoringVisit) => void,
         onView?: (visit: MonitoringVisit) => void,
         role?: string 
       }
@@ -284,7 +283,6 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
                 {visit.performanceRating <= 2 ? (
                   <>
                     <DropdownMenuItem onClick={() => meta?.onCreateBlocker?.(visit)}>Create Support Blocker</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => meta?.onStartAssessment?.(visit)}>Start Competency Assessment</DropdownMenuItem>
                   </>
                 ) : null}
                 <DropdownMenuItem onClick={() => meta?.onEdit(visit)}>Edit Details</DropdownMenuItem>
@@ -323,7 +321,6 @@ export default function MonitoringVisits() {
     const [viewingVisit, setViewingVisit] = useState<MonitoringVisit | null>(null)
     const [showAllMonitoringExceptions, setShowAllMonitoringExceptions] = useState(false)
     const { authFetch, user } = useAuth()
-    const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
     const isHeadquarters = isHQRole(user?.role)
     const isRegionalOversight = user?.role === 'RegionalAdmin'
@@ -582,14 +579,6 @@ export default function MonitoringVisits() {
         } catch (error) {
             toast.error(error instanceof Error ? error.message : 'Failed to create support blocker')
         }
-    }
-
-    const startAssessmentFromVisit = (visit: MonitoringVisit) => {
-        if (!visit.learner?._id) {
-            toast.error("This visit is missing a learner link.")
-            return
-        }
-        navigate(`/assessments?learnerId=${visit.learner._id}&sourceVisit=${visit._id}`)
     }
 
     const handleDelete = (id: string) => {
@@ -1112,7 +1101,6 @@ export default function MonitoringVisits() {
                             onDelete: handleDelete,
                             onManageGps: handleManageGps,
                             onCreateBlocker: createVisitSupportBlocker,
-                            onStartAssessment: startAssessmentFromVisit,
                             onView: setViewingVisit,
                             role: user?.role 
                         }} 

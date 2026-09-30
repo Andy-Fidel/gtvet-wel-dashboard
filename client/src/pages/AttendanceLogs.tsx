@@ -406,7 +406,7 @@ export default function AttendanceLogs() {
         <div>
           <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
             <ClipboardCheck className="h-6 w-6 md:h-8 md:w-8 text-[#FFB800]" />
-            Attendance & Hours
+            Attendance and Tasks
           </h2>
           <p className="text-muted-foreground mt-1 font-medium">
             {learnerId && activeLearnerName
