@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ArrowUpRight, Briefcase, Building2, ClipboardList, Handshake, Users } from 'lucide-react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 
 type Group = { _id: string; count: number; requestedSlots?: number; oldestCreatedAt?: string }
@@ -57,9 +58,32 @@ export function PartnerInsights() {
   }
   return <section className="space-y-4" aria-label="Partner and industry insights">
     <div className="flex flex-wrap justify-between gap-3"><div><h3 className="text-xl font-bold">Partner & industry insights</h3><p className="text-sm text-muted-foreground">{data.scopeName || data.scope} scope · Updated {new Date(data.generatedAt).toLocaleString()}</p></div><Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>{query.isFetching ? 'Refreshing…' : 'Refresh insights'}</Button></div>
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[
-      ['Registered partners', s.total], ['Partners with placements', s.partnersWithPlacements], ['Reported slots', s.reportedSlots], ['Active placements', active], ['Open requests', open.reduce((sum, row) => sum + row.count, 0)],
-    ].map(([label, value]) => <Card key={String(label)}><CardContent className="p-5"><p className="text-sm text-muted-foreground">{label}</p><p className="text-3xl font-bold">{number(Number(value) || 0)}</p></CardContent></Card>)}</div>
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">{[
+      { label: 'Registered partners', value: s.total, Icon: Building2, detail: 'In this registry scope' },
+      { label: 'Partners with placements', value: s.partnersWithPlacements, Icon: Handshake, detail: 'Hosting learners' },
+      { label: 'Reported slots', value: s.reportedSlots, Icon: Briefcase, detail: 'Registry capacity total' },
+      { label: 'Active placements', value: active, Icon: Users, detail: 'Learners currently placed' },
+      { label: 'Open requests', value: open.reduce((sum, row) => sum + row.count, 0), Icon: ClipboardList, detail: 'Requests in progress' },
+    ].map(({ label, value, Icon, detail }) => (
+      <div key={label} className="relative isolate flex min-h-[180px] overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#FFD54A] via-[#FFB800] to-[#E69700] p-5 text-gray-950 shadow-xl shadow-[#C98200]/20">
+        <div className="absolute -bottom-16 -right-10 -z-10 h-40 w-40 rounded-full bg-[#C77700]/25 blur-2xl" />
+        <div className="flex w-full flex-col justify-between">
+          <div className="flex items-start justify-between gap-3">
+            <p className="pt-1 text-sm font-black uppercase tracking-wider text-gray-900/65">{label}</p>
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-gray-950 shadow-sm" aria-hidden="true">
+              <ArrowUpRight className="h-6 w-6" strokeWidth={2.75} />
+            </span>
+          </div>
+          <p className="text-5xl font-black leading-none tracking-tight tabular-nums">{number(Number(value) || 0)}</p>
+          <div className="flex items-center gap-3 text-sm font-bold text-gray-900/70">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-950/10 text-gray-950">
+              <Icon className="h-4 w-4" strokeWidth={2.5} />
+            </span>
+            <span>{detail}</span>
+          </div>
+        </div>
+      </div>
+    ))}</div>
     <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">Reported slots are registry totals, not verified availability. Verified capacity and reserved slots are not yet tracked. Partner counts follow the partner registry scope; placements and requests follow institution access. All periods are included; archived operations are excluded.</p>
     <div className="grid gap-4 lg:grid-cols-2">{donut('Partners by region', data.regions)}{donut('Partners by sector', data.sectors)}</div>
     <div className="grid gap-4 lg:grid-cols-2"><Card><CardHeader><CardTitle>Placement request progress</CardTitle></CardHeader><CardContent className="overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">Requests by current status</caption><thead><tr><th className="pb-3">Status</th><th>Requests</th><th>Slots requested</th></tr></thead><tbody>{data.requests.map(row => <tr key={row._id} className="border-t"><td className="py-3">{row._id.replaceAll('_', ' ')}</td><td>{row.count}</td><td>{row.requestedSlots}</td></tr>)}</tbody></table>{!data.requests.length && <p>No requests in this scope.</p>}<p className="mt-4 text-xs text-muted-foreground">Requests can include multiple learners. Requested slots may overlap across requests and are not reservations.</p>{open.map(row => <p key={row._id} className="mt-2 text-sm">Oldest {row._id.replaceAll('_', ' ').toLowerCase()}: {row.oldestCreatedAt ? new Date(row.oldestCreatedAt).toLocaleDateString() : 'Date unavailable'}</p>)}</CardContent></Card>
