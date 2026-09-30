@@ -52,6 +52,33 @@ test('institution names cannot be changed and institutions cannot be deleted', a
   assert.equal(deletion.statusCode, 409);
 });
 
+test('manual institution registration requires programmes and preserves selected names', async (t) => {
+  const body = { name: 'School C', code: 'SC-1', region: 'Ahafo', district: 'One', location: 'One', status: 'Day', gender: 'Mixed' };
+  for (const programs of [undefined, [], ['  '], ['Welding', 'welding'], [42]]) {
+    const result = await call('POST', '/institutions', { body: { ...body, programs } });
+    assert.equal(result.statusCode, 400);
+  }
+  t.mock.method(Institution, 'findOne', () => ({ select: async () => null }));
+  let saved;
+  t.mock.method(Institution.prototype, 'save', async function () { saved = this; return this; });
+  t.mock.method(AuditLog, 'create', async () => ({}));
+  const result = await call('POST', '/institutions', { body: { ...body, programs: ['  Welding and Fabrication  ', 'Electrical Engineering'] } });
+  assert.equal(result.statusCode, 201, JSON.stringify(result.body));
+  assert.deepEqual(saved.programs, ['Welding and Fabrication', 'Electrical Engineering']);
+});
+
+test('institution editing updates programme selections without requiring legacy records to have one', async (t) => {
+  const institution = new Institution({ name: 'School D', code: 'SD-1', region: 'Ahafo', district: 'One', location: 'One', status: 'Day', gender: 'Mixed' });
+  t.mock.method(Institution, 'findById', async () => institution);
+  t.mock.method(Institution, 'findOne', () => ({ select: async () => null }));
+  t.mock.method(Institution.prototype, 'save', async function () { return this; });
+  t.mock.method(AuditLog, 'create', async () => ({}));
+  const result = await call('PUT', '/institutions/:id', { body: { programs: ['Automotive Technology'] } });
+  assert.equal(result.statusCode, 200, JSON.stringify(result.body));
+  assert.deepEqual(institution.programs, ['Automotive Technology']);
+  assert.equal((await call('PUT', '/institutions/:id', { body: { programs: ['  '] } })).statusCode, 400);
+});
+
 test('checked-in institution CSV maps its headers and imports valid rows', async (t) => {
   const csv = readFileSync(fileURLToPath(new URL('../../Institutions data.csv', import.meta.url)), 'utf8');
   const created = [];

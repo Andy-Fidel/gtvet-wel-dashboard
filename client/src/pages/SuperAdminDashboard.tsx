@@ -1898,6 +1898,7 @@ export default function SuperAdminDashboard() {
                             </div>
                         </DialogHeader>
                         <InstitutionForm 
+                          availablePrograms={[...new Set((data.institutionDetails || []).flatMap((institution) => institution.programs || []))]}
                           onSuccess={() => {
                             setInstOpen(false);
                             setRefreshKey(prev => prev + 1);

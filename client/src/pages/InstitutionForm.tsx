@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useState } from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Plus, X } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { toast } from "@/lib/toast"
 
@@ -35,6 +35,7 @@ const formSchema = z.object({
   status: z.enum(["Day", "Boarding", "Day/Boarding"]),
   gender: z.enum(["Boys", "Girls", "Mixed"]),
   calendarType: z.enum(["Single Track", "Transitional"]),
+  programs: z.array(z.string().trim().min(2).max(200)).max(50),
   idmsInstitutionId: z.string().trim().optional(),
   idmsInstitutionName: z.string().trim().optional(),
   idmsSyncEnabled: z.boolean(),
@@ -47,10 +48,13 @@ export type InstitutionFormValues = z.infer<typeof formSchema>
 interface InstitutionFormProps {
     onSuccess: (data: unknown) => void;
     initialData?: Partial<InstitutionFormValues> & { _id?: string };
+    availablePrograms?: string[];
 }
 
-export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps) {
+export function InstitutionForm({ onSuccess, initialData, availablePrograms = [] }: InstitutionFormProps) {
   const [loading, setLoading] = useState(false)
+  const [programmeSearch, setProgrammeSearch] = useState("")
+  const [newProgramme, setNewProgramme] = useState("")
   const { authFetch } = useAuth()
 
   const form = useForm<InstitutionFormValues>({
@@ -65,6 +69,7 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
       status: initialData?.status ?? "Day",
       gender: initialData?.gender ?? "Mixed",
       calendarType: initialData?.calendarType ?? "Single Track",
+      programs: initialData?.programs ?? [],
       idmsInstitutionId: initialData?.idmsInstitutionId ?? "",
       idmsInstitutionName: initialData?.idmsInstitutionName ?? "",
       idmsSyncEnabled: initialData?.idmsSyncEnabled ?? false,
@@ -72,6 +77,10 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
   })
 
   async function onSubmit(values: InstitutionFormValues) {
+    if (!initialData?._id && values.programs.length === 0) {
+      form.setError("programs", { message: "Select or add at least one programme" })
+      return
+    }
     setLoading(true)
     try {
         const url = initialData?._id ? `/api/institutions/${initialData._id}` : '/api/institutions';
@@ -92,6 +101,21 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
     } finally {
         setLoading(false)
     }
+  }
+
+  function addProgramme() {
+    const entered = newProgramme.trim()
+    if (entered.length < 2) {
+      form.setError("programs", { message: "Programme name must be at least 2 characters" })
+      return
+    }
+    const programme = availablePrograms.find((value) => value.trim().toLowerCase() === entered.toLowerCase())?.trim() || entered
+    const selected = form.getValues("programs")
+    if (!selected.some((value) => value.toLowerCase() === programme.toLowerCase())) {
+      form.setValue("programs", [...selected, programme], { shouldDirty: true, shouldValidate: true })
+    }
+    setNewProgramme("")
+    setProgrammeSearch("")
   }
 
   return (
@@ -220,6 +244,71 @@ export function InstitutionForm({ onSuccess, initialData }: InstitutionFormProps
                 </FormItem>
             )} />
         </div>
+
+        <FormField control={form.control} name="programs" render={({ field }) => {
+          const selected = field.value || []
+          const options = Array.from(new Map([...availablePrograms, ...selected]
+            .map((value) => value.trim()).filter(Boolean)
+            .map((value) => [value.toLowerCase(), value] as const)).values()).sort((a, b) => a.localeCompare(b))
+          const matching = options.filter((value) => value.toLowerCase().includes(programmeSearch.trim().toLowerCase()))
+          const updateSelected = (values: string[]) => form.setValue("programs", values, { shouldDirty: true, shouldValidate: true })
+          return (
+            <FormItem className="space-y-3 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+              <div>
+                <FormLabel className="text-sm font-semibold text-gray-800">Programmes offered</FormLabel>
+                <p className="mt-1 text-xs text-gray-600">Select all programmes this institution offers. Add a new one if it is not listed.</p>
+              </div>
+              <Input
+                aria-label="Search programmes"
+                placeholder="Search programmes"
+                value={programmeSearch}
+                onChange={(event) => setProgrammeSearch(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault() }}
+                className="bg-white"
+              />
+              <div className="max-h-44 space-y-1 overflow-y-auto rounded-xl border border-gray-200 bg-white p-2">
+                {matching.length ? matching.map((programme) => (
+                  <label key={programme} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-sm text-gray-800 hover:bg-gray-50">
+                    <Checkbox
+                      checked={selected.includes(programme)}
+                      onCheckedChange={(checked) => updateSelected(checked === true
+                        ? [...selected, programme]
+                        : selected.filter((value) => value !== programme))}
+                      className="mt-0.5 border-gray-400"
+                    />
+                    <span className="break-words">{programme}</span>
+                  </label>
+                )) : <p className="px-2 py-3 text-sm text-gray-500">No matching programmes. Add one below.</p>}
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  aria-label="New programme name"
+                  placeholder="New programme name"
+                  maxLength={200}
+                  value={newProgramme}
+                  onChange={(event) => setNewProgramme(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addProgramme() } }}
+                  className="bg-white"
+                />
+                <Button type="button" variant="outline" onClick={addProgramme} aria-label="Add programme">
+                  <Plus className="h-4 w-4" /> Add
+                </Button>
+              </div>
+              {selected.length ? (
+                <div className="flex flex-wrap gap-2" aria-label="Selected programmes">
+                  {selected.map((programme) => (
+                    <button key={programme} type="button" onClick={() => updateSelected(selected.filter((value) => value !== programme))}
+                      className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2.5 py-1 text-xs font-semibold text-purple-800 hover:bg-purple-200"
+                      aria-label={`Remove ${programme}`}>
+                      {programme}<X className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <FormMessage />
+            </FormItem>
+          )
+        }} />
 
         <div className="space-y-4 rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
           <div>

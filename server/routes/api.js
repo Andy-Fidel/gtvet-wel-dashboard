@@ -11388,9 +11388,31 @@ const institutionInputError = (error, res, fallback) => {
     return res.status(500).json({ message: fallback });
 };
 
+const institutionProgramsInput = (input, required = false) => {
+    if (!Array.isArray(input) || input.length > 50) {
+        return { message: 'Programmes must be a list of no more than 50 names' };
+    }
+    const programs = [];
+    const seen = new Set();
+    for (const value of input) {
+        if (typeof value !== 'string' || value.trim().length < 2 || value.trim().length > 200) {
+            return { message: 'Each programme must be a name between 2 and 200 characters' };
+        }
+        const program = value.trim();
+        const key = program.toLocaleLowerCase('en');
+        if (seen.has(key)) return { message: `Duplicate programme: ${program}` };
+        seen.add(key);
+        programs.push(program);
+    }
+    if (required && programs.length === 0) return { message: 'Select or add at least one programme' };
+    return { programs };
+};
+
 router.post('/institutions', requireRole('SuperAdmin'), async (req, res) => {
     try {
-        const newInstitution = new Institution(req.body);
+        const parsedPrograms = institutionProgramsInput(req.body.programs, true);
+        if (parsedPrograms.message) return res.status(400).json({ message: parsedPrograms.message });
+        const newInstitution = new Institution({ ...req.body, programs: parsedPrograms.programs });
         await newInstitution.validate();
         if (await institutionConflict(newInstitution.name, newInstitution.code)) {
             return res.status(409).json({ message: 'Institution name or code already exists' });
@@ -11554,7 +11576,12 @@ router.put('/institutions/:id', requireRole('SuperAdmin'), async (req, res) => {
             return res.status(409).json({ message: 'Institution name cannot be changed because existing records reference it by name' });
         }
         const before = existingInstitution.toObject();
-        const editable = ['code', 'region', 'district', 'location', 'category', 'status', 'gender', 'calendarType', 'programs', 'idmsInstitutionId', 'idmsInstitutionName', 'idmsSyncEnabled'];
+        if (Object.hasOwn(req.body, 'programs')) {
+            const parsedPrograms = institutionProgramsInput(req.body.programs);
+            if (parsedPrograms.message) return res.status(400).json({ message: parsedPrograms.message });
+            existingInstitution.programs = parsedPrograms.programs;
+        }
+        const editable = ['code', 'region', 'district', 'location', 'category', 'status', 'gender', 'calendarType', 'idmsInstitutionId', 'idmsInstitutionName', 'idmsSyncEnabled'];
         for (const field of editable) if (Object.hasOwn(req.body, field)) existingInstitution[field] = req.body[field];
         await existingInstitution.validate();
         if (await institutionConflict(existingInstitution.name, existingInstitution.code, existingInstitution._id)) {
