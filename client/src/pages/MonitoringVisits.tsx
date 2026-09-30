@@ -268,7 +268,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent align="end" className="border-gray-200 bg-white text-gray-900 shadow-xl">
             <DropdownMenuLabel>Actions</DropdownMenuLabel>
             <DropdownMenuItem onClick={() => meta?.onView?.(visit)}>
               <Eye className="mr-2 h-4 w-4" />
@@ -1234,7 +1234,7 @@ export default function MonitoringVisits() {
                     setSearchParams(nextParams, { replace: true })
                 }
             }}>
-                <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 shadow-2xl p-0">
+                <DialogContent className="sm:max-w-[800px] overflow-y-auto max-h-[90vh] rounded-2xl border-0 bg-white shadow-2xl p-0">
                     <div className="p-8">
                     <DialogHeader className="mb-6">
                     <DialogTitle className="text-2xl font-black text-gray-900">{editingVisit ? 'Edit Visit' : 'Log Visit'}</DialogTitle>
@@ -1249,7 +1249,7 @@ export default function MonitoringVisits() {
             </Dialog>
 
             <Dialog open={Boolean(gpsReviewVisit)} onOpenChange={(next) => { if (!next) setGpsReviewVisit(null) }}>
-                <DialogContent className="sm:max-w-[760px] max-h-[90vh] overflow-y-auto rounded-2xl border-0 shadow-2xl">
+                <DialogContent className="sm:max-w-[760px] max-h-[90vh] overflow-y-auto rounded-2xl border-0 bg-white shadow-2xl">
                     <DialogHeader>
                         <DialogTitle className="text-xl font-black text-gray-900">GPS Review and Evidence</DialogTitle>
                         <DialogDescription className="text-gray-500 font-medium">

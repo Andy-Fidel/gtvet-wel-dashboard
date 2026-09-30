@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 
 type Group = { _id: string; count: number; requestedSlots?: number; oldestCreatedAt?: string }
 type Insights = {
@@ -32,16 +32,26 @@ export function PartnerInsights() {
   const donut = (title: string, rows: Group[]) => {
     const chartData = rows.map(row => ({ name: row._id || 'Unspecified', value: row.count }))
     return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>
-      {!chartData.length ? <p className="text-muted-foreground">No partners in this scope.</p> : <div className="h-[380px] w-full" aria-label={`${title} donut chart`}>
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="43%" innerRadius={58} outerRadius={92} paddingAngle={2} strokeWidth={1}>
-              {chartData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={chartColors[index % chartColors.length]} />)}
-            </Pie>
-            <Tooltip formatter={(value: number, name: string) => [number(value), name]} contentStyle={{ borderRadius: '10px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }} />
-            <Legend iconType="circle" formatter={(value) => <span className="text-xs text-foreground">{value}</span>} />
-          </PieChart>
-        </ResponsiveContainer>
+      {!chartData.length ? <p className="text-muted-foreground">No partners in this scope.</p> : <div className="w-full" aria-label={`${title} donut chart`}>
+        <div className="h-[240px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={58} outerRadius={92} paddingAngle={2} strokeWidth={1}>
+                {chartData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={chartColors[index % chartColors.length]} />)}
+              </Pie>
+              <Tooltip formatter={(value: number, name: string) => [number(value), name]} contentStyle={{ borderRadius: '10px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <ul className="mt-3 grid max-h-36 grid-cols-1 gap-x-4 gap-y-2 overflow-y-auto border-t border-gray-100 pt-3 text-xs text-gray-700 sm:grid-cols-2" aria-label={`${title} legend`}>
+          {chartData.map((entry, index) => (
+            <li key={`${entry.name}-${index}`} className="flex min-w-0 items-start gap-2">
+              <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: chartColors[index % chartColors.length] }} aria-hidden="true" />
+              <span className="min-w-0 flex-1 break-words">{entry.name}</span>
+              <span className="shrink-0 font-semibold tabular-nums">{number(entry.value)}</span>
+            </li>
+          ))}
+        </ul>
       </div>}
     </CardContent></Card>
   }
