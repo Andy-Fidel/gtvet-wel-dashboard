@@ -720,27 +720,15 @@ export default function SupportCenter() {
               </Button>
             </div>
           </div>
-          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            <div className="rounded-[1.5rem] border border-white/10 bg-white/5 px-5 py-4 backdrop-blur-sm">
-              <p className="text-[11px] font-black uppercase tracking-[0.24em] text-slate-300">Awaiting Support</p>
-              <p className="mt-2 text-3xl font-black text-white">{hqQueueStats.awaitingSupport}</p>
-              <p className="mt-1 text-xs font-medium text-slate-400">Tickets currently sitting with HQ or support operations.</p>
-            </div>
-            <div className="rounded-[1.5rem] border border-red-400/20 bg-red-400/10 px-5 py-4 backdrop-blur-sm">
-              <p className="text-[11px] font-black uppercase tracking-[0.24em] text-red-200">Urgent Queue</p>
-              <p className="mt-2 text-3xl font-black text-white">{hqQueueStats.urgent}</p>
-              <p className="mt-1 text-xs font-medium text-red-100/80">Highest-priority tickets needing immediate triage.</p>
-            </div>
-            <div className="rounded-[1.5rem] border border-sky-400/20 bg-sky-400/10 px-5 py-4 backdrop-blur-sm">
-              <p className="text-[11px] font-black uppercase tracking-[0.24em] text-sky-200">Unassigned</p>
-              <p className="mt-2 text-3xl font-black text-white">{hqQueueStats.unassigned}</p>
-              <p className="mt-1 text-xs font-medium text-sky-100/80">Tickets with no named owner yet.</p>
-            </div>
-            <div className="rounded-[1.5rem] border border-fuchsia-400/20 bg-fuchsia-400/10 px-5 py-4 backdrop-blur-sm">
-              <p className="text-[11px] font-black uppercase tracking-[0.24em] text-fuchsia-200">Incidents</p>
-              <p className="mt-2 text-3xl font-black text-white">{hqQueueStats.incidents}</p>
-              <p className="mt-1 text-xs font-medium text-fuchsia-100/80">Structured incident reports in the shared queue.</p>
-            </div>
+          <div className="mt-5 flex flex-wrap gap-2 text-sm">
+            {[
+              ["Awaiting support", hqQueueStats.awaitingSupport],
+              ["Urgent", hqQueueStats.urgent],
+              ["Unassigned", hqQueueStats.unassigned],
+              ["SLA breaches", ticketStats.breached],
+              ["New activity", ticketStats.unread],
+              ["Incidents", hqQueueStats.incidents],
+            ].map(([label, count]) => <span key={label} className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5"><strong>{count}</strong> {label}</span>)}
           </div>
         </div>
       ) : (
@@ -939,7 +927,7 @@ export default function SupportCenter() {
         </TabsContent>
 
         <TabsContent value="tickets" className="mt-6 space-y-6">
-          {loading ? (
+          {isHQ ? null : loading ? (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               {[...Array(4)].map((_, index) => <Skeleton key={index} className="h-28 rounded-[2rem]" />)}
             </div>
