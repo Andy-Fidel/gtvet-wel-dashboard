@@ -8158,6 +8158,7 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
     if (!learner || !learnerIds.includes(learner._id.toString())) {
       return res.status(404).json({ message: 'Learner not found or not linked to your account' });
     }
+    const learnerName = buildLearnerDisplayName(learner);
 
     if (!learner.dateOfBirth) {
       return res.status(400).json({ message: 'This learner has no date of birth on record, so under-18 consent cannot be processed yet' });
@@ -8214,7 +8215,7 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
       institution: learner.institution,
       academicYear: placement.academicYear || resolveAcademicYearFromDate(placement.startDate),
       learnerSnapshot: {
-        fullName: learner.name,
+        fullName: learnerName,
         dateOfBirth: learner.dateOfBirth,
         program: learner.program || '',
       },
@@ -8252,7 +8253,7 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
         action: 'UPDATE',
         entityType: 'GuardianConsent',
         entityId: consentRecord._id,
-        summary: `Updated guardian consent for ${learner.name}`,
+        summary: `Updated guardian consent for ${learnerName}`,
         before,
         after: consentRecord,
       });
@@ -8263,7 +8264,7 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
         action: 'CREATE',
         entityType: 'GuardianConsent',
         entityId: consentRecord._id,
-        summary: `Signed guardian consent for ${learner.name}`,
+        summary: `Signed guardian consent for ${learnerName}`,
         after: consentRecord,
       });
     }
@@ -8274,7 +8275,7 @@ router.post('/guardian-portal/consent-forms', requireRole('Guardian'), async (re
       sender: req.user._id,
       type: 'report',
       title: isUploadedSubmission ? 'Guardian Consent Awaiting Review' : 'Guardian Consent Signed',
-      message: `${req.user.name} ${isUploadedSubmission ? 'uploaded a signed' : 'signed the'} under-18 WEL consent form for ${learner.name}.`,
+      message: `${req.user.name} ${isUploadedSubmission ? 'uploaded a signed' : 'signed the'} under-18 WEL consent form for ${learnerName}.`,
       link: `/learners/${learner._id}`,
     });
 
