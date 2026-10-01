@@ -2,10 +2,12 @@ import { PartnerInsights } from '@/components/PartnerInsights'
 import { PartnerChangeQueue } from '@/components/PartnerChanges'
 import { canApproveHQ } from '@/lib/rbac'
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useSearchParams } from 'react-router-dom'
 import { formatDistanceToNow } from "date-fns"
 import { AlertTriangle, Building2, CheckCircle2, Clock3, Eye, Loader2, Mail, MapPin, Plus, Search, Trash2, UserPlus, XCircle } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -15,6 +17,7 @@ import { toast } from "@/lib/toast"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
 import { PartnerBulkRegistration } from './PartnerBulkRegistration'
 import { PartnerSlotAllocations } from '@/components/PartnerSlotAllocations'
+import { PendingSlotApprovals } from '@/components/PendingSlotApprovals'
 import { HQPartnerDetailsDialog, type HQPartnerDetails, type HQPartnerRecord } from '@/components/HQPartnerDetailsDialog'
 
 type HQIndustryPartner = HQPartnerRecord
@@ -35,6 +38,8 @@ interface HQIndustryPartnersResponse {
 
 export default function HQIndustryPartners() {
   const { authFetch, user } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = user?.role === 'SuperAdmin' && searchParams.get('tab') === 'slot-approvals' ? 'slot-approvals' : 'registry'
   const [partners, setPartners] = useState<HQIndustryPartner[]>([])
   const [loading, setLoading] = useState(true)
   const [queryInput, setQueryInput] = useState("")
@@ -232,6 +237,17 @@ export default function HQIndustryPartners() {
         </Button></div>}
       </div>
 
+      <Tabs value={activeTab} onValueChange={(value) => {
+        const next = new URLSearchParams(searchParams)
+        if (value === 'slot-approvals') next.set('tab', value)
+        else next.delete('tab')
+        setSearchParams(next)
+      }}>
+      {user?.role === 'SuperAdmin' && <TabsList aria-label="Partner Registry sections" className="mb-4 h-auto flex-wrap">
+        <TabsTrigger value="registry">Partner Registry</TabsTrigger>
+        <TabsTrigger value="slot-approvals">Pending Slot Approvals</TabsTrigger>
+      </TabsList>}
+      <TabsContent value="registry" className="space-y-6">
       <PartnerInsights />
       <PartnerChangeQueue onChange={() => void fetchPartners()} />
 
@@ -398,6 +414,9 @@ export default function HQIndustryPartners() {
           )}
         </CardContent>
       </Card>
+      </TabsContent>
+      {user?.role === 'SuperAdmin' && <TabsContent value="slot-approvals"><PendingSlotApprovals onChanged={() => void fetchPartners()} /></TabsContent>}
+      </Tabs>
 
       <Dialog open={registrationOpen} onOpenChange={setRegistrationOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto rounded-[2rem] border-none bg-white p-0 sm:max-w-[640px]">

@@ -293,7 +293,9 @@ export default function AttendanceLogs() {
           ? `${updatedCount} attendance entries signed off`
           : `${updatedCount} attendance entries returned for review`)
       } else {
-        toast.success(attendanceAction.action === "sign-off" ? "Hours signed off" : "Hours returned for review")
+        toast.success(attendanceAction.action === "sign-off"
+          ? `Hours signed off for ${targetLogs[0].learner.name}`
+          : `Hours returned for review for ${targetLogs[0].learner.name}`)
       }
     } catch (error) {
       console.error("Error updating attendance log:", error)

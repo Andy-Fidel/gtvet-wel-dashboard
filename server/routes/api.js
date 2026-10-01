@@ -1686,7 +1686,7 @@ const getVisibleSupportAssignees = async (user) => {
 const getPlacementExceptionData = async (institution) => {
   const settings = await getOrCreateSystemSettings();
   const placements = await Placement.find({ institution, status: 'Active' })
-    .populate('learner', 'name owner')
+    .populate('learner', 'firstName middleName lastName trackingId owner')
     .populate('owner', 'name role institution')
     .select('_id learner owner companyName supervisorName supervisorPhone supervisorEmail startDate endDate updatedAt institution')
     .lean();
@@ -1748,7 +1748,7 @@ const getPlacementExceptionData = async (institution) => {
   };
 };
 
-const getPlacementExceptionSignals = ({ settings, placements, attendanceByPlacement, visitsByLearner, assessmentsByLearner }) => {
+export const getPlacementExceptionSignals = ({ settings, placements, attendanceByPlacement, visitsByLearner, assessmentsByLearner }) => {
   const now = new Date();
   const attendanceCadenceMs = settings.attendanceCadenceDays * 24 * 60 * 60 * 1000;
   const monitoringCadenceMs = settings.monitoringVisitCadenceDays * 24 * 60 * 60 * 1000;
@@ -1756,7 +1756,7 @@ const getPlacementExceptionSignals = ({ settings, placements, attendanceByPlacem
 
   placements.forEach((placement) => {
     const learnerId = placement.learner?._id?.toString?.() || placement.learner?.toString?.();
-    const learnerName = placement.learner?.name || 'This learner';
+    const learnerName = buildLearnerDisplayName(placement.learner) || placement.learner?.trackingId || 'Learner unavailable';
     const placementId = placement._id.toString();
     const latestAttendance = attendanceByPlacement.get(placementId);
     const latestVisit = learnerId ? visitsByLearner.get(learnerId) : null;
@@ -1793,9 +1793,9 @@ const getPlacementExceptionSignals = ({ settings, placements, attendanceByPlacem
         placementId,
         dueAt: attendanceDueAt,
         dedupeKey: `attendance-overdue:${placementId}:${attendanceDueAt.toISOString().slice(0, 10)}`,
-        title: 'Attendance follow-up overdue',
+        title: `Attendance overdue: ${learnerName}`,
         message: `No attendance has been logged for ${learnerName} since ${attendanceDueAt.toLocaleDateString()}.`,
-        link: '/attendance-logs',
+        link: learnerId ? `/attendance-logs?learnerId=${learnerId}` : '/attendance-logs',
       });
     }
 
@@ -2297,6 +2297,13 @@ router.post('/push/test', async (req, res) => {
 
 router.get('/notifications', async (req, res) => {
     try {
+        const view = req.query.view || 'active';
+        const status = req.query.status || 'all';
+        const type = req.query.type || 'all';
+        const types = Notification.schema.path('type').enumValues;
+        if (!['active', 'dismissed'].includes(view) || !['all', 'read', 'unread'].includes(status) || (type !== 'all' && !types.includes(type))) {
+            return res.status(400).json({ message: 'Invalid notification filter' });
+        }
         const archivedOnly = req.query.archived === 'true';
         const includeArchived = req.query.includeArchived === 'true';
         const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
@@ -2307,6 +2314,9 @@ router.get('/notifications', async (req, res) => {
             recipient: req.user._id,
             visibleInApp: { $ne: false },
             ...buildArchiveQueryFilter({ includeArchived, archivedOnly }),
+            dismissedAt: view === 'dismissed' ? { $ne: null } : null,
+            ...(status === 'read' ? { read: true } : status === 'unread' ? { read: false } : {}),
+            ...(type === 'all' ? {} : { type }),
             ...(before ? { _id: { $lt: before } } : {}),
         };
         const [notifications, unreadCount] = await Promise.all([
@@ -2314,7 +2324,7 @@ router.get('/notifications', async (req, res) => {
             .sort({ _id: -1 })
             .limit(limit + 1)
             .populate('sender', 'name role profilePicture'),
-          Notification.countDocuments({ recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, read: false }),
+          Notification.countDocuments({ recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, dismissedAt: null, read: false }),
         ]);
         const hasMore = notifications.length > limit;
         if (hasMore) notifications.pop();
@@ -2327,7 +2337,7 @@ router.get('/notifications', async (req, res) => {
 router.put('/notifications/read-all', async (req, res) => {
     try {
         await Notification.updateMany(
-            { recipient: req.user._id, read: false, visibleInApp: { $ne: false }, archivedAt: null },
+            { recipient: req.user._id, read: false, visibleInApp: { $ne: false }, archivedAt: null, dismissedAt: null },
             { $set: { read: true } }
         );
         res.json({ message: 'All notifications marked as read' });
@@ -2338,8 +2348,9 @@ router.put('/notifications/read-all', async (req, res) => {
 
 router.put('/notifications/:id/read', async (req, res) => {
     try {
+        if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid notification ID' });
         const notification = await Notification.findOneAndUpdate(
-            { _id: req.params.id, recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null },
+            { _id: req.params.id, recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, dismissedAt: null },
             { $set: { read: true } },
             { returnDocument: 'after' }
         );
@@ -2347,6 +2358,51 @@ router.put('/notifications/:id/read', async (req, res) => {
         res.json(notification);
     } catch (error) {
         res.status(500).json({ message: 'Error updating notification' });
+    }
+});
+
+router.put('/notifications/:id/unread', async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid notification ID' });
+        const notification = await Notification.findOneAndUpdate(
+            { _id: req.params.id, recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, dismissedAt: null },
+            { $set: { read: false } },
+            { returnDocument: 'after' }
+        );
+        if (!notification) return res.status(404).json({ message: 'Notification not found' });
+        res.json(notification);
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating notification' });
+    }
+});
+
+router.put('/notifications/:id/dismiss', async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid notification ID' });
+        const notification = await Notification.findOneAndUpdate(
+            { _id: req.params.id, recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, dismissedAt: null },
+            { $set: { dismissedAt: new Date(), read: true } },
+            { returnDocument: 'after' }
+        );
+        if (!notification) return res.status(404).json({ message: 'Notification not found' });
+        res.json(notification);
+    } catch (error) {
+        res.status(500).json({ message: 'Error dismissing notification' });
+    }
+});
+
+router.put('/notifications/:id/restore', async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid notification ID' });
+        const notification = await Notification.findOneAndUpdate(
+            { _id: req.params.id, recipient: req.user._id, visibleInApp: { $ne: false }, archivedAt: null, dismissedAt: { $ne: null } },
+            { $set: { dismissedAt: null } },
+            { returnDocument: 'after' }
+        );
+        if (!notification) return res.status(404).json({ message: 'Notification not found' });
+        res.json(notification);
+    } catch (error) {
+        res.status(500).json({ message: 'Error restoring notification' });
     }
 });
 
@@ -2362,7 +2418,7 @@ router.get('/ownership/users', async (req, res) => {
 
 // ==================== SETTINGS ====================
 
-router.get('/settings/notifications', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
+router.get('/settings/notifications', async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('notificationPreferences');
         res.json(user?.notificationPreferences || {});
@@ -2372,7 +2428,7 @@ router.get('/settings/notifications', requireRole('HQManager', 'HQStaff', ...ADM
     }
 });
 
-router.get('/settings/notifications/whatsapp-status', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
+router.get('/settings/notifications/whatsapp-status', async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('phone notificationPreferences');
         res.json({
@@ -2387,7 +2443,7 @@ router.get('/settings/notifications/whatsapp-status', requireRole('HQManager', '
     }
 });
 
-router.put('/settings/notifications', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
+router.put('/settings/notifications', async (req, res) => {
     try {
         const allowedKeys = [
             'inApp',
@@ -2433,7 +2489,7 @@ router.put('/settings/notifications', requireRole('HQManager', 'HQStaff', ...ADM
     }
 });
 
-router.post('/settings/notifications/test-whatsapp', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
+router.post('/settings/notifications/test-whatsapp', async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('name phone notificationPreferences');
         if (!user) {
@@ -5181,7 +5237,7 @@ router.get('/dashboard/action-alerts', async (req, res) => {
 
         // 4. Attendance overdue by configured cadence
         const activePlacements = await Placement.find({ ...filter, status: 'Active' })
-          .populate('learner', 'name trackingId dateOfBirth owner')
+          .populate('learner', 'firstName middleName lastName trackingId dateOfBirth owner')
           .populate('owner', 'name role');
         const placementIds = activePlacements.map((placement) => placement._id);
         const attendanceLogs = await AttendanceLog.find({ placement: { $in: placementIds } }).select('placement periodEnd').sort({ periodEnd: -1 });
@@ -5203,7 +5259,7 @@ router.get('/dashboard/action-alerts', async (req, res) => {
               id: `attendance:${placement._id}`,
               type: 'Attendance Overdue',
               learnerId: placement.learner._id,
-              learnerName: placement.learner.name,
+              learnerName: buildLearnerDisplayName(placement.learner) || placement.learner.trackingId,
               trackingId: placement.learner.trackingId,
               message: `Attendance is overdue. Expected by ${dueAt.toLocaleDateString()}.`,
               actionUrl: `/attendance-logs?learnerId=${placement.learner._id}`,
@@ -10304,7 +10360,7 @@ router.get('/attendance-logs', async (req, res) => {
         if (entryType) query.entryType = entryType;
 
         const logs = await AttendanceLog.find(query)
-            .populate('learner', 'name trackingId program year')
+            .populate('learner', 'firstName middleName lastName trackingId program year')
             .populate('placement', 'companyName supervisorName supervisorEmail startDate endDate status')
             .populate('submittedBy', 'name role')
             .populate('signedOffBy', 'name role')
@@ -10448,9 +10504,9 @@ router.post('/attendance-logs', async (req, res) => {
                 partnerId: placement.partner,
                 sender: req.user._id,
                 type: 'report',
-                title: 'Hours awaiting sign-off',
+                title: `Hours awaiting sign-off: ${learner.name}`,
                 message: `${learner.name} has a new ${entryType.toLowerCase()} attendance entry ready for supervisor review.`,
-                link: '/attendance-logs',
+                link: `/attendance-logs?learnerId=${learner._id}`,
             });
         }
 
@@ -10460,14 +10516,14 @@ router.post('/attendance-logs', async (req, res) => {
                 roles: ['Admin', 'Manager', 'Staff'],
                 sender: req.user._id,
                 type: 'report',
-                title: 'Supervisor-recorded attendance log',
+                title: `Supervisor-recorded attendance: ${learner.name}`,
                 message: `${learner.name} has a new ${entryType.toLowerCase()} attendance entry recorded by the industry supervisor.`,
-                link: '/attendance-logs',
+                link: `/attendance-logs?learnerId=${learner._id}`,
             });
         }
 
         const populated = await AttendanceLog.findById(newLog._id)
-            .populate('learner', 'name trackingId program')
+            .populate('learner', 'firstName middleName lastName trackingId program')
             .populate('placement', 'companyName supervisorName supervisorEmail startDate endDate status')
             .populate('submittedBy', 'name role')
             .populate('signedOffBy', 'name role');
@@ -10567,7 +10623,7 @@ router.put('/attendance-logs/:id', async (req, res) => {
             });
 
             const populated = await AttendanceLog.findById(attendanceLog._id)
-                .populate('learner', 'name trackingId program')
+                .populate('learner', 'firstName middleName lastName trackingId program')
                 .populate('placement', 'companyName supervisorName supervisorEmail startDate endDate status')
                 .populate('submittedBy', 'name role')
                 .populate('signedOffBy', 'name role');
@@ -10656,7 +10712,7 @@ router.put('/attendance-logs/:id', async (req, res) => {
         });
 
         const populated = await AttendanceLog.findById(attendanceLog._id)
-            .populate('learner', 'name trackingId program')
+            .populate('learner', 'firstName middleName lastName trackingId program')
             .populate('placement', 'companyName supervisorName supervisorEmail startDate endDate status')
             .populate('submittedBy', 'name role')
             .populate('signedOffBy', 'name role');
@@ -10731,7 +10787,7 @@ router.post('/attendance-logs/bulk-action', requireRole('IndustryPartner'), asyn
             _id: { $in: validLogIds },
             partner: getPartnerId(req.user),
         })
-            .populate('learner', 'name')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'partner partnerSupervisor');
 
         const foundIds = new Set(logs.map(log => log._id.toString()));
@@ -10769,15 +10825,16 @@ router.post('/attendance-logs/bulk-action', requireRole('IndustryPartner'), asyn
                 after: attendanceLog,
             });
 
+            const learnerName = buildLearnerDisplayName(attendanceLog.learner) || attendanceLog.learner?.trackingId || 'Learner unavailable';
             await notifyUsers({
                 institution: attendanceLog.institution,
                 sender: req.user._id,
                 type: 'report',
-                title: action === 'sign-off' ? 'Hours signed off' : 'Hours returned for review',
+                title: `${action === 'sign-off' ? 'Hours signed off' : 'Hours returned for review'}: ${learnerName}`,
                 message: action === 'sign-off'
-                    ? `${attendanceLog.learner?.name || 'A learner'}'s attendance hours were signed off by the supervisor.`
-                    : `${attendanceLog.learner?.name || 'A learner'}'s attendance entry was returned by the supervisor.`,
-                link: '/attendance-logs',
+                    ? `${learnerName}'s attendance hours were signed off by the supervisor.`
+                    : `${learnerName}'s attendance entry was returned by the supervisor.`,
+                link: attendanceLog.learner?._id ? `/attendance-logs?learnerId=${attendanceLog.learner._id}` : '/attendance-logs',
             });
         }
 
@@ -10798,7 +10855,7 @@ router.put('/attendance-logs/:id/sign-off', requireRole('IndustryPartner'), asyn
             _id: req.params.id,
             partner: getPartnerId(req.user),
         })
-            .populate('learner', 'name')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'partner partnerSupervisor');
 
         if (!attendanceLog) {
@@ -10835,17 +10892,18 @@ router.put('/attendance-logs/:id/sign-off', requireRole('IndustryPartner'), asyn
             after: attendanceLog,
         });
 
+        const learnerName = buildLearnerDisplayName(attendanceLog.learner) || attendanceLog.learner?.trackingId || 'Learner unavailable';
         await notifyUsers({
             institution: attendanceLog.institution,
             sender: req.user._id,
             type: 'report',
-            title: 'Hours signed off',
-            message: `${attendanceLog.learner?.name || 'A learner'}'s attendance hours were signed off by the supervisor.`,
-            link: '/attendance-logs',
+            title: `Hours signed off: ${learnerName}`,
+            message: `${learnerName}'s attendance hours were signed off by the supervisor.`,
+            link: attendanceLog.learner?._id ? `/attendance-logs?learnerId=${attendanceLog.learner._id}` : '/attendance-logs',
         });
 
         const populated = await AttendanceLog.findById(attendanceLog._id)
-            .populate('learner', 'name trackingId program')
+            .populate('learner', 'firstName middleName lastName trackingId program')
             .populate('placement', 'companyName supervisorName supervisorEmail startDate endDate status')
             .populate('submittedBy', 'name role')
             .populate('signedOffBy', 'name role');
@@ -10863,7 +10921,7 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
             _id: req.params.id,
             partner: getPartnerId(req.user),
         })
-            .populate('learner', 'name')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'partner partnerSupervisor');
 
         if (!attendanceLog) {
@@ -10904,17 +10962,18 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
             after: attendanceLog,
         });
 
+        const learnerName = buildLearnerDisplayName(attendanceLog.learner) || attendanceLog.learner?.trackingId || 'Learner unavailable';
         await notifyUsers({
             institution: attendanceLog.institution,
             sender: req.user._id,
             type: 'report',
-            title: 'Hours returned for review',
-            message: `${attendanceLog.learner?.name || 'A learner'}'s attendance entry was returned by the supervisor.`,
-            link: '/attendance-logs',
+            title: `Hours returned for review: ${learnerName}`,
+            message: `${learnerName}'s attendance entry was returned by the supervisor.`,
+            link: attendanceLog.learner?._id ? `/attendance-logs?learnerId=${attendanceLog.learner._id}` : '/attendance-logs',
         });
 
         const populated = await AttendanceLog.findById(attendanceLog._id)
-            .populate('learner', 'name trackingId program')
+            .populate('learner', 'firstName middleName lastName trackingId program')
             .populate('placement', 'companyName supervisorName supervisorEmail startDate endDate status')
             .populate('submittedBy', 'name role')
             .populate('signedOffBy', 'name role');
@@ -13387,6 +13446,28 @@ router.post('/industry-partners/:id/link', requireRole('Admin', 'Manager'), asyn
 const slotAllocationRoles = ['SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'];
 const validAllocationDate = value => value && Number.isFinite(new Date(value).getTime());
 
+router.get('/slot-allocations/pending', requireRole('SuperAdmin'), async (req, res) => {
+    try {
+        const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+        const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.pageSize, 10) || 20));
+        const filter = { status: 'Pending' };
+        const [items, total] = await Promise.all([
+            PartnerSlotAllocation.find(filter)
+                .sort({ createdAt: 1, _id: 1 })
+                .skip((page - 1) * pageSize)
+                .limit(pageSize)
+                .populate('partner', 'name region totalSlots status approvalStatus')
+                .populate('requestedBy', 'name email institution')
+                .lean(),
+            PartnerSlotAllocation.countDocuments(filter),
+        ]);
+        res.json({ items, total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
+    } catch (error) {
+        console.error('Unable to load pending slot allocations:', error);
+        res.status(500).json({ message: 'Unable to load pending slot approvals.' });
+    }
+});
+
 router.get('/industry-partners/:id/slot-allocations', requireRole(...slotAllocationRoles), async (req, res) => {
     try {
         const partner = req.user.role === 'IndustryPartner'
@@ -13429,7 +13510,7 @@ router.post('/industry-partners/:id/slot-allocations', requireRole('Admin', 'Man
         const hqRecipients = await getScopedHQRecipients({ institution: req.user.institution, region: partner.region, linkedInstitutions: [req.user.institution] });
         await Promise.all([
             notifyUsers({ ...notification, partnerId: partner._id, roles: ['IndustryPartner'], link: '/partner-dashboard' }),
-            notifyUsers({ ...notification, recipientIds: hqRecipients.map((user) => user._id), link: '/industry-partners' }),
+            notifyUsers({ ...notification, recipientIds: hqRecipients.map((user) => user._id), link: '/hq-industry-partners?tab=slot-approvals' }),
         ]);
         res.status(201).json(allocation);
     } catch (error) { res.status(error.name === 'ValidationError' ? 400 : 500).json({ message: error.message || 'Unable to request reserved slots.' }); }

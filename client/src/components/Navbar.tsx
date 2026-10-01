@@ -48,6 +48,7 @@ export function Navbar() {
       case '/partner-vacancies': return 'Learner Vacancies';
       case '/vacancies': return 'Learner Vacancies';
       case '/settings': return 'Settings';
+      case '/notifications': return 'Notifications';
       default: return 'Dashboard';
     }
   }
@@ -133,7 +134,7 @@ export function Navbar() {
                   )}
                 </div>
                 {unreadCount > 0 && (
-                  <Button variant="ghost" size="sm" onClick={() => markAllAsRead()} className="text-xs text-blue-600 font-bold hover:text-blue-700 hover:bg-blue-50 h-auto py-1">
+                  <Button variant="ghost" size="sm" onClick={() => void markAllAsRead()} className="text-xs text-blue-600 font-bold hover:text-blue-700 hover:bg-blue-50 h-auto py-1">
                     Mark all read
                   </Button>
                 )}
@@ -150,15 +151,15 @@ export function Navbar() {
                   </div>
                 ) : (
                   <div className="p-2 space-y-1">
-                    {notifications.map(notification => (
+                    {notifications.slice(0, 5).map(notification => (
                       <DropdownMenuItem 
                         key={notification._id}
                         className={`cursor-pointer rounded-2xl p-3 flex gap-3 transition-colors ${notification.read ? 'hover:bg-gray-50' : 'bg-blue-50/50 hover:bg-blue-50'}`}
                         onClick={async () => {
                           if (!notification.read) {
-                            await markAsRead(notification._id);
+                            await markAsRead(notification._id).catch(() => undefined);
                           }
-                          if (notification.link) navigate(notification.link);
+                          if (notification.link?.startsWith('/') && !notification.link.startsWith('//')) navigate(notification.link);
                         }}
                       >
                         <div className={`mt-1 h-2 w-2 rounded-full shrink-0 ${notification.read ? 'bg-transparent' : 'bg-blue-500'}`} />

@@ -628,7 +628,9 @@ export default function PartnerDashboard() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to update attendance log")
       setRefreshKey((prev) => prev + 1)
-      toast.success(action === "sign-off" ? "Hours signed off" : "Hours returned for review")
+      toast.success(action === "sign-off"
+        ? `Hours signed off for ${log.learner.name}`
+        : `Hours returned for review for ${log.learner.name}`)
       setAttendanceActionTarget(null)
     } catch (error) {
       console.error("Error updating attendance log:", error)

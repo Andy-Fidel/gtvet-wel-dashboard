@@ -39,25 +39,9 @@ Notes
 - See `client/README.md` for client-specific details.
 - Add a `.env` file at the repository root or in `server/` for any secrets; `.env` is ignored by Git.
 
-Render deployment
+Self-hosted deployment
 
-The repository is configured for a single Render Node.js web service. Render builds the Vite client into `client/dist` and starts the Express server, which serves both `/api/*` routes and the production SPA.
-
-The included `render.yaml` Blueprint can create the web service with these commands:
-
-- Build command: `npm run render-build`
-- Start command: `npm start`
-- Health check path: `/health`
-
-Required Render environment variables:
-
-```bash
-NODE_ENV=production
-MONGODB_URI=mongodb+srv://...
-JWT_SECRET=a-long-random-secret
-FRONTEND_URL=https://your-service-name.onrender.com
-WEB_CONCURRENCY=1
-```
+The production application is deployed over SSH to the Docker Compose host. See [deploy/README.md](deploy/README.md) for the server layout, deployment, health check, and rollback steps.
 
 Optional config vars are listed in `.env.example` for SMTP, Cloudinary, Twilio WhatsApp, Web Push, CORS, and rate-limit tuning.
 
@@ -85,27 +69,6 @@ IDMS_REQUEST_TIMEOUT_MS=15000
 ```
 
 Set an institution's IDMS identifier and enable synchronization from the institution editor before changing `IDMS_SYNC_ENABLED` to `true`. Institution Admin and Manager users can check authenticated connectivity through `GET /api/idms/status?academicYear=YYYY/YYYY`, preview changes through `GET /api/idms/learner-sync/preview`, and apply a reviewed import through `POST /api/idms/learner-sync`. The service credential remains server-side and requires read-only access to IDMS M7 learner and statistics endpoints.
-
-Deploy with the Blueprint:
-
-1. Push this repository to GitHub or GitLab.
-2. In Render, choose **New +** > **Blueprint**.
-3. Connect the repository and select the branch to deploy.
-4. Fill in the secret values requested from `render.yaml`, especially `MONGODB_URI` and `FRONTEND_URL`.
-5. Apply the Blueprint.
-
-Alternatively, create a Render web service manually:
-
-- Runtime: Node
-- Build command: `npm run render-build`
-- Start command: `npm start`
-- Health check path: `/health`
-
-After deployment, verify:
-
-```bash
-curl https://your-service-name.onrender.com/health
-```
 
 Contributing
 

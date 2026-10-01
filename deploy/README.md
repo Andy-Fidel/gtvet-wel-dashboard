@@ -66,6 +66,21 @@ marks a successful cutover so it runs only once.
 
 ## Update and rollback
 
-Pull and rebuild only after recording the current commit. To roll back, check out
-that commit and rebuild the app service. Keep the previous Render service live
-until login, uploads, email, and core portal workflows pass on the new hostname.
+The deployment host is `197.253.124.38` on SSH port `6079`. Connect with an
+authorized account and key (the intended command is
+`ssh -p 6079 -i ~/.ssh/id_ed25519 ubuntu@197.253.124.38`). The repository is
+checked out at `/opt/gtvet-wel`.
+
+Record the current commit, then pull and rebuild the app service:
+
+```bash
+cd /opt/gtvet-wel
+git rev-parse HEAD
+git pull --ff-only origin main
+cd deploy
+docker compose up -d --build app
+curl --fail http://127.0.0.1:5001/health
+```
+
+To roll back, check out the recorded commit and rebuild the app service.
+Verify login, uploads, email, and core portal workflows after deployment.

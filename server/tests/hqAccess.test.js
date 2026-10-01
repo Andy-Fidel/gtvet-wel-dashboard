@@ -131,7 +131,8 @@ test('operational mutations are denied except explicit HQ Manager decisions', ()
     '/industry-partners/:id/hq-approve', '/industry-partners/:id/hq-reject',
     '/slot-allocations/:id/:action',
     '/partner-change-requests/:id/:action',
-    '/notifications/read-all', '/notifications/:id/read',
+    '/notifications/read-all', '/notifications/:id/read', '/notifications/:id/unread',
+    '/notifications/:id/dismiss', '/notifications/:id/restore',
   ]);
   const personal = new Set([
     'post /push/subscribe', 'delete /push/subscribe', 'post /push/test',

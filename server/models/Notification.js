@@ -11,6 +11,7 @@ const NotificationSchema = new mongoose.Schema({
   title: { type: String, required: true },
   message: { type: String, required: true },
   read: { type: Boolean, default: false },
+  dismissedAt: { type: Date, default: null },
   visibleInApp: { type: Boolean, default: true },
   deliveryChannels: [{
     type: String,
@@ -45,6 +46,7 @@ const NotificationSchema = new mongoose.Schema({
 
 NotificationSchema.index({ dedupeIdentity: 1 }, { unique: true, partialFilterExpression: { dedupeIdentity: { $type: 'string' } } });
 NotificationSchema.index({ recipient: 1, archivedAt: 1, _id: -1 });
+NotificationSchema.index({ recipient: 1, archivedAt: 1, dismissedAt: 1, _id: -1 });
 NotificationSchema.index({ pushStatus: 1, pushNextAttemptAt: 1 });
 NotificationSchema.index({ whatsAppStatus: 1, whatsAppNextAttemptAt: 1 });
 
