@@ -1263,18 +1263,25 @@ const getUserLifecycleState = (user) => {
   return { code: 'Active', label: 'Active' };
 };
 
-const issueSetupLink = async (user, { expiresInMs = 3600000 } = {}) => {
+export const issueSetupLink = async (user, { expiresInMs = 3600000, sendEmail = sendPasswordResetEmail } = {}) => {
   const rawToken = crypto.randomBytes(20).toString('hex');
   user.resetPasswordToken = crypto.createHash('sha256').update(rawToken).digest('hex');
   user.resetPasswordExpires = Date.now() + expiresInMs;
   user.passwordChangeRequired = true;
-  user.invitationSentAt = new Date();
   await user.save();
 
   const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
   const resetUrl = `${frontendUrl}/reset-password/${rawToken}`;
-  await sendPasswordResetEmail(user.email, resetUrl);
-  return resetUrl;
+  try {
+    await sendEmail(user.email, resetUrl);
+  } catch (error) {
+    user.invitationDeliveryStatus = 'failed';
+    await user.save();
+    throw error;
+  }
+  user.invitationDeliveryStatus = 'sent';
+  user.invitationSentAt = new Date();
+  await user.save();
 };
 
 const withUserLifecycleMeta = (userDoc) => {
@@ -11406,10 +11413,7 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
             req.body.password = crypto.randomBytes(24).toString('hex');
         }
 
-        const newUser = new User({
-          ...req.body,
-          invitationSentAt: new Date(),
-        });
+        const newUser = new User(req.body);
         await newUser.save();
         await logAuditEvent({
             req,
@@ -11420,15 +11424,21 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
             after: newUser,
         });
         
+        let emailDelivery = password ? 'not_requested' : 'sent';
         if (!password) {
-            await issueSetupLink(newUser);
+            try {
+                await issueSetupLink(newUser);
+            } catch (mailError) {
+                console.error('Account created but setup email delivery failed:', { userId: String(newUser._id), code: mailError?.code || 'MAIL_DELIVERY_FAILED' });
+                emailDelivery = 'failed';
+            }
         }
 
         const populatedUser = await User.findById(newUser._id)
           .populate('partnerId', 'name')
           .populate('linkedLearners', 'name trackingId institution');
 
-        res.status(201).json(withUserLifecycleMeta(populatedUser));
+        res.status(201).json({ ...withUserLifecycleMeta(populatedUser), emailDelivery });
     } catch (error) {
         console.error("Error creating user:", error);
         if (error.code === 11000) {

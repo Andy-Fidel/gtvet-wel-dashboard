@@ -115,8 +115,7 @@ export const sendReportStatusEmail = async (institutionEmail, semester, academic
 };
 
 export const sendPasswordResetEmail = async (email, resetUrl) => {
-    try {
-        const info = await assertMailerConfigured().sendMail({
+    const info = await assertMailerConfigured().sendMail({
             from: from('GTVET Security'),
             to: email,
             subject: 'Password Reset Request',
@@ -133,13 +132,10 @@ export const sendPasswordResetEmail = async (email, resetUrl) => {
                     <p style="font-size: 12px; color: #999; text-align: center;">This is an automated message from the GTVET system.</p>
                 </div>
             `
-        });
-        console.log("Password Reset Email Sent: %s", info.messageId);
-        console.log("Preview URL: %s", nodemailer.getTestMessageUrl(info));
-        return info;
-    } catch (error) {
-        console.error("Error sending password reset email:", error);
-    }
+    });
+    console.log("Password Reset Email Sent: %s", info.messageId);
+    console.log("Preview URL: %s", nodemailer.getTestMessageUrl(info));
+    return info;
 };
 
 export const sendHQIndustryPartnerSubmissionEmail = async (emails, partner, submittedBy) => {

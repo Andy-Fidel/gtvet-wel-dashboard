@@ -32,6 +32,7 @@ export type User = {
     partnerPortalRole?: 'Coordinator' | 'Supervisor'
     linkedLearners?: Array<{ _id: string; name: string; trackingId?: string; institution?: string }>
     invitationSentAt?: string
+    invitationDeliveryStatus?: 'sent' | 'failed'
     inviteAcceptedAt?: string
     lastLoginAt?: string
     resetPasswordExpires?: string
@@ -156,7 +157,9 @@ export const columns: ColumnDef<User>[] = [
       return (
         <div className="space-y-1">
           <Badge className={`border ${colorMap[code] || colorMap.Active}`}>{label}</Badge>
-          {row.original.invitationSentAt ? (
+          {row.original.invitationDeliveryStatus === 'failed' ? (
+            <p className="text-[11px] font-semibold text-red-700">Setup email failed. Resend the link.</p>
+          ) : row.original.invitationSentAt ? (
             <p className="text-[11px] text-gray-500">
               Invite sent {new Date(row.original.invitationSentAt).toLocaleDateString()}
             </p>

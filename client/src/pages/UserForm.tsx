@@ -370,7 +370,11 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
             }
             throw new Error(data.message || 'Failed to save user')
         }
-        toast.success('User created successfully.')
+        if (!initialData?._id && data.emailDelivery === 'failed') {
+          toast.error('Account created, but the setup email could not be sent. Open the user and resend the setup link.')
+        } else {
+          toast.success(initialData?._id ? 'User updated successfully.' : data.emailDelivery === 'sent' ? 'User created and setup email sent.' : 'User created successfully.')
+        }
         await onSuccess(data)
     } catch (error) {
         console.error(error)

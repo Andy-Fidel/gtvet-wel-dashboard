@@ -60,6 +60,7 @@ const userSchema = new mongoose.Schema({
     partnerUpdates: { type: Boolean, default: true },
   },
   invitationSentAt: { type: Date },
+  invitationDeliveryStatus: { type: String, enum: ['sent', 'failed'] },
   inviteAcceptedAt: { type: Date },
   lastLoginAt: { type: Date },
   sessionVersion: { type: Number, default: 0, select: false },
