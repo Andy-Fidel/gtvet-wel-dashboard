@@ -209,6 +209,7 @@ import { AuthSession } from './models/AuthSession.js';
 import { MfaCredential } from './models/MfaCredential.js';
 import { NotificationSchedule } from './models/NotificationSchedule.js';
 import { Notification } from './models/Notification.js';
+import { SupportTicket } from './models/SupportTicket.js';
 import { processPendingNotificationDeliveries } from './utils/notifications.js';
 
 const startWorker = async () => {
@@ -216,7 +217,7 @@ const startWorker = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/gtvet-wel');
     // MFA enrollment requires a unique credential per account; TTL cleanup is secondary.
-    await Promise.all([AuthSession.init(), MfaCredential.init(), Notification.init(), NotificationSchedule.init()]);
+    await Promise.all([AuthSession.init(), MfaCredential.init(), Notification.init(), NotificationSchedule.init(), SupportTicket.init()]);
     console.log(`MongoDB connected (worker ${process.pid})`);
     let transfersRunning = false;
     const processTransfers = async () => {

@@ -18,6 +18,7 @@ import { auth } from '../middleware/auth.js';
 import { logAuditEvent } from '../utils/audit.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { canReadPartnerChangeDocument } from '../utils/partnerChanges.js';
+import { canAccessSupportTicket } from '../utils/supportAccess.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -56,19 +57,6 @@ const canAccessPlacement = (user, placement) => {
   if (placement.delegate?.toString?.() === user._id.toString()) return true;
   if (placement.owner?.toString?.() === user._id.toString()) return true;
   return placement.institution === user.institution;
-};
-
-const canAccessSupportTicket = (user, ticket) => {
-  if (!ticket) return false;
-  if (isHQRole(user.role) || user.role === 'RegionalAdmin') return true;
-  if (user.role === 'IndustryPartner') {
-    return ticket.partnerId?.toString?.() === getUserPartnerId(user);
-  }
-  if (user.role === 'Guardian') {
-    return ticket.requester?.toString?.() === user._id.toString();
-  }
-  if (ticket.requester?.toString?.() === user._id.toString()) return true;
-  return ticket.institution === user.institution;
 };
 
 const canAccessMonitoringVisit = (user, visit) => {
@@ -151,7 +139,12 @@ const deleteLocalDocument = async (publicId) => {
 };
 
 const canAccessDocument = async (user, document) => {
+  if (document.supportTicket) {
+    const ticket = await SupportTicket.findById(document.supportTicket).select('institution partnerId requester');
+    return canAccessSupportTicket(user, ticket);
+  }
   if (await canReadPartnerChangeDocument(user, document)) return true;
+  if (user.role === 'Guardian') return document.uploadedBy?.toString?.() === user._id.toString();
   if (isHQRole(user.role)) {
     if (isScopedHQRole(user.role) && user.hqScopeType === 'Institution') return document.institution === user.institution;
     if (isScopedHQRole(user.role) && user.hqScopeType === 'Region') {
@@ -402,11 +395,14 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     }
 
     if (supportTicketId) {
-      const ticket = await SupportTicket.findById(supportTicketId).select('institution partnerId requester');
+      const ticket = await SupportTicket.findById(supportTicketId).select('institution partnerId requester archivedAt learner placement');
       if (!ticket) return res.status(404).json({ message: 'Support ticket not found' });
-      if (!canAccessSupportTicket(req.user, ticket)) {
+      if (!(await canAccessSupportTicket(req.user, ticket))) {
         return res.status(403).json({ message: 'Not authorized to upload documents for this support ticket' });
       }
+      if (ticket.archivedAt) return res.status(409).json({ message: 'Archived support tickets cannot receive attachments' });
+      if (learnerId && ticket.learner?.toString() !== learnerId) return res.status(400).json({ message: 'Learner does not match this support ticket' });
+      if (placementId && ticket.placement?.toString() !== placementId) return res.status(400).json({ message: 'Placement does not match this support ticket' });
       if (ticket.institution) institution = ticket.institution;
       if (ticket.partnerId) partnerId = ticket.partnerId;
     }
@@ -498,6 +494,12 @@ router.use((error, req, res, next) => {
 router.get('/', async (req, res) => {
   try {
     const filter = {};
+    if (req.query.supportTicketId) {
+      const ticket = await SupportTicket.findById(req.query.supportTicketId).select('institution partnerId requester');
+      if (!(await canAccessSupportTicket(req.user, ticket))) return res.status(404).json({ message: 'Support ticket not found' });
+      const documents = await Document.find({ supportTicket: ticket._id }).populate('uploadedBy', 'name').sort({ createdAt: -1 });
+      return res.json(documents);
+    }
 
     if (req.query.learnerId) filter.learner = req.query.learnerId;
     if (req.query.placementId) filter.placement = req.query.placementId;
@@ -508,6 +510,8 @@ router.get('/', async (req, res) => {
     // Non-super admins can only see their institution's documents
     if (req.user.role === 'IndustryPartner') {
       filter.partnerId = req.user.partnerId?._id || req.user.partnerId;
+    } else if (req.user.role === 'Guardian') {
+      filter.uploadedBy = req.user._id;
     } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Institution') {
       filter.institution = req.user.institution;
     } else if (isScopedHQRole(req.user.role) && req.user.hqScopeType === 'Region') {
@@ -535,6 +539,11 @@ router.delete('/:id', async (req, res) => {
   try {
     const doc = await Document.findById(req.params.id);
     if (!doc) return res.status(404).json({ message: 'Document not found' });
+    if (doc.supportTicket) {
+      const ticket = await SupportTicket.findById(doc.supportTicket).select('institution partnerId requester archivedAt');
+      if (!(await canAccessSupportTicket(req.user, ticket))) return res.status(404).json({ message: 'Document not found' });
+      if (ticket.archivedAt) return res.status(409).json({ message: 'Archived support ticket attachments cannot be deleted' });
+    }
 
     // Only the uploader, Admin, or SuperAdmin can delete
     const isOwner = doc.uploadedBy.toString() === req.user._id.toString();

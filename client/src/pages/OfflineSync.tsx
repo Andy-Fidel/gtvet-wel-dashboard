@@ -34,8 +34,8 @@ const getQueueStatusBadge = (status: "pending" | "failed" | "needs-review" | "sy
 const formatDraftLabel = (key: string) => {
   if (key.startsWith("draft:monitoring-visit")) return "Monitoring visit draft"
   if (key.startsWith("draft:attendance-log")) return "Attendance log draft"
-  if (key.startsWith("draft:support:new-ticket")) return "New support ticket draft"
-  if (key.startsWith("draft:support:reply")) return "Support reply draft"
+  if (key.startsWith("draft:support:") && key.endsWith(":new-ticket")) return "New support ticket draft"
+  if (key.startsWith("draft:support:") && key.includes(":reply:")) return "Support reply draft"
   return "Offline draft"
 }
 
@@ -53,6 +53,7 @@ const formatConflictValue = (value: unknown) => {
 export default function OfflineSync() {
   const navigate = useNavigate()
   const {
+    user,
     offlineQueue,
     offlineQueueCount,
     offlineSyncHistory,
@@ -66,7 +67,7 @@ export default function OfflineSync() {
     if (typeof window === "undefined") return []
 
     return Object.keys(window.localStorage)
-      .filter((key) => key.startsWith("draft:"))
+      .filter((key) => key.startsWith("draft:") && (!key.startsWith("draft:support:") || Boolean(user?._id && key.startsWith(`draft:support:${user._id}:`))))
       .map((key) => {
         const draft = loadDraft<Record<string, unknown> | string>(key)
         let summary = "Saved locally for later completion."
@@ -86,7 +87,7 @@ export default function OfflineSync() {
         } satisfies DraftItem
       })
       .sort((a, b) => a.label.localeCompare(b.label))
-  }, [offlineQueueCount])
+  }, [offlineQueueCount, user?._id])
 
   const handleClearDraft = (key: string) => {
     clearDraft(key)

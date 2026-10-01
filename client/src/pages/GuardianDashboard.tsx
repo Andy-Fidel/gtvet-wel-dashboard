@@ -184,6 +184,7 @@ export default function GuardianDashboard() {
     priority: "Medium",
     description: "",
     learnerId: "",
+    requestKey: crypto.randomUUID(),
   })
   const [creatingConcern, setCreatingConcern] = useState(false)
 
@@ -445,6 +446,7 @@ export default function GuardianDashboard() {
         priority: "Medium",
         description: "",
         learnerId: concernDraft.learnerId,
+        requestKey: crypto.randomUUID(),
       })
       fetchDashboard()
     } catch (error) {
@@ -483,6 +485,23 @@ export default function GuardianDashboard() {
     } catch (error) {
       console.error(error)
       toast.error(error instanceof Error ? error.message : "Failed to send reply")
+    } finally {
+      setSubmittingReply(false)
+    }
+  }
+
+  const handleConcernStatus = async (status: "Open" | "Closed") => {
+    if (!activeTicket) return
+    setSubmittingReply(true)
+    try {
+      const res = await authFetch(`/api/support-tickets/${activeTicket._id}/status`, { method: "PUT", body: JSON.stringify({ status }) })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || "Failed to update concern")
+      const refreshed = await fetchDashboard()
+      setActiveTicket((current) => refreshed?.tickets?.find((ticket) => ticket._id === current?._id) || current)
+      toast.success(status === "Open" ? "Concern reopened" : "Concern closed")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update concern")
     } finally {
       setSubmittingReply(false)
     }
@@ -966,11 +985,19 @@ export default function GuardianDashboard() {
                 </div>
               ))}
             </div>
-            <Textarea aria-label="Reply to concern thread" rows={4} placeholder="Write a reply..." value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} />
+            {activeTicket?.status === "Resolved" || activeTicket?.status === "Closed" ? (
+              <div className="space-y-2 rounded-2xl bg-slate-50 p-4">
+                <p className="text-sm text-slate-700">This concern is {activeTicket.status.toLowerCase()}. Reopen it to continue the conversation.</p>
+                <div className="flex gap-2">
+                  <Button variant="outline" disabled={submittingReply} onClick={() => handleConcernStatus("Open")}>Reopen concern</Button>
+                  {activeTicket.status === "Resolved" ? <Button disabled={submittingReply} onClick={() => handleConcernStatus("Closed")}>Confirm closure</Button> : null}
+                </div>
+              </div>
+            ) : <><Textarea aria-label="Reply to concern thread" rows={4} placeholder="Write a reply..." value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} />
             <Button className="min-h-11 w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white" disabled={submittingReply || !replyDraft.trim()} onClick={handleReply}>
               <Send className="mr-2 h-4 w-4" />
               {submittingReply ? "Sending..." : "Send Reply"}
-            </Button>
+            </Button></>}
           </div>
         </DialogContent>
       </Dialog>

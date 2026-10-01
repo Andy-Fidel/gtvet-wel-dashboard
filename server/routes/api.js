@@ -54,6 +54,7 @@ import { PushSubscription } from '../models/PushSubscription.js';
 import { notifyUsers } from '../utils/notifications.js';
 import { getVapidPublicKey, isWebPushConfigured, isTrustedPushEndpoint } from '../utils/webPush.js';
 import { logAuditEvent } from '../utils/audit.js';
+import { canAccessSupportTicket, isSupportResponder } from '../utils/supportAccess.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
 
@@ -873,6 +874,7 @@ const canManageSupportTicketStatus = (user, ticket) => {
   if (user.role === 'SuperAdmin') return true;
   if (user.role === 'RegionalAdmin') return true;
   if (user.role === 'Admin') return true;
+  if (['Manager', 'Staff'].includes(user.role) && ticket.assignedTo?.toString() === user._id.toString() && ticket.institution === user.institution) return true;
   return ticket.requester?.toString() === user._id.toString();
 };
 
@@ -905,11 +907,9 @@ const getRequesterAwaitingParty = (role) => {
   return 'Support';
 };
 
-const getReplyAwaitingParty = (role) => {
-  if (role === 'IndustryPartner') return 'Support';
-  if (['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(role)) return 'Partner';
-  return 'Support';
-};
+const getReplyAwaitingParty = (ticket, user) => (
+  ticket.requester?.toString() === user._id.toString() ? 'Support' : 'Requester'
+);
 
 const getSlaTargets = (priority) => {
   const firstResponseHours = {
@@ -934,7 +934,7 @@ const getSlaTargets = (priority) => {
 
 const computeSlaStatus = (ticket) => {
   const now = Date.now();
-  const firstResponseBreached = !ticket.firstRespondedAt && ticket.firstResponseDueAt && new Date(ticket.firstResponseDueAt).getTime() < now;
+  const firstResponseBreached = !['Resolved', 'Closed'].includes(ticket.status) && !ticket.firstRespondedAt && ticket.firstResponseDueAt && new Date(ticket.firstResponseDueAt).getTime() < now;
   const resolutionBreached = !['Resolved', 'Closed'].includes(ticket.status) && ticket.resolutionDueAt && new Date(ticket.resolutionDueAt).getTime() < now;
 
   return {
@@ -948,6 +948,9 @@ const withSupportTicketMeta = (ticketDoc) => {
   const ticket = ticketDoc.toObject ? ticketDoc.toObject() : ticketDoc;
   return {
     ...ticket,
+    learner: ticket.learner && typeof ticket.learner === 'object' && ticket.learner._id
+      ? { ...ticket.learner, name: buildLearnerDisplayName(ticket.learner) || ticket.learner.trackingId || 'Learner' }
+      : ticket.learner,
     slaStatus: computeSlaStatus(ticket),
   };
 };
@@ -975,9 +978,7 @@ const supportTicketAwaitsCurrentUser = (ticket, user) => {
   if (ticket.awaitingParty === 'Support') {
     return canManageSupportAssignments(user) || ticket.isOwnedByCurrentUser;
   }
-  if (ticket.awaitingParty === 'Partner') {
-    return user.role === 'IndustryPartner';
-  }
+  if (ticket.awaitingParty === 'Partner') return user.role === 'IndustryPartner' && ticket.requesterRole === 'IndustryPartner';
   if (ticket.awaitingParty === 'Institution') {
     return ['Admin', 'Manager', 'Staff'].includes(user.role);
   }
@@ -991,6 +992,7 @@ const matchesSupportQueueView = (ticket, queueView, user) => {
   if (queueView === 'new') return ticket.hasUnreadChanges;
   if (queueView === 'owned') return ticket.isOwnedByCurrentUser;
   if (queueView === 'awaiting') return supportTicketAwaitsCurrentUser(ticket, user);
+  if (queueView === 'unassigned') return !['Resolved', 'Closed'].includes(ticket.status) && !ticket.assignedTo;
   return true;
 };
 
@@ -1675,12 +1677,22 @@ const getVisibleSupportAssignees = async (user) => {
     .lean();
 
   return users.filter((candidate) => {
-    if (isHQRole(user.role)) return ['SuperAdmin', 'RegionalAdmin', 'Admin'].includes(candidate.role);
+    if (!['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'].includes(candidate.role)) return false;
+    if (isHQRole(user.role)) return true;
     if (user.role === 'RegionalAdmin') {
-      return candidate.role !== 'SuperAdmin' && (candidate.region === user.region || candidate.institution === user.institution);
+      return candidate.role === 'SuperAdmin' || candidate.region === user.region || candidate.institution === user.institution;
     }
-    return candidate.role !== 'SuperAdmin' && candidate.institution === user.institution;
+    return candidate.institution === user.institution || (candidate.role === 'RegionalAdmin' && candidate.region === user.region);
   });
+};
+
+const getEligibleSupportTarget = async (actor, ticket, targetId) => {
+  if (!mongoose.isValidObjectId(targetId)) return null;
+  const target = await User.findOne({ _id: targetId, status: 'Active' }).select('_id role institution region partnerId hqScopeType');
+  if (!target || !isSupportResponder(target, ticket) || !(await canAccessSupportTicket(target, ticket))) return null;
+  if (actor.role === 'Admin' && target.institution !== actor.institution && !(target.role === 'RegionalAdmin' && target.region === actor.region)) return null;
+  if (actor.role === 'RegionalAdmin' && target.role !== 'SuperAdmin' && target.region !== actor.region && target.institution !== actor.institution) return null;
+  return target;
 };
 
 const getPlacementExceptionData = async (institution) => {
@@ -2972,7 +2984,7 @@ router.get('/support-tickets', async (req, res) => {
         const archivedOnly = req.query.archived === 'true';
         const includeArchived = req.query.includeArchived === 'true';
         const scope = await getSupportTicketScope(req.user, { includeArchived, archivedOnly });
-        const { status, category, learnerId, placementId, queueView, focusedTicketId } = req.query;
+        const { status, category, priority, learnerId, placementId, queueView, focusedTicketId } = req.query;
         const query = { ...scope };
         const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
         const pageSize = Math.min(Math.max(Number.parseInt(req.query.pageSize, 10) || 10, 1), 50);
@@ -2980,18 +2992,23 @@ router.get('/support-tickets', async (req, res) => {
 
         if (status) query.status = status;
         if (category) query.category = category;
+        if (priority) query.priority = priority;
+        if (typeof req.query.search === 'string' && req.query.search.trim()) {
+            const search = escapeRegex(req.query.search.trim().slice(0, 120));
+            query.$or = [{ subject: { $regex: search, $options: 'i' } }, { description: { $regex: search, $options: 'i' } }, { institution: { $regex: search, $options: 'i' } }];
+        }
         if (learnerId) query.learner = learnerId;
         if (placementId) query.placement = placementId;
 
         if (!paginationRequested) {
             const tickets = await SupportTicket.find(query)
                 .populate('requester', 'name email role institution')
-                .populate('learner', 'name trackingId')
+                .populate('learner', 'firstName middleName lastName trackingId')
                 .populate('placement', 'companyName status')
                 .populate('assignedTo', 'name email role institution')
                 .populate('escalatedTo', 'name email role institution')
                 .populate('replies.createdBy', 'name role')
-                .sort({ updatedAt: -1, createdAt: -1 });
+                .sort({ lastActivityAt: -1, createdAt: -1 });
 
             const ticketIds = tickets.map((ticket) => ticket._id);
             const documents = await Document.find({ supportTicket: { $in: ticketIds } })
@@ -3017,7 +3034,7 @@ router.get('/support-tickets', async (req, res) => {
             .populate('requester', '_id')
             .populate('assignedTo', '_id')
             .populate('escalatedTo', '_id')
-            .sort({ updatedAt: -1, createdAt: -1 })
+            .sort({ lastActivityAt: -1, createdAt: -1 })
             .lean();
 
         const scopedTickets = ticketMeta.map((ticket) => withSupportTicketViewerMeta(ticket, req.user));
@@ -3033,12 +3050,13 @@ router.get('/support-tickets', async (req, res) => {
         };
         const hqQueueStats = {
             awaitingSupport: scopedTickets.filter((ticket) => ticket.awaitingParty === 'Support').length,
-            urgent: scopedTickets.filter((ticket) => ticket.priority === 'Urgent').length,
-            unassigned: scopedTickets.filter((ticket) => !ticket.assignedTo?._id).length,
-            incidents: scopedTickets.filter((ticket) => ticket.ticketType === 'Incident').length,
+            urgent: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && ticket.priority === 'Urgent').length,
+            unassigned: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && !ticket.assignedTo?._id).length,
+            incidents: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && ticket.ticketType === 'Incident').length,
         };
 
-        const queueFilteredTickets = scopedTickets.filter((ticket) => matchesSupportQueueView(ticket, queueView, req.user));
+        const queueFilteredTickets = scopedTickets.filter((ticket) => matchesSupportQueueView(ticket, queueView, req.user)
+            && (req.query.sla === 'breached' ? ticket.slaStatus?.hasBreach : req.query.sla === 'on-track' ? !ticket.slaStatus?.hasBreach : true));
         const total = queueFilteredTickets.length;
         const totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
         const safePage = Math.min(page, totalPages);
@@ -3050,7 +3068,7 @@ router.get('/support-tickets', async (req, res) => {
         const tickets = pagedTicketIds.length
             ? await SupportTicket.find({ _id: { $in: pagedTicketIds } })
                 .populate('requester', 'name email role institution')
-                .populate('learner', 'name trackingId')
+                .populate('learner', 'firstName middleName lastName trackingId')
                 .populate('placement', 'companyName status')
                 .populate('assignedTo', 'name email role institution')
                 .populate('escalatedTo', 'name email role institution')
@@ -3089,7 +3107,7 @@ router.get('/support-tickets', async (req, res) => {
             if (hasFocusedMatch) {
                 const focusedRecord = await SupportTicket.findOne({ _id: focusedTicketId, ...query })
                     .populate('requester', 'name email role institution')
-                    .populate('learner', 'name trackingId')
+                    .populate('learner', 'firstName middleName lastName trackingId')
                     .populate('placement', 'companyName status')
                     .populate('assignedTo', 'name email role institution')
                     .populate('escalatedTo', 'name email role institution')
@@ -3141,7 +3159,7 @@ router.put('/support-tickets/:id/read', async (req, res) => {
 
         const populated = await SupportTicket.findById(ticket._id)
             .populate('requester', 'name email role institution')
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'companyName status')
             .populate('assignedTo', 'name email role institution')
             .populate('escalatedTo', 'name email role institution')
@@ -3439,13 +3457,32 @@ router.post('/support-tickets', async (req, res) => {
             ticketType = 'Support',
             incidentType,
             incidentDate,
+            requestKey,
         } = req.body;
+
+        const normalizedSubject = typeof subject === 'string' ? subject.trim() : '';
+        const normalizedDescription = typeof description === 'string' ? description.trim() : '';
+        const normalizedPriority = priority || 'Medium';
+        const normalizedCategory = category || 'Other';
+        if (!['Support', 'Incident'].includes(ticketType) || !['Technical', 'Access', 'Data', 'Workflow', 'Training', 'Other'].includes(normalizedCategory) || !['Low', 'Medium', 'High', 'Urgent'].includes(normalizedPriority)) {
+            return res.status(400).json({ message: 'Choose a valid ticket type, category, and priority' });
+        }
+        if (!normalizedDescription || (!normalizedSubject && ticketType !== 'Incident')) return res.status(400).json({ message: 'Subject and description are required' });
+        if (normalizedSubject.length > 180 || normalizedDescription.length > 10000) return res.status(400).json({ message: 'Ticket subject or description is too long' });
+        if (requestKey && (typeof requestKey !== 'string' || !/^[0-9a-f-]{36}$/i.test(requestKey))) return res.status(400).json({ message: 'Invalid ticket request key' });
+        if (requestKey) {
+            const previous = await SupportTicket.findOne({ requester: req.user._id, requestKey });
+            if (previous) return res.status(200).json(withSupportTicketViewerMeta(previous, req.user));
+        }
 
         let placement = null;
         let learner = null;
         let institution = req.user.institution || 'N/A';
         let region = req.user.region || '';
         const partnerId = getPartnerId(req.user) || undefined;
+
+        if (req.user.role === 'IndustryPartner' && learnerId && !placementId) return res.status(400).json({ message: 'Choose the placement associated with this learner' });
+        if ((learnerId && !mongoose.isValidObjectId(learnerId)) || (placementId && !mongoose.isValidObjectId(placementId))) return res.status(400).json({ message: 'Invalid learner or placement' });
 
         if (placementId) {
             placement = await Placement.findById(placementId).select('learner institution partner owner partnerSupervisor');
@@ -3461,11 +3498,23 @@ router.post('/support-tickets', async (req, res) => {
                 return res.status(403).json({ message: 'This placement is assigned to another supervisor' });
             }
 
+            if (req.user.role === 'Guardian') {
+                const linkedLearnerIds = await getGuardianLearnerIds(req.user);
+                if (!linkedLearnerIds.includes(placement.learner?.toString())) return res.status(403).json({ message: 'You do not have access to this placement' });
+            } else if (req.user.role === 'RegionalAdmin') {
+                const allowed = await Institution.exists({ name: placement.institution, region: req.user.region });
+                if (!allowed) return res.status(403).json({ message: 'You do not have access to this placement' });
+            } else if (!isHQRole(req.user.role) && req.user.role !== 'IndustryPartner' && placement.institution !== req.user.institution) {
+                return res.status(403).json({ message: 'You do not have access to this placement' });
+            }
+            if (learnerId && placement.learner?.toString() !== learnerId) return res.status(400).json({ message: 'Learner and placement do not match' });
+
             institution = placement.institution || institution;
         }
 
-        if (learnerId) {
-            learner = await Learner.findById(learnerId).select('institution region placement');
+        const effectiveLearnerId = learnerId || placement?.learner?.toString();
+        if (effectiveLearnerId) {
+            learner = await Learner.findById(effectiveLearnerId).select('institution region placement');
             if (!learner) {
                 return res.status(404).json({ message: 'Learner not found' });
             }
@@ -3475,9 +3524,14 @@ router.post('/support-tickets', async (req, res) => {
                 if (!linkedLearnerIds.includes(learner._id.toString())) {
                     return res.status(403).json({ message: 'You do not have access to this learner' });
                 }
+            } else if (req.user.role === 'RegionalAdmin') {
+                const allowed = await Institution.exists({ name: learner.institution, region: req.user.region });
+                if (!allowed) return res.status(403).json({ message: 'You do not have access to this learner' });
             } else if (!isHQRole(req.user.role) && req.user.role !== 'IndustryPartner' && learner.institution !== req.user.institution) {
                 return res.status(403).json({ message: 'You do not have access to this learner' });
             }
+
+            if (placement && learner.institution !== placement.institution) return res.status(400).json({ message: 'Learner and placement do not match' });
 
             institution = learner.institution || institution;
             region = learner.region || region;
@@ -3490,32 +3544,34 @@ router.post('/support-tickets', async (req, res) => {
             }
         }
 
-        if (ticketType === 'Incident' && !incidentType) {
+        if (ticketType === 'Incident' && !['AbsentLearner', 'EarlyTermination', 'SafetyIssue', 'Misconduct', 'SupervisorChanged', 'WorksiteChanged', 'Other'].includes(incidentType)) {
             return res.status(400).json({ message: 'Incident type is required for incident reports' });
         }
+        if (ticketType === 'Incident' && incidentDate && Number.isNaN(new Date(incidentDate).getTime())) return res.status(400).json({ message: 'Choose a valid incident date' });
 
-        const normalizedSubject = ticketType === 'Incident' && !subject
+        const ticketSubject = ticketType === 'Incident' && !normalizedSubject
             ? `${incidentType || 'Incident'} reported`
-            : subject;
+            : normalizedSubject;
 
         const ticket = await SupportTicket.create({
-            subject: normalizedSubject,
+            subject: ticketSubject,
             ticketType,
-            category,
-            priority,
-            description,
+            category: normalizedCategory,
+            priority: normalizedPriority,
+            description: normalizedDescription,
             incidentType: ticketType === 'Incident' ? incidentType : undefined,
             incidentDate: ticketType === 'Incident' ? (incidentDate || new Date()) : undefined,
             requester: req.user._id,
-            learner: learnerId || undefined,
+            requestKey: requestKey || undefined,
+            learner: effectiveLearnerId || undefined,
             placement: placementId || undefined,
             institution,
             region,
             partnerId,
             requesterRole: req.user.role,
             awaitingParty: getRequesterAwaitingParty(req.user.role),
-            firstResponseDueAt: new Date(Date.now() + getSlaTargets(priority).firstResponseHours * 60 * 60 * 1000),
-            resolutionDueAt: new Date(Date.now() + getSlaTargets(priority).resolutionHours * 60 * 60 * 1000),
+            firstResponseDueAt: new Date(Date.now() + getSlaTargets(normalizedPriority).firstResponseHours * 60 * 60 * 1000),
+            resolutionDueAt: new Date(Date.now() + getSlaTargets(normalizedPriority).resolutionHours * 60 * 60 * 1000),
             lastActivityBy: req.user._id,
             lastActivityAt: new Date(),
             readStates: [{ user: req.user._id, lastReadAt: new Date() }],
@@ -3542,7 +3598,7 @@ router.post('/support-tickets', async (req, res) => {
                 title: ticketType === 'Incident' ? 'New placement incident' : 'New support ticket',
                 message: ticketType === 'Incident'
                     ? `${req.user.name} reported a ${incidentType} incident${institution && institution !== 'N/A' ? ` for ${institution}` : ''}: ${ticket.subject}.`
-                    : `${req.user.name} submitted a ${priority.toLowerCase()} priority support request: ${ticket.subject}.`,
+                    : `${req.user.name} submitted a ${normalizedPriority.toLowerCase()} priority support request: ${ticket.subject}.`,
                 link: `/support-center?ticket=${ticket._id}`,
             };
 
@@ -3566,7 +3622,7 @@ router.post('/support-tickets', async (req, res) => {
 
         const populated = await SupportTicket.findById(ticket._id)
             .populate('requester', 'name email role institution')
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'companyName status')
             .populate('assignedTo', 'name email role institution')
             .populate('escalatedTo', 'name email role institution')
@@ -3575,6 +3631,10 @@ router.post('/support-tickets', async (req, res) => {
         res.status(201).json(withSupportTicketViewerMeta(populated, req.user));
     } catch (error) {
         console.error('Error creating support ticket:', error);
+        if (error?.code === 11000 && req.body?.requestKey) {
+            const existing = await SupportTicket.findOne({ requester: req.user._id, requestKey: req.body.requestKey });
+            if (existing) return res.status(200).json(withSupportTicketViewerMeta(existing, req.user));
+        }
         res.status(500).json({ message: 'Error creating support ticket' });
     }
 });
@@ -3591,9 +3651,10 @@ router.post('/support-tickets/:id/replies', async (req, res) => {
         }
 
         const { message } = req.body;
-        if (!message || !message.trim()) {
+        if (typeof message !== 'string' || !message.trim()) {
             return res.status(400).json({ message: 'Reply message is required' });
         }
+        if (['Resolved', 'Closed'].includes(ticket.status)) return res.status(409).json({ message: 'Reopen this ticket before replying' });
 
         ticket.replies.push({
             message: message.trim(),
@@ -3601,10 +3662,10 @@ router.post('/support-tickets/:id/replies', async (req, res) => {
             createdByName: req.user.name,
             createdByRole: req.user.role,
         });
-        if (!ticket.firstRespondedAt && ticket.requester?.toString() !== req.user._id.toString()) {
+        if (!ticket.firstRespondedAt && ticket.requester?.toString() !== req.user._id.toString() && isSupportResponder(req.user, ticket)) {
             ticket.firstRespondedAt = new Date();
         }
-        ticket.awaitingParty = getReplyAwaitingParty(req.user.role);
+        ticket.awaitingParty = getReplyAwaitingParty(ticket, req.user);
         ticket.lastActivityBy = req.user._id;
         ticket.lastActivityAt = new Date();
         markSupportTicketReadForUser(ticket, req.user._id);
@@ -3620,25 +3681,30 @@ router.post('/support-tickets/:id/replies', async (req, res) => {
             changedFields: ['replies'],
         });
 
-        const notifyRecipientIds = [];
-        if (ticket.requester.toString() !== req.user._id.toString()) {
-            notifyRecipientIds.push(ticket.requester.toString());
-        }
-
-        if (notifyRecipientIds.length > 0) {
-            await notifyUsers({
-                recipientIds: notifyRecipientIds,
-                sender: req.user._id,
-                type: 'support',
-                title: 'Support ticket updated',
-                message: `${req.user.name} replied to your support ticket: ${ticket.subject}.`,
-                link: `/support-center?ticket=${ticket._id}`,
-            });
+        const isRequester = ticket.requester.toString() === req.user._id.toString();
+        const responseNotification = {
+            sender: req.user._id,
+            type: 'support',
+            title: 'Support ticket updated',
+            message: `${req.user.name} replied to ticket: ${ticket.subject}.`,
+            link: `/support-center?ticket=${ticket._id}`,
+        };
+        if (!isRequester) {
+            await notifyUsers({ ...responseNotification, recipientIds: [ticket.requester] });
+        } else {
+            const owners = [ticket.assignedTo, ticket.escalatedTo].filter(Boolean);
+            if (owners.length) await notifyUsers({ ...responseNotification, recipientIds: owners });
+            else {
+                await notifyUsers({ ...responseNotification, roles: ['SuperAdmin'] });
+                if (ticket.institution && ticket.institution !== 'N/A') {
+                    await notifyUsers({ ...responseNotification, institution: ticket.institution, roles: ['Admin', 'Manager'] });
+                }
+            }
         }
 
         const populated = await SupportTicket.findById(ticket._id)
             .populate('requester', 'name email role institution')
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'companyName status')
             .populate('assignedTo', 'name email role institution')
             .populate('escalatedTo', 'name email role institution')
@@ -3671,16 +3737,33 @@ router.put('/support-tickets/:id/status', async (req, res) => {
         if (!allowedStatuses.includes(status)) {
             return res.status(400).json({ message: 'Invalid support ticket status' });
         }
+        const requesterIsActor = ticket.requester.toString() === req.user._id.toString();
+        if (requesterIsActor && !isSupportResponder(req.user, ticket)) {
+            const canClose = status === 'Closed' && ticket.status === 'Resolved';
+            const canReopen = status === 'Open' && ['Resolved', 'Closed'].includes(ticket.status);
+            if (!canClose && !canReopen) return res.status(403).json({ message: 'Requesters can close resolved tickets or reopen resolved and closed tickets' });
+        }
+        if (status === ticket.status) return res.json(withSupportTicketViewerMeta(ticket, req.user));
+        const resolutionSummary = typeof req.body.resolutionSummary === 'string' ? req.body.resolutionSummary.trim() : '';
+        if (status === 'Resolved' && !resolutionSummary) return res.status(400).json({ message: 'A resolution summary is required' });
+        if (status === 'Closed' && ticket.status !== 'Resolved') return res.status(400).json({ message: 'Resolve the ticket before closing it' });
 
         const before = ticket.toObject();
         ticket.status = status;
         if (status === 'Resolved' || status === 'Closed') {
             ticket.resolvedAt = new Date();
             ticket.awaitingParty = 'None';
+            if (status === 'Resolved') {
+                ticket.resolutionSummary = resolutionSummary;
+                ticket.resolvedBy = req.user._id;
+            }
         } else if (status === 'Open' || status === 'InProgress') {
             ticket.resolvedAt = undefined;
-            if (ticket.awaitingParty === 'None') {
-                ticket.awaitingParty = ticket.requesterRole === 'IndustryPartner' ? 'Support' : 'Partner';
+            ticket.awaitingParty = 'Support';
+            if (['Resolved', 'Closed'].includes(before.status)) {
+                ticket.firstResponseDueAt = new Date(Date.now() + getSlaTargets(ticket.priority).firstResponseHours * 60 * 60 * 1000);
+                ticket.resolutionDueAt = new Date(Date.now() + getSlaTargets(ticket.priority).resolutionHours * 60 * 60 * 1000);
+                ticket.firstRespondedAt = undefined;
             }
         }
         ticket.lastActivityBy = req.user._id;
@@ -3708,11 +3791,15 @@ router.put('/support-tickets/:id/status', async (req, res) => {
                 message: `Your ticket "${ticket.subject}" is now marked as ${status}.`,
                 link: `/support-center?ticket=${ticket._id}`,
             });
+        } else if (status === 'Open') {
+            const owners = [ticket.assignedTo, ticket.escalatedTo].filter(Boolean);
+            if (owners.length) await notifyUsers({ recipientIds: owners, sender: req.user._id, type: 'support', title: 'Support ticket reopened', message: `The requester reopened ticket: ${ticket.subject}.`, link: `/support-center?ticket=${ticket._id}` });
+            else await notifyUsers({ roles: ['SuperAdmin'], sender: req.user._id, type: 'support', title: 'Support ticket reopened', message: `The requester reopened ticket: ${ticket.subject}.`, link: `/support-center?ticket=${ticket._id}` });
         }
 
         const populated = await SupportTicket.findById(ticket._id)
             .populate('requester', 'name email role institution')
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'companyName status')
             .populate('assignedTo', 'name email role institution')
             .populate('escalatedTo', 'name email role institution')
@@ -3741,6 +3828,9 @@ router.put('/support-tickets/:id/assignment', async (req, res) => {
         }
 
         const { assignedTo } = req.body;
+        if (assignedTo && !(await getEligibleSupportTarget(req.user, ticket, assignedTo))) return res.status(400).json({ message: 'Choose an active responder who can access this ticket' });
+        if (['Resolved', 'Closed'].includes(ticket.status)) return res.status(409).json({ message: 'Reopen the ticket before changing ownership' });
+        if ((ticket.assignedTo?.toString() || '') === (assignedTo || '')) return res.json(withSupportTicketViewerMeta(ticket, req.user));
         const before = ticket.toObject();
         ticket.assignedTo = assignedTo || undefined;
         if (ticket.status === 'Open' && assignedTo) {
@@ -3778,7 +3868,7 @@ router.put('/support-tickets/:id/assignment', async (req, res) => {
 
         const populated = await SupportTicket.findById(ticket._id)
             .populate('requester', 'name email role institution')
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'companyName status')
             .populate('assignedTo', 'name email role institution')
             .populate('escalatedTo', 'name email role institution')
@@ -3807,12 +3897,23 @@ router.put('/support-tickets/:id/escalation', async (req, res) => {
         }
 
         const { escalatedTo, escalationLevel, escalationReason } = req.body;
+        if (['Resolved', 'Closed'].includes(ticket.status)) return res.status(409).json({ message: 'Reopen the ticket before escalating' });
+        if (!['None', 'Regional', 'HQ'].includes(escalationLevel)) return res.status(400).json({ message: 'Choose a valid escalation level' });
+        if ((escalationLevel === 'None') !== !escalatedTo) return res.status(400).json({ message: 'Escalation level and owner must be set together' });
+        if (escalatedTo) {
+            const target = await getEligibleSupportTarget(req.user, ticket, escalatedTo);
+            if (!target) return res.status(400).json({ message: 'Choose an active escalation owner who can access this ticket' });
+            if (escalationLevel === 'HQ' && target.role !== 'SuperAdmin') return res.status(400).json({ message: 'HQ escalation requires a SuperAdmin owner' });
+            if (escalationLevel === 'Regional' && target.role !== 'RegionalAdmin') return res.status(400).json({ message: 'Regional escalation requires a RegionalAdmin owner' });
+            if (typeof escalationReason !== 'string' || !escalationReason.trim()) return res.status(400).json({ message: 'Give a reason for escalation' });
+        }
+        if ((ticket.escalatedTo?.toString() || '') === (escalatedTo || '') && ticket.escalationLevel === escalationLevel && (ticket.escalationReason || '') === (escalationReason?.trim?.() || '')) return res.json(withSupportTicketViewerMeta(ticket, req.user));
         const before = ticket.toObject();
         ticket.escalatedTo = escalatedTo || undefined;
         ticket.escalationLevel = escalationLevel || 'None';
         ticket.escalationReason = escalationReason?.trim?.() || '';
         ticket.escalatedAt = escalatedTo ? new Date() : undefined;
-        if (ticket.status === 'Open') {
+        if (ticket.status === 'Open' && escalatedTo) {
             ticket.status = 'InProgress';
         }
         if (escalatedTo) {
@@ -3848,7 +3949,7 @@ router.put('/support-tickets/:id/escalation', async (req, res) => {
 
         const populated = await SupportTicket.findById(ticket._id)
             .populate('requester', 'name email role institution')
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('placement', 'companyName status')
             .populate('assignedTo', 'name email role institution')
             .populate('escalatedTo', 'name email role institution')
@@ -5402,7 +5503,7 @@ router.get('/dashboard/action-alerts', async (req, res) => {
             { resolutionDueAt: { $lt: new Date() } },
           ],
         })
-          .populate('learner', 'name trackingId')
+          .populate('learner', 'firstName middleName lastName trackingId')
           .populate('assignedTo', 'name role')
           .sort({ updatedAt: -1 })
           .limit(10);
@@ -8380,7 +8481,7 @@ router.get('/guardian-portal/dashboard', requireRole('Guardian'), async (req, re
         .limit(10)
         .lean(),
       SupportTicket.find({ requester: req.user._id })
-        .populate('learner', 'name trackingId')
+        .populate('learner', 'firstName middleName lastName trackingId')
         .populate('placement', 'companyName status')
         .sort({ updatedAt: -1, createdAt: -1 })
         .limit(10)
@@ -10018,7 +10119,7 @@ router.put('/placements/:id/owner', async (req, res) => {
         });
 
         const populatedPlacement = await Placement.findById(placement._id)
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('partner', 'name')
             .populate('owner', 'name role institution');
 
@@ -10090,7 +10191,7 @@ router.put('/placements/:id/delegate', async (req, res) => {
         }
         const filter = await getFilter(req.user);
         const placement = await Placement.findOne({ _id: req.params.id, ...filter })
-            .populate('learner', 'name trackingId')
+            .populate('learner', 'firstName middleName lastName trackingId')
             .populate('owner', 'name institution');
         if (!placement) {
             return res.status(404).json({ message: 'Placement not found or unauthorized' });

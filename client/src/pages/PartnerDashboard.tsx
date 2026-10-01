@@ -388,6 +388,7 @@ export default function PartnerDashboard() {
     category: "Workflow" as TicketCategory,
     priority: "High" as TicketPriority,
     description: "",
+    requestKey: crypto.randomUUID(),
   })
   const [incidentDraft, setIncidentDraft] = useState({
     incidentType: "AbsentLearner" as IncidentType,
@@ -395,6 +396,7 @@ export default function PartnerDashboard() {
     incidentDate: new Date().toISOString().slice(0, 10),
     subject: "",
     description: "",
+    requestKey: crypto.randomUUID(),
   })
   const [employerAgreementDraft, setEmployerAgreementDraft] = useState({
     signerName: "",
@@ -666,6 +668,7 @@ export default function PartnerDashboard() {
       category: "Workflow",
       priority: "High",
       description: "",
+      requestKey: crypto.randomUUID(),
     })
     setSupportOpen(true)
   }
@@ -811,6 +814,7 @@ export default function PartnerDashboard() {
       incidentDate: new Date().toISOString().slice(0, 10),
       subject: placement.learner ? `Incident reported for ${placement.learner.name}` : "",
       description: "",
+      requestKey: crypto.randomUUID(),
     })
     setIncidentOpen(true)
   }
@@ -930,6 +934,7 @@ export default function PartnerDashboard() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to create support ticket")
       toast.success("Support ticket created")
+      setSupportDraft((current) => ({ ...current, subject: "", description: "", requestKey: crypto.randomUUID() }))
       setSupportOpen(false)
       setRefreshKey((prev) => prev + 1)
     } catch (error) {
@@ -956,11 +961,13 @@ export default function PartnerDashboard() {
           ticketType: "Incident",
           incidentType: incidentDraft.incidentType,
           incidentDate: incidentDraft.incidentDate,
+          requestKey: incidentDraft.requestKey,
         }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to report incident")
       toast.success("Incident reported")
+      setIncidentDraft((current) => ({ ...current, subject: "", description: "", requestKey: crypto.randomUUID() }))
       setIncidentOpen(false)
       setRefreshKey((prev) => prev + 1)
     } catch (error) {

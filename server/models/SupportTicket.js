@@ -43,6 +43,7 @@ const supportTicketSchema = new mongoose.Schema({
     default: 'Open',
   },
   requester: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  requestKey: { type: String, default: undefined },
   lastActivityBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   lastActivityAt: { type: Date, default: Date.now },
   learner: { type: mongoose.Schema.Types.ObjectId, ref: 'Learner' },
@@ -69,6 +70,8 @@ const supportTicketSchema = new mongoose.Schema({
   firstRespondedAt: { type: Date },
   resolutionDueAt: { type: Date },
   resolvedAt: { type: Date },
+  resolutionSummary: { type: String, default: '', trim: true },
+  resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   replies: { type: [supportReplySchema], default: [] },
   readStates: { type: [supportReadStateSchema], default: [] },
   archivedAt: { type: Date, default: null },
@@ -78,6 +81,7 @@ const supportTicketSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 supportTicketSchema.index({ requester: 1, createdAt: -1 });
+supportTicketSchema.index({ requester: 1, requestKey: 1 }, { unique: true, partialFilterExpression: { requestKey: { $type: 'string' } } });
 supportTicketSchema.index({ institution: 1, status: 1 });
 supportTicketSchema.index({ region: 1, status: 1 });
 supportTicketSchema.index({ partnerId: 1, status: 1 });
