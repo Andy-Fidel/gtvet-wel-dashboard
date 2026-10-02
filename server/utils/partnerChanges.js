@@ -21,6 +21,11 @@ export function canInstitutionRequestPartnerChanges(user, partner) {
   return Boolean(submittingInstitution) && submittingInstitution === user.institution;
 }
 
+export function canRequestPartnerChanges(user, partner) {
+  if (user?.role === 'RegionalAdmin') return !!user.region && partnerRegionMatch(user.region).test(partner.region);
+  return canInstitutionRequestPartnerChanges(user, partner);
+}
+
 export function normalizePartnerChanges(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('Provide the proposed fields.');
   const result = {};
@@ -60,6 +65,7 @@ async function scope(user) {
     if (user.hqScopeType === 'Institution' && user.institution) return { linkedInstitutions: user.institution };
     fail('No review scope assigned.', 403);
   }
+  if (user.role === 'RegionalAdmin' && user.region) return partnerVisibilityFilter(user);
   if (!institutionRoles.includes(user.role) || !user.institution) fail('Access denied.', 403);
   return partnerVisibilityFilter(user);
 }
@@ -78,6 +84,7 @@ export async function canReadPartnerChangeDocument(user, document) {
   } catch { return false; }
 }
 function requestVisible(user, request) {
+  if (user.role === 'RegionalAdmin') return request.submissionScope === 'Region' && partnerRegionMatch(user.region).test(request.region || '');
   return !institutionRoles.includes(user.role) || (request.institution === user.institution && (user.role !== 'Staff' || String(request.requester) === String(user._id)));
 }
 function text(value, label) {
@@ -99,7 +106,7 @@ async function proposal(req, partner) {
   if (!Object.keys(proposed).length) fail('Change at least one partner detail.');
   const ids = req.body.attachmentIds || [];
   if (!Array.isArray(ids) || ids.length > 5 || ids.some(id => !mongoose.isValidObjectId(id))) fail('Attach up to five supporting documents.');
-  const docs = await Document.find({ _id: { $in: ids }, institution: req.user.institution, uploadedBy: req.user._id, category: { $in: ['Other', 'MoU'] }, learner: null, placement: null, monitoringVisit: null, supportTicket: null, employerEvaluation: null }).lean();
+  const docs = await Document.find({ _id: { $in: ids }, institution: req.user.institution || 'N/A', uploadedBy: req.user._id, category: { $in: ['Other', 'MoU'] }, learner: null, placement: null, monitoringVisit: null, supportTicket: null, employerEvaluation: null }).lean();
   if (docs.length !== new Set(ids).size) fail('One or more supporting documents are unavailable.');
   if (proposed.mouDocumentUrl && !docs.some(doc => doc.url === proposed.mouDocumentUrl && doc.category === 'MoU')) fail('Attach the new MoU document.');
   return { proposed, original, reason: text(req.body.reason, 'Reason'), attachments: docs.map(doc => ({ documentId: doc._id, fileName: doc.fileName, url: doc.url })) };
@@ -131,22 +138,29 @@ export function registerPartnerChanges(router) {
       match['changeRequests.institution'] = req.user.institution;
       if (req.user.role === 'Staff') match['changeRequests.requester'] = new mongoose.Types.ObjectId(String(req.user._id));
     }
+    if (req.user.role === 'RegionalAdmin') {
+      match['changeRequests.submissionScope'] = 'Region';
+      match['changeRequests.region'] = partnerRegionMatch(req.user.region);
+    }
     const pipeline = [{ $match: filter }, { $unwind: '$changeRequests' }, { $match: match }, { $sort: { 'changeRequests.updatedAt': -1, 'changeRequests._id': -1 } }];
     const [result] = await IndustryPartner.aggregate([...pipeline, { $facet: { items: [{ $skip: (page - 1) * 20 }, { $limit: 20 }, { $project: { _id: 0, partnerId: '$_id', partnerName: '$name', request: '$changeRequests', current: Object.fromEntries(partnerChangeFields.map(f => [f, `$${f}`])) } }], count: [{ $count: 'total' }] } }]);
     res.json({ items: result.items, total: result.count[0]?.total || 0 });
   }));
   router.post('/industry-partners/:id/change-requests', handler(async (req, res) => {
-    if (!institutionRoles.includes(req.user.role)) fail('Only institution users may submit changes.', 403);
+    if (![...institutionRoles, 'RegionalAdmin'].includes(req.user.role)) fail('Only institution or regional users may submit changes.', 403);
     const partnerScope = await scope(req.user);
     const filter = { $and: [{ _id: req.params.id }, partnerScope] };
     const partner = await IndustryPartner.findOne(filter).populate('addedBy', 'institution').lean();
     if (!partner) fail('Partner not found.', 404);
-    if (!canInstitutionRequestPartnerChanges(req.user, partner)) fail('Only the institution that submitted this partner may request changes.', 403);
+    if (!canRequestPartnerChanges(req.user, partner)) fail('You cannot request changes to this partner.', 403);
     if (partner.approvalStatus && partner.approvalStatus !== 'Approved') fail('Only approved partners can receive change requests.');
     const data = await proposal(req, partner);
-    const change = { _id: new mongoose.Types.ObjectId(), ...data, institution: req.user.institution, requester: req.user._id, requesterName: req.user.name, status: req.user.role === 'Staff' ? 'InstitutionReview' : 'HQReview', version: 0, createdAt: new Date(), updatedAt: new Date(), history: [event(req, 'Submitted', data.reason, data)] };
-    const updated = await IndustryPartner.updateOne({ $and: [filter, { changeRequests: { $not: { $elemMatch: { institution: req.user.institution, status: { $in: pending } } } } }] }, { $push: { changeRequests: change } });
-    if (!updated.modifiedCount) fail('Your institution already has an open change request for this partner.', 409);
+    const regional = req.user.role === 'RegionalAdmin';
+    const changeScope = regional ? { submissionScope: 'Region', region: req.user.region } : { institution: req.user.institution };
+    const duplicateScope = regional ? { submissionScope: 'Region', region: partnerRegionMatch(req.user.region) } : changeScope;
+    const change = { _id: new mongoose.Types.ObjectId(), ...data, ...changeScope, requester: req.user._id, requesterName: req.user.name, status: req.user.role === 'Staff' ? 'InstitutionReview' : 'HQReview', version: 0, createdAt: new Date(), updatedAt: new Date(), history: [event(req, 'Submitted', data.reason, data)] };
+    const updated = await IndustryPartner.updateOne({ $and: [filter, { approvalStatus: partner.approvalStatus ?? null }, { changeRequests: { $not: { $elemMatch: { ...duplicateScope, status: { $in: pending } } } } }] }, { $push: { changeRequests: change } });
+    if (!updated.modifiedCount) fail('An open request already exists for your scope, or the partner changed. Reload before continuing.', 409);
     await announce(req, partner, change, 'Submitted');
     res.status(201).json(change);
   }));
@@ -162,7 +176,7 @@ export function registerPartnerChanges(router) {
     const hqReview = ['SuperAdmin', 'HQManager'].includes(req.user.role) && change.status === 'HQReview' && !own;
     let status, data = {}, comment = '';
     if (action === 'withdraw' && own && pending.includes(change.status)) status = 'Withdrawn';
-    else if (action === 'resubmit' && own && canInstitutionRequestPartnerChanges(req.user, partner) && change.status === 'Returned') {
+    else if (action === 'resubmit' && own && canRequestPartnerChanges(req.user, partner) && change.status === 'Returned') {
       data = await proposal(req, partner);
       status = req.user.role === 'Staff' ? 'InstitutionReview' : 'HQReview';
       comment = data.reason;
@@ -190,7 +204,7 @@ export function registerPartnerChanges(router) {
       Object.assign(set, change.proposed);
     }
     const apply = async () => {
-      const updated = await IndustryPartner.updateOne({ $and: clauses }, { $set: set, $inc: { 'changeRequests.$.version': 1 }, $push: { 'changeRequests.$.history': event(req, status, comment, action === 'resubmit' ? data : {}) } }, { runValidators: true });
+      const updated = await IndustryPartner.updateOne({ $and: clauses }, { $set: set, $inc: { 'changeRequests.$.version': 1, ...(status === 'Approved' ? { approvalVersion: 1 } : {}) }, $push: { 'changeRequests.$.history': event(req, status, comment, action === 'resubmit' ? data : {}) } }, { runValidators: true });
       if (!updated.modifiedCount) fail('The partner or request changed. Reload before continuing.', 409);
     };
     // Serialize capacity decisions with placement allocation and recovery.

@@ -9,7 +9,8 @@ import { Learner } from '../models/Learner.js';
 import { Placement } from '../models/Placement.js';
 import { PlacementTransfer } from '../models/PlacementTransfer.js';
 import { registerPlacementTransfers } from '../utils/placementTransfers.js';
-import { registerPartnerChanges, canInstitutionRequestPartnerChanges } from '../utils/partnerChanges.js';
+import { registerPartnerChanges, canRequestPartnerChanges } from '../utils/partnerChanges.js';
+import { approvalComment, approvalVersionFilter, canResubmitPartner } from '../utils/partnerApproval.js';
 import { learnerSearchFilter } from '../utils/learnerSearch.js';
 import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
@@ -1015,7 +1016,7 @@ const notifyHQOfPartnerSubmission = async ({ partner, sender }) => {
             title: 'New industry partner awaiting HQ approval',
             message: `${sender?.name || 'A user'} submitted ${partner.name} for HQ approval.`,
             link: '/hq-industry-partners',
-            dedupeKey: `partner-hq-submission:${partner._id}`,
+            dedupeKey: `partner-hq-submission:${partner._id}:${partner.approvalVersion || 0}`,
         });
 
         const emails = hqRecipients.filter((user) => user.notificationPreferences?.email && user.notificationPreferences?.partnerUpdates !== false)
@@ -13446,7 +13447,8 @@ router.get('/industry-partners', async (req, res) => {
             : partners;
         const partnersWithPermissions = capacityAwarePartners.map(partner => ({
             ...partner,
-            canRequestChanges: canInstitutionRequestPartnerChanges(req.user, partner),
+            canRequestChanges: canRequestPartnerChanges(req.user, partner),
+            canResubmit: canResubmitPartner(req.user, partner),
         }));
 
         if (usePagination) {
@@ -13806,83 +13808,58 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
     }
 });
 
-router.put('/industry-partners/:id/hq-approve', requireRole('HQManager', 'SuperAdmin'), async (req, res) => {
+const decidePartnerApproval = rejected => async (req, res) => {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid partner ID' });
+    let comment;
+    try { comment = approvalComment(req.body?.approvalComment, rejected); }
+    catch (error) { return res.status(400).json({ message: error.message }); }
     try {
         const partnerScope = await getHQPartnerFilter(req.user);
         const partner = await IndustryPartner.findOne({ _id: req.params.id, ...partnerScope });
         if (!partner) return res.status(404).json({ message: 'Partner not found' });
-
+        const version = partner.approvalVersion || 0;
+        if (partner.approvalStatus !== 'PendingHQApproval' || !Number.isInteger(req.body?.sourceApprovalVersion) || req.body.sourceApprovalVersion !== version) {
+            return res.status(409).json({ message: 'This submission changed or has already been decided. Refresh before reviewing it.' });
+        }
         const before = partner.toObject();
-        partner.approvalStatus = 'Approved';
-        partner.approvalReviewedAt = new Date();
-        partner.approvalReviewedBy = req.user._id;
-        partner.approvalComment = req.body?.approvalComment || '';
-        await partner.save();
-
-        await logAuditEvent({
-            req,
-            action: 'UPDATE',
-            entityType: 'IndustryPartner',
-            entityId: partner._id,
-            summary: `Approved industry partner ${partner.name}`,
-            before,
-            after: partner,
-            metadata: { approvalAction: 'Approved' },
-        });
-
-        const populatedPartner = await IndustryPartner.findById(partner._id)
-            .populate('addedBy', 'name role institution region')
-            .populate('approvalReviewedBy', 'name role');
-        res.json(populatedPartner);
+        const status = rejected ? 'Rejected' : 'Approved';
+        const updated = await IndustryPartner.findOneAndUpdate(
+            { $and: [{ _id: partner._id, ...partnerScope, approvalStatus: 'PendingHQApproval' }, approvalVersionFilter(version)] },
+            { $set: { approvalStatus: status, approvalReviewedAt: new Date(), approvalReviewedBy: req.user._id, approvalComment: comment }, $inc: { approvalVersion: 1 } },
+            { returnDocument: 'after', runValidators: true }
+        ).populate('addedBy', 'name role institution region').populate('approvalReviewedBy', 'name role');
+        if (!updated) return res.status(409).json({ message: 'This submission changed or has already been decided. Refresh before reviewing it.' });
+        await logAuditEvent({ req, action: 'UPDATE', entityType: 'IndustryPartner', entityId: updated._id,
+            summary: `${status} industry partner ${updated.name}`, before, after: updated, metadata: { approvalAction: status } });
+        await notifyUsers({ recipientIds: [updated.addedBy?._id], sender: req.user._id, type: 'partner',
+            title: `Industry partner ${status.toLowerCase()}`, message: `${updated.name}: ${status}.${comment ? ` ${comment}` : ''}`,
+            link: '/industry-partners', dedupeKey: `partner-decision:${updated._id}:${updated.approvalVersion}` });
+        return res.json(updated);
     } catch (error) {
-        console.error('Error approving industry partner:', error);
-        res.status(500).json({ message: 'Error approving partner' });
+        console.error('Error deciding industry partner:', error);
+        return res.status(500).json({ message: 'Error reviewing partner' });
     }
-});
+};
+router.put('/industry-partners/:id/hq-approve', requireRole('HQManager', 'SuperAdmin'), decidePartnerApproval(false));
+router.put('/industry-partners/:id/hq-reject', requireRole('HQManager', 'SuperAdmin'), decidePartnerApproval(true));
 
-router.put('/industry-partners/:id/hq-reject', requireRole('HQManager', 'SuperAdmin'), async (req, res) => {
-    try {
-        const partnerScope = await getHQPartnerFilter(req.user);
-        const partner = await IndustryPartner.findOne({ _id: req.params.id, ...partnerScope });
-        if (!partner) return res.status(404).json({ message: 'Partner not found' });
-
-        const before = partner.toObject();
-        partner.approvalStatus = 'Rejected';
-        partner.approvalReviewedAt = new Date();
-        partner.approvalReviewedBy = req.user._id;
-        partner.approvalComment = req.body?.approvalComment || '';
-        await partner.save();
-
-        await logAuditEvent({
-            req,
-            action: 'UPDATE',
-            entityType: 'IndustryPartner',
-            entityId: partner._id,
-            summary: `Rejected industry partner ${partner.name}`,
-            before,
-            after: partner,
-            metadata: { approvalAction: 'Rejected' },
-        });
-
-        const populatedPartner = await IndustryPartner.findById(partner._id)
-            .populate('addedBy', 'name role institution region')
-            .populate('approvalReviewedBy', 'name role');
-        res.json(populatedPartner);
-    } catch (error) {
-        console.error('Error rejecting industry partner:', error);
-        res.status(500).json({ message: 'Error rejecting partner' });
-    }
-});
-
-router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+const updateIndustryPartner = (resubmit = false) => async (req, res) => {
     try {
         if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid partner ID' });
+        if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) return res.status(400).json({ message: 'Provide partner details.' });
         if (Object.hasOwn(req.body, 'coordinates')) {
             try { req.body.coordinates = normalizeCoordinates(req.body.coordinates); }
             catch (error) { return res.status(400).json({ message: error.message }); }
         }
-        const existingPartner = await IndustryPartner.findOne({ _id: req.params.id, ...await partnerVisibilityFilter(req.user) });
+        const partnerScope = await partnerVisibilityFilter(req.user);
+        const existingPartner = await IndustryPartner.findOne({ _id: req.params.id, ...partnerScope }).populate('addedBy', 'institution').lean();
         if (!existingPartner) return res.status(404).json({ message: 'Partner not found' });
+        if (resubmit) {
+            if (!canResubmitPartner(req.user, existingPartner)) return res.status(403).json({ message: 'Only the submitting institution or regional submitter can correct a rejected submission.' });
+            if (!Number.isInteger(req.body.sourceApprovalVersion) || req.body.sourceApprovalVersion !== (existingPartner.approvalVersion || 0)) return res.status(409).json({ message: 'This submission changed. Reload before resubmitting.' });
+        } else if (req.user.role === 'RegionalAdmin' && (!existingPartner.approvalStatus || existingPartner.approvalStatus === 'Approved')) {
+            return res.status(409).json({ message: 'Approved partner details require HQ review. Use Request changes.' });
+        }
         if (Object.hasOwn(req.body, 'sector')) {
             req.body.sector = String(req.body.sector || '').trim();
             if (req.body.sector !== existingPartner.sector && !isPartnerSector(req.body.sector)) return res.status(400).json({ message: 'Select a valid sector from the available options.' });
@@ -13910,22 +13887,29 @@ router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'),
         if (isFlexibleWorksite(resolvedOperatingModel) && !(update.locationVerificationNotes ?? existingPartner.locationVerificationNotes)?.trim()) {
             return res.status(400).json({ message: 'Describe the operating area and alternative location evidence for mobile or no-premises partners.' });
         }
+        if (resubmit) {
+            update.approvalStatus = 'PendingHQApproval';
+            update.approvalRequestedAt = new Date();
+            update.approvalComment = '';
+        }
         const updatedPartner = await IndustryPartner.findOneAndUpdate(
-            { _id: req.params.id, ...await partnerVisibilityFilter(req.user) },
-            update,
+            { $and: [{ _id: req.params.id, ...partnerScope, approvalStatus: existingPartner.approvalStatus ?? null }, approvalVersionFilter(existingPartner.approvalVersion || 0)] },
+            { $set: update, $inc: { approvalVersion: 1 }, ...(resubmit ? { $unset: { approvalReviewedBy: 1, approvalReviewedAt: 1 } } : {}) },
             { returnDocument: 'after', runValidators: true }
         );
+        if (!updatedPartner) return res.status(409).json({ message: 'The partner changed while saving. Reload and try again.' });
         if (updatedPartner && existingPartner) {
             await logAuditEvent({
                 req,
                 action: 'UPDATE',
                 entityType: 'IndustryPartner',
                 entityId: updatedPartner._id,
-                summary: `Updated industry partner ${updatedPartner.name}`,
+                summary: `${resubmit ? 'Corrected and resubmitted' : 'Updated'} industry partner ${updatedPartner.name}`,
                 before: existingPartner,
                 after: updatedPartner,
             });
         }
+        if (resubmit) await notifyHQOfPartnerSubmission({ partner: updatedPartner, sender: req.user });
         res.json(updatedPartner);
     } catch (error) {
         if (error.code === 11000) return res.status(409).json({ message: 'Company name already exists. Choose a different name or use the existing partner.' });
@@ -13933,7 +13917,9 @@ router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'),
         console.error('Error updating industry partner:', error);
         res.status(500).json({ message: 'Error updating partner' });
     }
-});
+};
+router.put('/industry-partners/:id', requireRole('SuperAdmin', 'RegionalAdmin'), updateIndustryPartner());
+router.put('/industry-partners/:id/resubmit', requireRole('SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'), updateIndustryPartner(true));
 
 router.delete('/industry-partners/:id', requireRole('SuperAdmin'), async (req, res) => {
     if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid partner ID' });

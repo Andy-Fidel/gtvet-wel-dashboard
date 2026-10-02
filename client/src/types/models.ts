@@ -77,10 +77,12 @@ export interface IndustryPartner {
   };
   status: 'Active' | 'Inactive';
   approvalStatus?: 'PendingHQApproval' | 'Approved' | 'Rejected';
+  approvalVersion?: number;
   approvalRequestedAt?: string;
   approvalReviewedAt?: string;
   approvalComment?: string;
   canRequestChanges?: boolean;
+  canResubmit?: boolean;
   programs: string[];
 }
 

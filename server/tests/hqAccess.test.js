@@ -16,7 +16,7 @@ const response = () => ({
 });
 
 async function dispatch(role, method, path, routePath = path, user = {}, body = {}) {
-  const req = { user: { role, _id: 'hq-user', ...user }, method, path, params: { id: 'record-id' }, body };
+  const req = { user: { role, _id: 'hq-user', ...user }, method, path, params: { id: '507f1f77bcf86cd799439011' }, body };
   const res = response();
   let allowed = false;
   enforceHQAccess(req, res, () => { allowed = true; });
@@ -157,7 +157,7 @@ test('manager reaches report decisions with national scope; staff and institutio
     const path = `/semester-reports/record-id/${action}`;
     const routePath = `/semester-reports/:id/${action}`;
     assert.equal((await dispatch('HQManager', 'PUT', path, routePath)).statusCode, 404);
-    assert.deepEqual(filters.at(-1), { _id: 'record-id' });
+    assert.deepEqual(filters.at(-1), { _id: '507f1f77bcf86cd799439011' });
     assert.equal((await dispatch('HQStaff', 'PUT', path, routePath)).statusCode, 403);
     assert.equal((await dispatch('Manager', 'PUT', path, routePath)).statusCode, 403);
   }
@@ -169,8 +169,8 @@ test('manager reaches partner decisions; staff cannot', async (t) => {
   for (const action of ['hq-approve', 'hq-reject']) {
     const path = `/industry-partners/record-id/${action}`;
     const routePath = `/industry-partners/:id/${action}`;
-    assert.equal((await dispatch('HQManager', 'PUT', path, routePath, { hqScopeType: 'Region', region: 'Ashanti' })).statusCode, 404);
-    assert.equal(filters.at(-1)._id, 'record-id');
+    assert.equal((await dispatch('HQManager', 'PUT', path, routePath, { hqScopeType: 'Region', region: 'Ashanti' }, { approvalComment: 'Verified details' })).statusCode, 404);
+    assert.equal(filters.at(-1)._id, '507f1f77bcf86cd799439011');
     assert.ok(filters.at(-1).region.test('Ashanti'));
     assert.equal(filters.at(-1).region.test('Greater Accra'), false);
     assert.equal((await dispatch('HQStaff', 'PUT', path, routePath)).statusCode, 403);

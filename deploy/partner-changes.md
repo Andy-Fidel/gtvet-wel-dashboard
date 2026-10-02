@@ -6,6 +6,23 @@ directly to HQ. HQManager/SuperAdmin can approve, return with a comment, or reje
 The requester can withdraw pending requests or correct and resubmit returned ones.
 One open request per institution and partner prevents duplicate submissions.
 
+Regional administrators use **Request changes** for approved partners in their
+region. These requests go directly to HQ and retain the approved registry details
+until accepted. One open regional request per region and partner is allowed.
+Direct regional edits to approved partners are rejected by the API.
+
+Initial HQ decisions accept only pending registrations. The client sends the
+reviewed `sourceApprovalVersion`; an atomic status/version check returns HTTP 409
+when another review or edit has occurred. Rejection requires 5–3000 characters.
+Submitting institution Admins/Managers, the regional submitter, or a SuperAdmin
+can correct a rejected registration with **Correct and resubmit**. The API checks
+scope, ownership and version, then returns it to pending HQ approval and clears
+the previous review fields. The audit log retains the earlier decision, and HQ
+receives a fresh notification. Decision notifications also go to the submitter.
+Existing records without `approvalVersion` start at version zero; no backfill is
+required. Deploy the server and client together because decisions now require
+`sourceApprovalVersion`.
+
 The request queue appears in the institution registry and HQ partner page. Review
 shows original, current and proposed values, supporting documents, and decision
 history. Approval changes only proposed fields. Changes to those fields since
@@ -38,8 +55,11 @@ Validation:
 
 ```sh
 PARTNER_MONGO_INTEGRATION=1 node --test server/tests/partnerChanges.integration.test.js
+PARTNER_MONGO_INTEGRATION=1 node --test server/tests/partnerApproval.integration.test.js
+node --test server/tests/partnerApproval.test.js
 node --test server/tests/hqAccess.test.js server/tests/partnerVisibility.test.js
 npm run build --prefix client
+cd client && npm exec -- playwright test tests/browser/partner-approval.spec.ts
 ```
 
 Integration tests require a disposable MongoDB on 127.0.0.1:27030. Each run creates

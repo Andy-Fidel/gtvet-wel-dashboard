@@ -73,7 +73,7 @@ export default function IndustryPartners() {
     setEditingPartner(null)
     setRefreshKey(prev => prev + 1)
     if (editingPartner) {
-      toast.success("Partner updated")
+      toast.success(editingPartner.approvalStatus === 'Rejected' && editingPartner.canResubmit ? 'Partner resubmitted for HQ approval' : 'Partner updated')
     } else {
       toast.success(user?.role === 'SuperAdmin' ? "Partner created" : "Partner submitted for HQ approval")
     }
@@ -131,7 +131,7 @@ export default function IndustryPartners() {
         )}
       </div>
 
-      {['Admin', 'Manager', 'Staff', 'SuperAdmin'].includes(user?.role || '') && <PartnerChangeQueue onChange={() => setRefreshKey(key => key + 1)} />}
+      {['Admin', 'Manager', 'Staff', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && <PartnerChangeQueue onChange={() => setRefreshKey(key => key + 1)} />}
       <Dialog open={!!changePartner} onOpenChange={open => { if (!open) setChangePartner(null) }}><DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Request changes: {changePartner?.name}</DialogTitle><DialogDescription>Submit corrections for institution and HQ review.</DialogDescription></DialogHeader>{changePartner && <PartnerChangeForm partner={{ ...changePartner }} onDone={() => setChangePartner(null)} />}</DialogContent></Dialog>
       <Dialog open={!!relationshipPartner} onOpenChange={open => { if (!open) setRelationshipPartner(null) }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{relationshipPartner?.name}: institution details</DialogTitle><DialogDescription>Contacts and notes for your institution.</DialogDescription></DialogHeader>{relationshipPartner && <PartnerRelationship partner={relationshipPartner} onDone={() => setRelationshipPartner(null)} />}</DialogContent></Dialog>
       {allocationPartner && <PartnerSlotAllocations partner={allocationPartner} open={Boolean(allocationPartner)} onOpenChange={value => { if (!value) setAllocationPartner(null) }} onChanged={() => setRefreshKey(key => key + 1)} />}
@@ -152,12 +152,12 @@ export default function IndustryPartners() {
         <DialogContent className="sm:max-w-[600px] bg-white border-none rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh] p-0 [&>button]:text-gray-500 hover:[&>button]:text-gray-900 [&>button]:bg-gray-100 hover:[&>button]:bg-gray-200">
           <div className="p-8">
             <DialogHeader className="mb-6">
-              <DialogTitle className="text-2xl font-black">{editingPartner ? 'Edit Partner' : 'Register New Partner'}</DialogTitle>
+              <DialogTitle className="text-2xl font-black">{editingPartner?.approvalStatus === 'Rejected' && editingPartner.canResubmit ? 'Correct and resubmit partner' : editingPartner ? 'Edit Partner' : 'Register New Partner'}</DialogTitle>
               <DialogDescription className="font-medium text-gray-500">
                 Enter company details and capacity.
               </DialogDescription>
             </DialogHeader>
-            <IndustryPartnerForm onSuccess={handleSuccess} initialData={editingPartner || undefined} />
+            <IndustryPartnerForm onSuccess={handleSuccess} initialData={editingPartner || undefined} resubmit={editingPartner?.approvalStatus === 'Rejected' && editingPartner.canResubmit} approvalVersion={editingPartner?.approvalVersion} />
           </div>
         </DialogContent>
       </Dialog>
@@ -256,7 +256,9 @@ export default function IndustryPartners() {
                     {partner.institutionCapacity && <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 text-xs"><span><strong className="block text-gray-900">{partner.institutionCapacity.reservedAvailable}</strong> reserved available</span><span><strong className="block text-gray-900">{partner.institutionCapacity.sharedAvailable}</strong> shared available</span></div>}
                 </div>
 
-                {['Admin', 'Manager', 'Staff'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3">{partner.canRequestChanges && <Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button>}<Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></div>}
+                {partner.approvalStatus === 'Rejected' && partner.approvalComment && <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800"><strong>HQ rejection reason:</strong> {partner.approvalComment}</p>}
+                {partner.canResubmit && <Button variant="outline" size="sm" onClick={() => { setEditingPartner(partner); setOpen(true) }}>Correct and resubmit</Button>}
+                {['Admin', 'Manager', 'Staff', 'RegionalAdmin'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3">{partner.canRequestChanges && <Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button>}{user?.role !== 'RegionalAdmin' && <><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></>}</div>}
                 {(user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') && (
                     <div className="flex gap-2 pt-2 border-t border-gray-100 mt-4">
                          <Button
@@ -268,9 +270,9 @@ export default function IndustryPartners() {
                          >
                              <UserPlus className="h-4 w-4 mr-2" /> Portal
                          </Button>
-                         <Button variant="outline" size="sm" onClick={() => { setEditingPartner(partner); setOpen(true); }} className="flex-1 hover:bg-[#FFB800]/10 hover:text-[#FFB800] border-gray-200 font-bold h-9">
+                         {!partner.canResubmit && (user?.role === 'SuperAdmin' || partner.approvalStatus === 'PendingHQApproval') && <Button variant="outline" size="sm" onClick={() => { setEditingPartner(partner); setOpen(true); }} className="flex-1 hover:bg-[#FFB800]/10 hover:text-[#FFB800] border-gray-200 font-bold h-9">
                              Edit
-                         </Button>
+                         </Button>}
                          {user?.role === 'SuperAdmin' && (
                              <Button variant="outline" size="sm" onClick={() => handleDelete(partner._id)} className="hover:bg-red-50 hover:text-red-500 border-gray-200 font-bold h-9 px-3">
                                  Delete

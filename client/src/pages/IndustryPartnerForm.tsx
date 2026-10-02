@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
-import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
+import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
+import { readCoordinates } from '@/lib/workplaceCoordinates'
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -50,6 +51,8 @@ type IndustryPartnerFormValues = z.infer<typeof formSchema>
 interface IndustryPartnerFormProps {
   onSuccess: () => void;
   initialData?: Partial<IndustryPartnerFormValues> & { _id?: string; usedSlots?: number; mouDocumentUrl?: string; coordinates?: { lat?: number; lng?: number } };
+  resubmit?: boolean;
+  approvalVersion?: number;
 }
 
 const GHANA_REGIONS = [
@@ -61,7 +64,7 @@ const NO_TRADE_AREA = '__not_specified__'
 
 type InstitutionPrograms = { programs?: string[] }
 
-export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerFormProps) {
+export function IndustryPartnerForm({ onSuccess, initialData, resubmit = false, approvalVersion = 0 }: IndustryPartnerFormProps) {
   const [loading, setLoading] = useState(false)
   const [lat, setLat] = useState(String(initialData?.coordinates?.lat ?? ''))
   const [lng, setLng] = useState(String(initialData?.coordinates?.lng ?? ''))
@@ -130,11 +133,11 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
         finalData.mouDocumentUrl = uploadData.url;
       }
 
-      const url = initialData?._id ? `/api/industry-partners/${initialData._id}` : '/api/industry-partners';
+      const url = initialData?._id ? `/api/industry-partners/${initialData._id}${resubmit ? '/resubmit' : ''}` : '/api/industry-partners';
       const res = await authFetch(url, {
         method: initialData?._id ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalData),
+        body: JSON.stringify({ ...finalData, ...(resubmit ? { sourceApprovalVersion: approvalVersion } : {}) }),
       })
       const resData = await res.json()
       if (!res.ok) throw new Error(resData.message || "Failed to save")
@@ -306,7 +309,7 @@ export function IndustryPartnerForm({ onSuccess, initialData }: IndustryPartnerF
         </div>
 
         <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm mt-4">
-          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : (initialData ? 'Save Changes' : 'Register Partner')}
+          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : resubmit ? 'Resubmit for HQ approval' : (initialData ? 'Save Changes' : 'Register Partner')}
         </Button>
       </form>
     </Form>

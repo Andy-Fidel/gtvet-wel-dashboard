@@ -117,7 +117,11 @@ export default function HQIndustryPartners() {
   }
 
   const submitDecision = async () => {
-    if (!decisionPartner) return
+    if (!decisionPartner || submittingDecision) return
+    if (decisionType === 'reject' && decisionComment.trim().length < 5) {
+      toast.error('Provide a rejection reason of at least 5 characters.')
+      return
+    }
     setSubmittingDecision(true)
     try {
       const endpoint = decisionType === "approve"
@@ -126,10 +130,13 @@ export default function HQIndustryPartners() {
       const res = await authFetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approvalComment: decisionComment.trim() }),
+        body: JSON.stringify({ approvalComment: decisionComment.trim(), sourceApprovalVersion: decisionPartner.approvalVersion || 0 }),
       })
       const payload = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(payload.message || "Failed to update approval")
+      if (!res.ok) {
+        if (res.status === 409) { setDecisionPartner(null); await fetchPartners() }
+        throw new Error(payload.message || "Failed to update approval")
+      }
       toast.success(decisionType === "approve" ? "Partner approved" : "Partner rejected")
       setDecisionPartner(null)
       await fetchPartners()
@@ -472,7 +479,7 @@ export default function HQIndustryPartners() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(decisionPartner)} onOpenChange={(open) => !open && setDecisionPartner(null)}>
+      <Dialog open={Boolean(decisionPartner)} onOpenChange={(open) => !open && !submittingDecision && setDecisionPartner(null)}>
         <DialogContent className="rounded-[2rem] border-none bg-white">
           <DialogHeader>
             <DialogTitle>{decisionType === "approve" ? "Approve Partner" : "Reject Partner"}</DialogTitle>
@@ -481,16 +488,20 @@ export default function HQIndustryPartners() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <label htmlFor="partner-decision-comment" className="text-sm font-medium">{decisionType === 'approve' ? 'Approval note (optional)' : 'Rejection reason (at least 5 characters)'}</label>
             <Textarea
+              id="partner-decision-comment"
+              maxLength={3000}
+              disabled={submittingDecision}
               value={decisionComment}
               onChange={(e) => setDecisionComment(e.target.value)}
               placeholder={decisionType === "approve" ? "Optional approval note" : "Reason for rejection"}
             />
             <div className="flex justify-end gap-3">
-              <Button variant="outline" className="rounded-xl" onClick={() => setDecisionPartner(null)}>Cancel</Button>
+              <Button variant="outline" disabled={submittingDecision} className="rounded-xl" onClick={() => setDecisionPartner(null)}>Cancel</Button>
               <Button
                 onClick={submitDecision}
-                disabled={submittingDecision}
+                disabled={submittingDecision || (decisionType === 'reject' && decisionComment.trim().length < 5)}
                 className={`rounded-xl ${decisionType === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"} text-white`}
               >
                 {decisionType === "approve" ? <Clock3 className="mr-2 h-4 w-4" /> : <XCircle className="mr-2 h-4 w-4" />}

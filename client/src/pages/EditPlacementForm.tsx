@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/select"
 import { useState } from "react"
 import { Loader2, CalendarDays } from "lucide-react"
-import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
+import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
+import { readCoordinates } from '@/lib/workplaceCoordinates'
 import { useAuth } from "@/context/AuthContext"
 import { toast } from "@/lib/toast"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"

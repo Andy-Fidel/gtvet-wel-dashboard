@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
 
 const partnerChangeSchema = new mongoose.Schema({
-  institution: { type: String, required: true },
+  institution: { type: String, required() { return this.submissionScope !== 'Region'; } },
+  submissionScope: { type: String, enum: ['Institution', 'Region'], default: 'Institution' },
+  region: { type: String, required() { return this.submissionScope === 'Region'; } },
   requester: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   requesterName: String,
   status: { type: String, enum: ['InstitutionReview', 'HQReview', 'Returned', 'Approved', 'Rejected', 'Withdrawn'], required: true },
@@ -60,6 +62,8 @@ const industryPartnerSchema = new mongoose.Schema({
     default: 'PendingHQApproval'
   },
   approvalRequestedAt: { type: Date },
+  // Separate from placement workflow sequencing; changes invalidate open HQ reviews.
+  approvalVersion: { type: Number, default: 0 },
   approvalReviewedAt: { type: Date },
   approvalReviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   approvalComment: { type: String, default: '' },

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
-import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
+import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
+import { readCoordinates } from '@/lib/workplaceCoordinates'
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"

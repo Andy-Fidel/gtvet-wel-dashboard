@@ -33,7 +33,8 @@ import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 import { PromptDialog } from "@/components/PromptDialog"
 import { Handshake, Search as SearchIcon, Loader2, X } from "lucide-react"
 import { Input } from "@/components/ui/input"
-import { WorkplaceCoordinates, readCoordinates } from '@/components/WorkplaceCoordinates'
+import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
+import { readCoordinates } from '@/lib/workplaceCoordinates'
 import { PlacementBatchDetailsDialog, type PlacementBatchDetails } from '@/components/PlacementBatchDetailsDialog'
 
 type DelegateUser = {
