@@ -8,6 +8,7 @@ import { IndustryPartner } from '../models/IndustryPartner.js';
 import { placementError, placementErrorStatus, placementInput, runPlacementOperation, placementOperationKey, validatePlacementDates } from './placementWorkflow.js';
 import { isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates } from './workplaceCoordinates.js';
 import { notifyUsers } from './notifications.js';
+import { notifyGuardianUpdates } from './guardianNotifications.js';
 import { logAuditEvent } from './audit.js';
 
 const operators = ['Admin', 'Manager', 'Staff'];
@@ -39,8 +40,14 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
       const supervisors = await User.find({ role: 'IndustryPartner', partnerId: { $in: partners }, status: 'Active' }).select('_id');
       recipients.push(...supervisors.map(u => u._id));
     }
-    const guardians = await User.find({ role: 'Guardian', linkedLearners: transfer.learner, status: 'Active' }).select('_id');
-    await notifyUsers({ institution: transfer.institution, roles: managers, recipientIds: [transfer.submittedBy, ...recipients, ...extra, ...guardians.map(g => g._id)].filter(Boolean).map(String), type: 'placement', title, message: `Workplace change to ${transfer.destination.companyName} — effective ${day(transfer.effectiveDate)}.`, link: '/placements', dedupeKey: `transfer:${transfer._id}:${transfer.status}:${title}` });
+    const message = `Workplace change to ${transfer.destination.companyName} — effective ${day(transfer.effectiveDate)}.`;
+    await notifyUsers({ institution: transfer.institution, roles: managers, recipientIds: [transfer.submittedBy, ...recipients, ...extra].filter(Boolean).map(String), type: 'placement', title, message, link: '/placements', dedupeKey: `transfer:${transfer._id}:${transfer.status}:${title}` });
+    if (transfer.status === 'Applied') {
+      await notifyGuardianUpdates({ type: 'placement', records: [{ _id: `transfer:${transfer._id}`, learner: transfer.learner, institution: transfer.institution, companyName: transfer.destination.companyName, startDate: transfer.effectiveDate }] });
+    } else {
+      const guardians = await User.find({ role: 'Guardian', linkedLearners: transfer.learner, status: 'Active' }).select('_id');
+      await notifyUsers({ recipientIds: guardians.map(g => g._id), type: 'placement', title, message, link: '/guardian-dashboard?section=history', dedupeKey: `transfer:${transfer._id}:${transfer.status}:${title}` });
+    }
   };
   const resolveDestination = async (req, input, learner) => {
     const data = placementInput(input);

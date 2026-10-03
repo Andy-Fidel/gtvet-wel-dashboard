@@ -12,6 +12,9 @@ import { Badge } from '@/components/ui/badge';
 import { PlacementProgressWidget } from './PlacementProgressWidget';
 import { usePushNotificationEvents } from '@/hooks/usePushNotifications';
 import { isAdminRole, isManagementRole } from '@/lib/rbac';
+import { Sparkles } from 'lucide-react';
+import { ReleaseNotice } from '@/components/ReleaseNotice';
+import { useReleaseNotes } from '@/hooks/useReleaseNotes';
 
 const HQ_NAV_GROUPS = [
   {
@@ -67,6 +70,7 @@ export default function Layout() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarTooltip, setSidebarTooltip] = useState<{ label: string; top: number } | null>(null);
   const { user, offlineQueueCount } = useAuth();
+  const { hasUnread: hasUnreadRelease } = useReleaseNotes(user?._id, Boolean(user?.inspection));
   const { unreadCount } = useNotifications();
   const location = useLocation();
   const navigate = useNavigate();
@@ -730,6 +734,11 @@ export default function Layout() {
             )}
           </NavLink>}
 
+          <NavLink to="/whats-new" onClick={() => setIsMobileMenuOpen(false)} {...collapsedNavTooltip('What’s new')}
+            className={({ isActive }) => `flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3 px-6'} min-h-12 rounded-2xl py-3 ${isActive ? 'bg-blue-50 font-bold text-blue-800' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900'}`}>
+            <Sparkles size={20} aria-hidden="true" />
+            {!isSidebarCollapsed && <><span>What’s new</span>{hasUnreadRelease && <span className="ml-auto rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">New</span>}</>}
+          </NavLink>
         </nav>
         {!isSidebarCollapsed && !isIndustryPartner && !isGuardian && (
           <div className="mt-auto p-8">
@@ -778,6 +787,7 @@ export default function Layout() {
               </button>
             </div>
           ) : null}
+          <ReleaseNotice />
           <Outlet />
         </div>
       </main>

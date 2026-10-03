@@ -43,6 +43,7 @@ const SettingsPage = lazy(() => import('@/pages/Settings'));
 const OfflineSync = lazy(() => import('@/pages/OfflineSync'));
 const Vacancies = lazy(() => import('@/pages/Vacancies'));
 const PartnerVacancies = lazy(() => import('@/pages/PartnerVacancies'));
+const WhatsNew = lazy(() => import('@/pages/WhatsNew'));
 
 const VACANCY_VIEW_ROLES = ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'] as const;
 
@@ -102,6 +103,7 @@ function App() {
               </ProtectedRoute>
             }>
               <Route index element={<HomeRoute />} />
+              <Route path="whats-new" element={<ErrorBoundary><Suspense fallback={<PageSkeleton />}><WhatsNew /></Suspense></ErrorBoundary>} />
               <Route path="learners" element={
                 <ErrorBoundary>
                   <Suspense fallback={<PageSkeleton />}>

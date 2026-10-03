@@ -66,6 +66,10 @@ marks a successful cutover so it runs only once.
 
 ## Update and rollback
 
+For user-visible changes, add plain-language [release notes](release-notes.md)
+before building the release. The **What’s new** page and announcement are shipped
+with the client, so users see notes matching their active app version.
+
 The deployment host is `197.253.124.38` on SSH port `6079`. Connect with an
 authorized account and key (the intended command is
 `ssh -p 6079 -i ~/.ssh/id_ed25519 ubuntu@197.253.124.38`). The repository is

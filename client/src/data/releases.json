@@ -1,0 +1,69 @@
+[
+  {
+    "id": "2026-10-03-whats-new",
+    "date": "2026-10-03",
+    "title": "Portal updates and alerts for families",
+    "summary": "Explore what’s new and keep up with your ward’s workplace learning.",
+    "changes": [
+      {
+        "kind": "New",
+        "title": "Stay informed about your ward’s progress",
+        "body": "Guardians linked to a learner now receive an alert when a workplace placement is activated, a monitoring visit is logged, or a competency assessment is recorded. Each alert names the learner and opens your family overview. Alerts follow your notification preferences in Settings.",
+        "audience": "Guardians",
+        "roles": ["Guardian"],
+        "action": { "label": "Open Family Overview", "path": "/guardian-dashboard" }
+      },
+      {
+        "kind": "New",
+        "title": "A home for portal updates",
+        "body": "Open What’s new from the menu or your profile menu to read release notes at any time. Choose For my role to see updates relevant to your work, or All updates to explore everything.",
+        "audience": "Everyone"
+      },
+      {
+        "kind": "New",
+        "title": "A gentle reminder after a new release",
+        "body": "A notice lets you know when new release notes are available. Read them or dismiss the notice when you’re ready. It won’t interrupt your work, and the full history remains available.",
+        "audience": "Everyone"
+      }
+    ]
+  },
+  {
+    "id": "2026-10-02-partner-approvals",
+    "date": "2026-10-02",
+    "title": "Clearer partner approvals and easier corrections",
+    "summary": "Partner submissions are easier to review, correct, and send back to HQ.",
+    "changes": [
+      {
+        "kind": "New",
+        "title": "Correct a rejected partner submission",
+        "body": "The submitting institution’s Admin or Manager can read the HQ rejection reason, choose Correct and resubmit, update the partner details, and send the submission back for HQ approval. Staff can ask their institution’s Admin or Manager to make the correction.",
+        "audience": "Institution teams",
+        "roles": ["Admin", "Manager", "Staff"],
+        "action": { "label": "Open Industry Partners", "path": "/industry-partners" }
+      },
+      {
+        "kind": "Improved",
+        "title": "Explain why a submission was rejected",
+        "body": "HQ reviewers must provide a rejection reason so the submitting team knows what to correct. If another reviewer has already decided or the submission has changed, refresh and review the latest details before continuing.",
+        "audience": "HQ teams",
+        "roles": ["SuperAdmin", "HQManager", "HQStaff"],
+        "action": { "label": "Open Partner Registry", "path": "/hq-industry-partners" }
+      },
+      {
+        "kind": "Improved",
+        "title": "Send regional corrections to HQ",
+        "body": "For an approved partner, choose Request changes instead of editing the shared record directly. Current approved details remain available until HQ accepts the correction. Regional submitters can also correct and resubmit their own rejected registrations.",
+        "audience": "Regional administrators",
+        "roles": ["RegionalAdmin"],
+        "action": { "label": "Open Industry Partners", "path": "/industry-partners" }
+      },
+      {
+        "kind": "Fixed",
+        "title": "Approval decisions stay consistent",
+        "body": "Competing or repeated HQ decisions can no longer overwrite each other. Earlier decisions remain in the audit history when a rejected submission is corrected and reviewed again.",
+        "audience": "Partner registration and review teams",
+        "roles": ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin", "Manager", "Staff"]
+      }
+    ]
+  }
+]

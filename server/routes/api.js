@@ -53,6 +53,7 @@ import crypto from 'crypto';
 import { Notification } from '../models/Notification.js';
 import { PushSubscription } from '../models/PushSubscription.js';
 import { notifyUsers } from '../utils/notifications.js';
+import { notifyGuardianUpdates } from '../utils/guardianNotifications.js';
 import { getVapidPublicKey, isWebPushConfigured, isTrustedPushEndpoint } from '../utils/webPush.js';
 import { logAuditEvent } from '../utils/audit.js';
 import { canAccessSupportTicket, isSupportResponder } from '../utils/supportAccess.js';
@@ -4630,6 +4631,7 @@ router.post('/monitoring-visits', async (req, res) => {
             });
         }
 
+        await notifyGuardianUpdates({ type: 'visit', records: [newVisit], sender: req.user._id });
         res.status(201).json(newVisit);
     } catch (error) {
         console.error("Error creating visit:", error);
@@ -7222,6 +7224,7 @@ router.post('/assessments', async (req, res) => {
             link: `/learners/${learner._id}`
         });
 
+        await notifyGuardianUpdates({ type: 'assessment', records: [newAssessment], sender: req.user._id });
         res.status(201).json(serializeAssessment({ ...newAssessment.toObject(), learner: learner.toObject() }));
     } catch (error) {
         console.error("Error creating assessment:", error);
@@ -9948,6 +9951,8 @@ async function preparePlacementActivation(req, input, ids, excludeId = null) {
 }
 
 async function notifyPlacementActivation(req, plan) {
+    // Event identities make retries safe while allowing a missed guardian dispatch to retry.
+    await notifyGuardianUpdates({ type: 'placement', records: plan.placements.map(item => ({ ...item.values, _id: item.id })), sender: req.user._id });
     if (plan.replayed) return;
     const count = plan.placements.length;
     for (const partnerId of [...new Set(plan.partnerIds.map(String))]) await notifyUsers({ partnerId, sender: req.user._id, type: 'placement', title: 'New Learners Placed', message: `${count} learner(s) from ${req.user.institution} have been placed with your organization.`, link: '/partner-dashboard?view=mine' });
@@ -10085,6 +10090,9 @@ router.put('/placements/:id', async (req, res) => {
         const updated = await Placement.findOne(filter);
         if (Object.hasOwn(req.body, 'coordinates') && hasCoordinates(updated.coordinates)) await recheckPendingPlacementVisits(updated, req);
         await notifyPreviousDelegate(plan.before, updated, req.user);
+        if (plan.before.status !== 'Active' && updated.status === 'Active') {
+            await notifyGuardianUpdates({ type: 'placement', records: [{ ...updated.toObject(), _id: `${updated._id}:activation:${updated.workflowVersion}` }], sender: req.user._id });
+        }
         await logAuditEvent({ req, action: 'UPDATE', entityType: 'Placement', entityId: req.params.id, summary: 'Updated placement and reconciled operational links', before: plan.before, after: updated, metadata: { operationKey: key } });
         res.json(updated);
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }

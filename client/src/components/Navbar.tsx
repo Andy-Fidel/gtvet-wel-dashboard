@@ -1,4 +1,4 @@
-import { Bell, LogOut, RefreshCw, User, WifiOff } from "lucide-react"
+import { Bell, LogOut, RefreshCw, Sparkles, User, WifiOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -49,6 +49,7 @@ export function Navbar() {
       case '/vacancies': return 'Learner Vacancies';
       case '/settings': return 'Settings';
       case '/notifications': return 'Notifications';
+      case '/whats-new': return 'What’s new';
       default: return 'Dashboard';
     }
   }
@@ -116,7 +117,7 @@ export function Navbar() {
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button data-help-id="navbar-notifications" variant="ghost" size="icon" className="relative h-10 w-10 md:h-12 md:w-12 rounded-2xl bg-gray-50 text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-all cursor-pointer">
+              <Button data-help-id="navbar-notifications" aria-label="Notifications" variant="ghost" size="icon" className="relative h-10 w-10 md:h-12 md:w-12 rounded-2xl bg-gray-50 text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-all cursor-pointer">
                 <Bell className="h-5 w-5" />
                 {unreadCount > 0 && (
                   <span className="absolute top-2 right-2 md:top-3 md:right-3 flex h-3 w-3 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white shadow-sm ring-2 ring-white">
@@ -188,7 +189,7 @@ export function Navbar() {
                   <img src={user.profilePicture} alt={user.name} className="h-full w-full object-cover" />
                 ) : (
                   <Avatar className="h-full w-full rounded-none">
-                    <AvatarFallback className="rounded-none bg-[#FFB800]/10 text-[#FFB800] font-black">
+                    <AvatarFallback className="rounded-none bg-[#FFB800]/10 text-amber-900 font-black">
                       {user ? getInitials(user.name) : 'U'}
                     </AvatarFallback>
                   </Avatar>
@@ -216,6 +217,9 @@ export function Navbar() {
               >
                 <User className="mr-3 h-5 w-5" />
                 <span className="font-bold">Profile</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="rounded-2xl p-3 focus:bg-white/10 focus:text-white cursor-pointer transition-colors" onClick={() => navigate('/whats-new')}>
+                <Sparkles className="mr-3 h-5 w-5" /><span className="font-bold">What’s new</span>
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-white/10" />
               <DropdownMenuItem className="text-red-400 rounded-2xl p-3 focus:bg-red-500/10 focus:text-red-400 cursor-pointer transition-colors" onClick={handleLogout}>

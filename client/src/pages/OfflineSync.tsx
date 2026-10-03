@@ -1,4 +1,3 @@
-import { useMemo } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { clearDraft, loadDraft } from "@/lib/offlineDrafts"
 import { useAuth } from "@/context/AuthContext"
@@ -63,11 +62,14 @@ export default function OfflineSync() {
     clearOfflineQueue,
   } = useAuth()
 
-  const drafts = useMemo(() => {
+  const userId = user?._id
+
+  // Drafts live outside React state; read them on render so queue updates refresh the list.
+  const drafts = (() => {
     if (typeof window === "undefined") return []
 
     return Object.keys(window.localStorage)
-      .filter((key) => key.startsWith("draft:") && (!key.startsWith("draft:support:") || Boolean(user?._id && key.startsWith(`draft:support:${user._id}:`))))
+      .filter((key) => key.startsWith("draft:") && (!key.startsWith("draft:support:") || Boolean(userId && key.startsWith(`draft:support:${userId}:`))))
       .map((key) => {
         const draft = loadDraft<Record<string, unknown> | string>(key)
         let summary = "Saved locally for later completion."
@@ -87,7 +89,7 @@ export default function OfflineSync() {
         } satisfies DraftItem
       })
       .sort((a, b) => a.label.localeCompare(b.label))
-  }, [offlineQueueCount, user?._id])
+  })()
 
   const handleClearDraft = (key: string) => {
     clearDraft(key)

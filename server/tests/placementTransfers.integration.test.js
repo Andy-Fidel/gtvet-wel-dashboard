@@ -7,6 +7,7 @@ import { PlacementTransfer } from '../models/PlacementTransfer.js';
 import { Learner } from '../models/Learner.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { User } from '../models/User.js';
+import { Notification } from '../models/Notification.js';
 import { PlacementCoordinator } from '../models/PlacementOperation.js';
 import { validateTransferDates } from '../utils/placementTransfers.js';
 
@@ -27,7 +28,9 @@ test('transfer lifecycle preserves evidence, approval boundaries, schedules and 
     const staff = { ...admin, _id: id(), role: 'Staff' };
     await User.collection.insertMany([admin, staff]);
     const learnerId = id(), oldPartner = id(), newPartner = id();
-    await Learner.collection.insertOne({ _id: learnerId, institution: 'QA', phone: '0000000000', program: 'IT', year: 'Year 1', academicStatus: 'Active', status: 'Placed' });
+    const guardianId = id();
+    await User.collection.insertOne({ _id: guardianId, role: 'Guardian', status: 'Active', linkedLearners: [learnerId] });
+    await Learner.collection.insertOne({ _id: learnerId, firstName: 'Ama', lastName: 'Mensah', institution: 'QA', phone: '0000000000', program: 'IT', year: 'Year 1', academicStatus: 'Active', status: 'Placed' });
     await mongoose.connection.db.collection('institutions').insertOne({ name: 'QA', region: 'Greater Accra', calendarType: 'Single Track' });
     await mongoose.connection.db.collection('academiccalendars').insertOne({ eventType: 'WEL Window', isActive: true, academicYear, institutionCalendarType: 'Single Track', targetYearGroup: 'Year 1', semester: 'Semester 1', startDate: new Date(date(-30)), endDate: new Date(date(90)) });
     await IndustryPartner.collection.insertMany([oldPartner, newPartner].map((_id, i) => ({ _id, name: `Partner ${i}`, sector: 'IT', region: 'Greater Accra', status: 'Active', approvalStatus: 'Approved', totalSlots: 2, usedSlots: i === 0 ? 1 : 0 })));
@@ -64,6 +67,10 @@ test('transfer lifecycle preserves evidence, approval boundaries, schedules and 
     const applied = await call('/placement-transfers/:id/:action', {}, { id: tid, action: 'approve' }, admin);
     assert.equal(applied.code, 200, JSON.stringify(applied.body));
     assert.equal(applied.body.status, 'Applied');
+    const guardianAlert = await Notification.findOne({ recipient: guardianId, dedupeKey: `guardian:placement:transfer:${tid}` });
+    assert.ok(guardianAlert);
+    assert.equal(guardianAlert.link, '/guardian-dashboard');
+    assert.match(guardianAlert.message, /Mensah Ama.*Partner 1/);
     assert.equal(await Placement.countDocuments({ learner: learnerId, status: 'Active' }), 1);
     const current = await Placement.findOne({ learner: learnerId, status: 'Active' });
     const cancelRequest = await call('/placements/:id/transfers', { ...input, sourceVersion: current.workflowVersion, effectiveDate: date(4) }, { id: String(current._id) });
@@ -92,5 +99,10 @@ test('transfer lifecycle preserves evidence, approval boundaries, schedules and 
     await processDuePlacementTransfers();
     assert.equal((await PlacementTransfer.findById(scheduled.body._id)).status, 'Applied');
     assert.equal(await Placement.countDocuments({ learner: learnerId, status: 'Active' }), 1);
+    const appliedAlerts = { recipient: guardianId, title: 'Your ward has been placed' };
+    assert.equal(await Notification.countDocuments(appliedAlerts), 2);
+    await processDuePlacementTransfers();
+    assert.equal(await Notification.countDocuments(appliedAlerts), 2);
+    assert.ok((await Notification.find({ recipient: guardianId }).lean()).every(note => note.link.startsWith('/guardian-dashboard')));
   } finally { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); }
 });
