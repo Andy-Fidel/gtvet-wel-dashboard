@@ -862,8 +862,6 @@ export default function SuperAdminDashboard() {
       {dashboardView === "learners" ? <LearnerOversight
         adminData={data}
         adminScopeLabel={scopeLabel || 'National Oversight'}
-        canExportInstitutionCohorts
-        downloadCSV={downloadCSV}
         openLearnerRegister={(params) => navigate(`/learners?${new URLSearchParams(params)}`)}
         openInterventionQueue={(params) => navigate(`/learner-progress?${new URLSearchParams(params)}`)}
       /> : null}

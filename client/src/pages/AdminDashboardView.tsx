@@ -40,7 +40,6 @@ export function AdminDashboardView({
   const adminScopeLabel = isRegionalAdmin ? `${user?.region || "Assigned Region"} Regional View` : "National Oversight View";
   const monitoringVisitsLabel = isRegionalAdmin ? "Regional Visits" : "Monitoring Visits";
   const placementRateLabel = isRegionalAdmin ? "Regional Placement Rate" : "Placement Rate";
-  const canExportInstitutionCohorts = !isRegionalAdmin;
 
   const qualityAlertItems = useMemo(() => [
     {
@@ -477,7 +476,7 @@ export function AdminDashboardView({
         </div>
       ) : null}
 
-      {showWorkspace("learners") ? <LearnerOversight adminData={adminData} adminScopeLabel={adminScopeLabel} canExportInstitutionCohorts={canExportInstitutionCohorts} downloadCSV={downloadCSV} openLearnerRegister={openLearnerRegister} openInterventionQueue={openInterventionQueue} /> : null}
+      {showWorkspace("learners") ? <LearnerOversight adminData={adminData} adminScopeLabel={adminScopeLabel} openLearnerRegister={openLearnerRegister} openInterventionQueue={openInterventionQueue} /> : null}
 
       {showWorkspace("insights") ? <ReportApprovalPipeline reports={adminData.reportPipeline} /> : null}
 

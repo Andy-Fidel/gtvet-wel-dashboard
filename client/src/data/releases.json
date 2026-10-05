@@ -1,5 +1,28 @@
 [
   {
+    "id": "2026-10-05-simple-cohort-comparison",
+    "date": "2026-10-05",
+    "title": "A clearer cohort comparison",
+    "summary": "Compare intake years in one table, open the learners who need follow-up, and export the counts you see.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Simple intake-year comparison",
+        "body": "Cohort Comparison now shows learners, currently enrolled, graduated and need attention in a compact table, with matching cards on phones. View learners opens the selected intake. The attention count opens the exact learners counted, with readable follow-up reasons. One Export button downloads the displayed comparison.",
+        "audience": "National, Regional and institution administrators",
+        "roles": ["SuperAdmin", "RegionalAdmin", "HQManager", "HQStaff", "Admin"],
+        "action": { "label": "Open Learner Progress", "path": "/learner-progress" }
+      },
+      {
+        "kind": "Fixed",
+        "title": "Reliable intake groups and follow-up counts",
+        "body": "Records without an intake year now appear together under Intake year missing. Cohort totals stay visible when opening a follow-up list. New placements are no longer flagged simply because they have just started; monitoring follows the configured visit interval, and assessment follow-up uses the percentage score scale.",
+        "audience": "National, Regional and institution administrators",
+        "roles": ["SuperAdmin", "RegionalAdmin", "HQManager", "HQStaff", "Admin"]
+      }
+    ]
+  },
+  {
     "id": "2026-10-05-national-learner-oversight",
     "date": "2026-10-05",
     "title": "More complete National learner oversight",

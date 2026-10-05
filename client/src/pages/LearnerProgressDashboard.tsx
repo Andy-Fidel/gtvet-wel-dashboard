@@ -1,3 +1,5 @@
+import { CohortComparison } from '@/components/dashboard/CohortComparison'
+import { intakeLabel } from '@/lib/cohorts'
 import { useState, useEffect, useRef } from "react"
 import { useAuth } from "@/context/AuthContext"
 import { Activity, AlertTriangle, TrendingUp, Users, Award, CheckCircle2, UserCircle2, UserCheck, UserX, Download, Search, X, ChevronLeft, ChevronRight, ArrowUpRight } from "lucide-react"
@@ -70,6 +72,7 @@ interface ProgressStats {
     graduated: number
     avgProgress: number
     atRiskCount: number
+    needAttentionCount?: number
     riskLevel?: string
     riskReasons?: string[]
   }[]
@@ -235,10 +238,10 @@ export default function LearnerProgressDashboard() {
       detail: stats && stats.averageProgress >= 60 ? "Progress is on track" : "Progress across learners",
     },
     {
-      title: "At Risk",
+      title: "Need attention",
       value: stats?.atRiskCount || 0,
       icon: AlertTriangle,
-      detail: stats?.atRiskCount ? "Require immediate attention" : "No learners need attention",
+      detail: stats?.atRiskCount ? "Have a follow-up issue" : "No learners need attention",
     },
     {
       title: "Graduated",
@@ -295,7 +298,7 @@ export default function LearnerProgressDashboard() {
       toast.error("No data to export")
       return
     }
-    const headers = ["Learner Name", "Tracking ID", "Program", "Year", "WEL Status", "Academic Status", "Progress %", "Placement %", "Assessment %", "Monitoring %", "Documentation %", "At Risk", "Risk Reasons", "Owner"]
+    const headers = ["Learner Name", "Tracking ID", "Program", "Year", "WEL Status", "Academic Status", "Progress %", "Placement %", "Assessment %", "Monitoring %", "Documentation %", "Needs attention", "Follow-up reasons", "Owner"]
     const rows = learners.map((lp) => [
       lp.learner.name,
       lp.learner.trackingId,
@@ -485,7 +488,7 @@ export default function LearnerProgressDashboard() {
                 <SelectContent>
                   <SelectItem value={ALL_INTAKE_YEARS}>All Intake Years</SelectItem>
                   {intakeAcademicYearOptions.map((intakeYear) => (
-                    <SelectItem key={intakeYear} value={intakeYear}>{intakeYear}</SelectItem>
+                    <SelectItem key={intakeYear} value={intakeYear}>{intakeLabel(intakeYear)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -500,7 +503,7 @@ export default function LearnerProgressDashboard() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL_RISK_STATES}>All Risk States</SelectItem>
-                  <SelectItem value="at-risk">At Risk Only</SelectItem>
+                  <SelectItem value="at-risk">Needs attention only</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -543,51 +546,7 @@ export default function LearnerProgressDashboard() {
         </Card>
       )}
 
-      {!loading && stats?.intakeCohorts && stats.intakeCohorts.length > 0 && (
-        <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
-          <CardHeader>
-            <CardTitle className="text-lg font-black text-gray-900">Cohort Comparison</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-            {stats.intakeCohorts.map((cohort) => (
-              <div key={cohort.intakeAcademicYear} className="rounded-[1.5rem] border border-gray-100 bg-gray-50 p-5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black uppercase tracking-widest text-gray-500">Intake {cohort.intakeAcademicYear}</span>
-                  <Badge className="bg-white text-gray-700 border-gray-200">{cohort.totalLearners} learners</Badge>
-                </div>
-                {cohort.riskLevel && cohort.riskLevel !== 'low' && (
-                  <div className={`mt-2 inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
-                    cohort.riskLevel === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                  }`}>
-                    {cohort.riskLevel} risk
-                  </div>
-                )}
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-sky-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-sky-700">Current</p>
-                    <p className="mt-1 text-2xl font-black text-sky-700">{cohort.currentEnrolled}</p>
-                  </div>
-                  <div className="rounded-2xl bg-emerald-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Graduated</p>
-                    <p className="mt-1 text-2xl font-black text-emerald-700">{cohort.graduated}</p>
-                  </div>
-                  <div className="rounded-2xl bg-amber-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Progress</p>
-                    <p className="mt-1 text-2xl font-black text-amber-700">{cohort.avgProgress}%</p>
-                  </div>
-                  <div className="rounded-2xl bg-rose-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">At Risk</p>
-                    <p className="mt-1 text-2xl font-black text-rose-700">{cohort.atRiskCount}</p>
-                  </div>
-                </div>
-                {cohort.riskReasons && cohort.riskReasons.length > 0 && (
-                  <p className="mt-3 text-xs font-bold text-gray-500">{cohort.riskReasons[0]}</p>
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      {!loading ? <CohortComparison cohorts={stats?.intakeCohorts || []} filterParams={{ program: filterProgram, year: filterYear, status: filterStatus, academicStatus: filterAcademicStatus, search: debouncedSearch }} scopeLabel="Cohort totals before the attention filter" /> : null}
 
       {!loading && (
         <Card className="bg-white border-none shadow-xl rounded-2xl overflow-hidden">
@@ -606,9 +565,9 @@ export default function LearnerProgressDashboard() {
               <p className="mt-1 text-xs font-medium text-amber-600">Learners still needing a responsible staff owner</p>
             </div>
             <div className="rounded-2xl bg-rose-50 px-4 py-5">
-              <p className="text-[11px] font-black uppercase tracking-widest text-rose-700">At-Risk Owned</p>
+              <p className="text-[11px] font-black uppercase tracking-widest text-rose-700">Follow-up assigned</p>
               <p className="mt-2 text-3xl font-black text-rose-700">{ownershipSummary.atRiskOwnedCount}</p>
-              <p className="mt-1 text-xs font-medium text-rose-600">At-risk learners already assigned for follow-up</p>
+              <p className="mt-1 text-xs font-medium text-rose-600">Learners needing attention already assigned for follow-up</p>
             </div>
           </CardContent>
         </Card>
@@ -821,24 +780,9 @@ export default function LearnerProgressDashboard() {
                     </TableCell>
                     <TableCell className="text-right">
                       {lp.progress.atRisk ? (
-                        <div className="group relative inline-block">
-                          <Badge className="bg-red-100 text-red-700 border-red-200 flex items-center gap-1 cursor-help">
-                            <AlertTriangle className="h-3 w-3" />
-                            {lp.progress.atRiskReasons.length} factors
-                          </Badge>
-                          <div className="absolute right-0 bottom-full mb-2 hidden group-hover:block z-50 w-56 rounded-xl bg-gray-900 text-white text-xs font-medium p-3 shadow-xl">
-                            <p className="font-black text-[10px] uppercase tracking-widest text-gray-400 mb-1.5">Risk Factors</p>
-                            <ul className="space-y-1">
-                              {lp.progress.atRiskReasons.map((reason, i) => (
-                                <li key={i} className="flex items-start gap-1.5">
-                                  <span className="text-red-400 mt-0.5">•</span>
-                                  {reason}
-                                </li>
-                              ))}
-                            </ul>
-                            <div className="absolute right-4 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900" />
-                          </div>
-                        </div>
+                        <ul className="min-w-40 space-y-1 text-left text-xs font-semibold text-amber-800" aria-label="Follow-up reasons">
+                          {lp.progress.atRiskReasons.map(reason => <li key={reason}>{reason}</li>)}
+                        </ul>
                       ) : (
                         <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">
                           <CheckCircle2 className="h-3 w-3 mr-1" />

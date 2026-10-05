@@ -1,3 +1,4 @@
+import { intakeLabel } from '@/lib/cohorts'
 import { isHQRole } from '@/lib/rbac'
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -596,7 +597,7 @@ export default function LearnerRegister() {
                      <Select value={idmsAcademicYear} onValueChange={(value) => { setIdmsAcademicYear(value); setIdmsPreview(null) }}>
                        <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
                        <SelectContent>
-                         {idmsAcademicYearOptions.map((year) => <SelectItem key={year} value={year}>{year}</SelectItem>)}
+                         {idmsAcademicYearOptions.map((year) => <SelectItem key={year} value={year}>{intakeLabel(year)}</SelectItem>)}
                        </SelectContent>
                      </Select>
                    </div>
@@ -1004,7 +1005,7 @@ export default function LearnerRegister() {
             <SelectContent>
               <SelectItem value={ALL_INTAKE_YEARS}>All intake years</SelectItem>
               {intakeYearOptions.map((year) => (
-                <SelectItem key={year} value={year}>{year}</SelectItem>
+                <SelectItem key={year} value={year}>{intakeLabel(year)}</SelectItem>
               ))}
             </SelectContent>
           </Select>

@@ -24,6 +24,7 @@ export interface DashboardStats {
   };
   intakeCohorts?: {
     intakeAcademicYear: string;
+    needAttentionCount?: number;
     totalLearners: number;
     currentEnrolled: number;
     graduating: number;
@@ -118,6 +119,7 @@ export type AdminOverviewStats = DashboardStats & {
   };
   intakeCohorts?: {
     intakeAcademicYear: string;
+    needAttentionCount?: number;
     totalLearners: number;
     currentEnrolled: number;
     graduating: number;
@@ -130,6 +132,7 @@ export type AdminOverviewStats = DashboardStats & {
   regionalCohortBreakdown?: {
     region: string;
     intakeAcademicYear: string;
+    needAttentionCount?: number;
     totalLearners: number;
     currentEnrolled: number;
     graduating: number;
@@ -140,6 +143,7 @@ export type AdminOverviewStats = DashboardStats & {
     institution: string;
     region: string;
     intakeAcademicYear: string;
+    needAttentionCount?: number;
     totalLearners: number;
     currentEnrolled: number;
     graduating: number;

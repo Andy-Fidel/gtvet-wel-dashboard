@@ -1,6 +1,7 @@
+import { CohortComparison } from './CohortComparison'
 import { useNavigate } from 'react-router-dom'
 import { ResponsiveContainer, XAxis, YAxis, Tooltip, Line, LineChart } from 'recharts'
-import { Users, Briefcase, Clock, ArrowUpRight, Download, TrendingUp, GraduationCap, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Users, Briefcase, Clock, ArrowUpRight, TrendingUp, GraduationCap, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import type { AdminOverviewStats } from '@/types/dashboard'
@@ -10,13 +11,11 @@ export type LearnerOversightData = Pick<AdminOverviewStats, 'academicSummary' | 
 interface LearnerOversightProps {
   adminData: LearnerOversightData
   adminScopeLabel: string
-  canExportInstitutionCohorts: boolean
-  downloadCSV: (dataset: object[], filename: string) => void
   openLearnerRegister: (params?: Record<string, string>) => void
   openInterventionQueue: (params?: Record<string, string>) => void
 }
 
-export function LearnerOversight({ adminData, adminScopeLabel, canExportInstitutionCohorts, downloadCSV, openLearnerRegister, openInterventionQueue }: LearnerOversightProps) {
+export function LearnerOversight({ adminData, adminScopeLabel, openLearnerRegister, openInterventionQueue }: LearnerOversightProps) {
   const navigate = useNavigate()
   return <section aria-label="Learner oversight" className="space-y-6">
       {adminData.academicSummary && (
@@ -74,99 +73,7 @@ export function LearnerOversight({ adminData, adminScopeLabel, canExportInstitut
         </Card>
       )}
 
-      {adminData.intakeCohorts && adminData.intakeCohorts.length > 0 && (
-        <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
-          <CardHeader className="p-4 md:p-8 pb-4 border-b border-gray-50">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <CardTitle className="text-2xl font-black">Cohort Comparison</CardTitle>
-                <CardDescription className="text-sm font-bold text-gray-400 mt-1">
-                  Intake-year comparison across {adminScopeLabel}.
-                </CardDescription>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => downloadCSV(adminData.regionalCohortBreakdown || [], 'regional-cohort-breakdown')}
-                  className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
-                >
-                  <Download className="mr-2 h-4 w-4" /> Export Regions
-                </Button>
-                {canExportInstitutionCohorts && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => downloadCSV(adminData.institutionCohortBreakdown || [], 'institution-cohort-breakdown')}
-                    className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
-                  >
-                    <Download className="mr-2 h-4 w-4" /> Export Institutions
-                  </Button>
-                )}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4 md:p-8">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {adminData.intakeCohorts.map((cohort) => (
-                <div
-                  key={cohort.intakeAcademicYear}
-                  className="rounded-[1.5rem] border border-gray-100 bg-gray-50 p-5 text-left transition hover:bg-gray-100"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black uppercase tracking-widest text-gray-500">Intake</span>
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-gray-700">{cohort.totalLearners} learners</span>
-                  </div>
-                  <button type="button" onClick={() => openLearnerRegister({ intakeAcademicYear: cohort.intakeAcademicYear })} className="mt-4 text-2xl font-black text-gray-900 underline decoration-gray-300 underline-offset-4">{cohort.intakeAcademicYear}</button>
-                  {cohort.riskLevel && cohort.riskLevel !== 'low' && (
-                    <div className={`mt-2 inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
-                      cohort.riskLevel === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                    }`}>
-                      {cohort.riskLevel} risk
-                    </div>
-                  )}
-                  <p className="mt-1 text-xs font-bold text-gray-500">
-                    {cohort.regionCount} region{cohort.regionCount !== 1 ? 's' : ''} • {cohort.institutionCount} institution{cohort.institutionCount !== 1 ? 's' : ''}
-                  </p>
-                  <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                    <div className="rounded-2xl bg-sky-50 px-3 py-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-sky-700">Current</p>
-                      <p className="mt-1 text-xl font-black text-sky-700">{cohort.currentEnrolled}</p>
-                    </div>
-                    <div className="rounded-2xl bg-amber-50 px-3 py-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Grad.</p>
-                      <p className="mt-1 text-xl font-black text-amber-700">{cohort.graduating}</p>
-                    </div>
-                    <div className="rounded-2xl bg-emerald-50 px-3 py-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Done</p>
-                      <p className="mt-1 text-xl font-black text-emerald-700">{cohort.graduated}</p>
-                    </div>
-                  </div>
-                  {cohort.riskReasons && cohort.riskReasons.length > 0 && (
-                    <p className="mt-3 text-xs font-bold text-gray-500">{cohort.riskReasons[0]}</p>
-                  )}
-                  {cohort.riskLevel && cohort.riskLevel !== 'low' && (
-                    <div className="mt-3">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="rounded-xl border-gray-200 bg-white font-bold"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openInterventionQueue({ intakeAcademicYear: cohort.intakeAcademicYear, risk: 'at-risk' });
-                        }}
-                      >
-                        View Intervention Queue
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <CohortComparison cohorts={adminData.intakeCohorts || []} scopeLabel={adminScopeLabel} />
 
       {adminData.learnerProgressSummary && (
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">

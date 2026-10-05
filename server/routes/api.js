@@ -1,3 +1,4 @@
+import { intakeKey, intakeFilter, buildCohortComparison, learnerAttentionReasons } from '../utils/cohortComparison.js';
 import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import { canLogMonitoringVisit, monitoringScope } from '../utils/monitoringAccess.js';
 import { canReadAssessment, canWriteAssessment, assessmentLearnerFields, serializeAssessment, assessmentInput, validateAssessmentInput, safeAssessmentCsvCell } from '../utils/assessmentAccess.js';
@@ -2036,7 +2037,7 @@ const withCohortRiskMeta = (cohort) => {
   };
 };
 
-const buildLearnerProgressSummary = (learners, placements, visits, assessments, evaluations, semesterReports) => {
+const buildLearnerProgressSummary = (learners, placements, visits, assessments, evaluations, semesterReports, settings) => {
   const placementsByLearner = new Map();
   placements.forEach((placement) => {
     const key = placement.learner?.toString?.();
@@ -2093,7 +2094,8 @@ const buildLearnerProgressSummary = (learners, placements, visits, assessments, 
       learnerVisits,
       learnerAssessments,
       learnerEvaluations,
-      learnerReports
+      learnerReports,
+      settings
     );
 
     return {
@@ -2106,6 +2108,7 @@ const buildLearnerProgressSummary = (learners, placements, visits, assessments, 
 
   return {
     totalLearners,
+    intakeCohorts: buildCohortComparison(progressSummary),
     averageProgress: totalLearners > 0
       ? Math.round(progressSummary.reduce((sum, item) => sum + item.progress.overall, 0) / totalLearners)
       : 0,
@@ -7365,7 +7368,7 @@ router.get('/learners', async (req, res) => {
       }
       query.institution = institution;
     }
-    if (intakeAcademicYear) query.intakeAcademicYear = intakeAcademicYear;
+    Object.assign(query, intakeFilter(intakeAcademicYear));
     if (search) {
       const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (escapedSearch) {
@@ -7550,7 +7553,8 @@ router.get('/learners', async (req, res) => {
       ]);
 
       const summary = summaryCounts[0] || { year1: 0, year2: 0, year3: 0, graduated: 0 };
-      const availableIntakeYears = intakeYearValues.filter(Boolean).sort((a, b) => b.localeCompare(a));
+      const availableIntakeYears = [...new Set(intakeYearValues.map(intakeKey))].sort((a, b) => b.localeCompare(a));
+      if (req.query.intakeAcademicYear === '__missing_intake__' && !availableIntakeYears.includes('__missing_intake__')) availableIntakeYears.push('__missing_intake__');
       const programOptions = programValues.filter(Boolean).sort((a, b) => a.localeCompare(b));
       const institutionOptions = institutionValues.filter(Boolean).sort((a, b) => a.localeCompare(b));
       const analytics = analyticsResults[0] || { gender: [], welStatus: [], programs: [], institutions: [] };
@@ -8669,7 +8673,7 @@ const PROGRESS_MILESTONES = {
 };
 
 // Helper: Calculate progress for a single learner
-const calculateLearnerProgress = (learner, placements, visits, assessments, evaluations, semesterReports) => {
+export const calculateLearnerProgress = (learner, placements, visits, assessments, evaluations, semesterReports, settings) => {
   const progress = {
     overall: 0,
     completedMilestones: [],
@@ -8783,13 +8787,6 @@ const calculateLearnerProgress = (learner, placements, visits, assessments, eval
     } else {
       progress.pendingMilestones.push(PROGRESS_MILESTONES.MIDPOINT_CHECK);
     }
-
-    // At-risk check: if progress is significantly behind
-    const expectedProgress = 50; // Should be at 50% by midpoint
-    if (progress_percent < expectedProgress - 20) {
-      progress.atRisk = true;
-      progress.atRiskReasons.push('Placement duration behind schedule');
-    }
   }
   totalWeight += PROGRESS_MILESTONES.MIDPOINT_CHECK.weight;
 
@@ -8825,24 +8822,8 @@ const calculateLearnerProgress = (learner, placements, visits, assessments, eval
   // Calculate overall progress percentage
   progress.overall = Math.round((earnedWeight / totalWeight) * 100);
 
-  // Additional at-risk checks
-  if (learner.status === 'Dropped') {
-    progress.atRisk = true;
-    progress.atRiskReasons.push('Learner status is Dropped');
-  }
-
-  if (assessments.length > 0) {
-    const avgScore = assessments.reduce((sum, a) => sum + (a.overallScore || 0), 0) / assessments.length;
-    if (avgScore < 2.5) {
-      progress.atRisk = true;
-      progress.atRiskReasons.push('Low assessment scores');
-    }
-  }
-
-  if (evaluations.length > 0 && !evaluations[0].wouldHire) {
-    progress.atRisk = true;
-    progress.atRiskReasons.push('Employer would not re-hire');
-  }
+  progress.atRiskReasons = learnerAttentionReasons(learner, placements, visits, assessments, evaluations, settings);
+  progress.atRisk = progress.atRiskReasons.length > 0;
 
   return progress;
 };
@@ -8870,7 +8851,7 @@ router.get('/learners/:id/progress', async (req, res) => {
     }).sort({ createdAt: -1 });
 
     // Calculate progress
-    const progress = calculateLearnerProgress(learner, placements, visits, assessments, evaluations, semesterReports);
+    const progress = calculateLearnerProgress(learner, placements, visits, assessments, evaluations, semesterReports, await getOrCreateSystemSettings());
 
     res.json({
       learner: {
@@ -8893,6 +8874,7 @@ router.get('/learners/:id/progress', async (req, res) => {
 router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...ADMIN_ROLES), async (req, res) => {
   try {
     const filter = await getFilter(req.user);
+    const settings = await getOrCreateSystemSettings();
     const {
       program,
       year,
@@ -8912,7 +8894,7 @@ router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...ADM
     if (status) query.status = status;
     if (academicStatus === 'CurrentEnrolled') query.academicStatus = { $in: ['Active', 'Graduating'] };
     else if (academicStatus) query.academicStatus = academicStatus;
-    if (intakeAcademicYear) query.intakeAcademicYear = intakeAcademicYear;
+    Object.assign(query, intakeFilter(intakeAcademicYear));
     if (search) {
       const escapedSearch = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (escapedSearch) {
@@ -9002,7 +8984,8 @@ router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...ADM
         learnerVisits,
         learnerAssessments,
         learnerEvaluations,
-        learnerReports
+        learnerReports,
+        settings
       );
 
       return {
@@ -9014,7 +8997,7 @@ router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...ADM
           academicStatus: learner.academicStatus || 'Active',
           program: learner.program,
           year: learner.year,
-          intakeAcademicYear: learner.intakeAcademicYear || '',
+          intakeAcademicYear: intakeKey(learner.intakeAcademicYear),
           owner: learner.owner
             ? {
                 _id: learner.owner._id,
@@ -9032,6 +9015,8 @@ router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...ADM
         },
       };
     });
+
+    const intakeCohorts = buildCohortComparison(progressSummary);
 
     if (risk === 'at-risk') {
       progressSummary = progressSummary.filter((item) => item.progress.atRisk);
@@ -9053,42 +9038,8 @@ router.get('/learners/progress/bulk', requireRole('HQManager', 'HQStaff', ...ADM
         graduatedCount: progressSummary.filter((p) => p.learner.academicStatus === 'Graduated').length,
         academicDroppedCount: progressSummary.filter((p) => p.learner.academicStatus === 'Dropped').length,
       },
-      intakeCohorts: progressSummary.reduce((acc, item) => {
-        const intakeAcademicYear = item.learner.intakeAcademicYear || 'Unspecified';
-        if (!acc[intakeAcademicYear]) {
-          acc[intakeAcademicYear] = {
-            intakeAcademicYear,
-            totalLearners: 0,
-            currentEnrolled: 0,
-            graduating: 0,
-            graduated: 0,
-            dropped: 0,
-            avgProgress: 0,
-            atRiskCount: 0,
-            placed: 0,
-            completed: 0,
-          };
-        }
-
-        acc[intakeAcademicYear].totalLearners += 1;
-        acc[intakeAcademicYear].avgProgress += item.progress.overall;
-        if (['Active', 'Graduating'].includes(item.learner.academicStatus)) acc[intakeAcademicYear].currentEnrolled += 1;
-        if (item.learner.academicStatus === 'Graduating') acc[intakeAcademicYear].graduating += 1;
-        if (item.learner.academicStatus === 'Graduated') acc[intakeAcademicYear].graduated += 1;
-        if (item.learner.academicStatus === 'Dropped') acc[intakeAcademicYear].dropped += 1;
-        if (item.learner.status === 'Placed') acc[intakeAcademicYear].placed += 1;
-        if (item.learner.status === 'Completed') acc[intakeAcademicYear].completed += 1;
-        if (item.progress.atRisk) acc[intakeAcademicYear].atRiskCount += 1;
-        return acc;
-      }, {}),
+      intakeCohorts,
     };
-
-    stats.intakeCohorts = Object.values(stats.intakeCohorts)
-      .map((cohort) => withCohortRiskMeta({
-        ...cohort,
-        avgProgress: cohort.totalLearners > 0 ? Math.round(cohort.avgProgress / cohort.totalLearners) : 0,
-      }))
-      .sort((a, b) => b.intakeAcademicYear.localeCompare(a.intakeAcademicYear));
 
     const ownershipSummary = {
       assignedCount: progressSummary.filter((item) => Boolean(item.learner.owner?._id)).length,
@@ -9134,7 +9085,7 @@ router.get('/learners/graduated/export', requireRole('Admin', 'Staff'), async (r
       academicStatus: 'Graduated',
     };
 
-    if (req.query.intakeAcademicYear) query.intakeAcademicYear = req.query.intakeAcademicYear;
+    Object.assign(query, intakeFilter(req.query.intakeAcademicYear));
     if (req.query.program) query.program = req.query.program;
     if (req.query.search) {
       const searchRegex = new RegExp(req.query.search, 'i');
@@ -12576,7 +12527,6 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             academicGraduatingLearners,
             academicGraduatedLearners,
             academicDroppedLearners,
-            intakeCohortsRaw,
             regionalCohortBreakdown,
             institutionCohortBreakdown,
             placementTrendRaw,
@@ -12589,32 +12539,6 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             Learner.countDocuments({ ...filter, academicStatus: 'Graduating' }),
             Learner.countDocuments({ ...filter, academicStatus: 'Graduated' }),
             Learner.countDocuments({ ...filter, academicStatus: 'Dropped' }),
-            Learner.aggregate([
-                { $match: filter },
-                {
-                    $group: {
-                        _id: { $ifNull: ['$intakeAcademicYear', 'Unspecified'] },
-                        totalLearners: { $sum: 1 },
-                        currentEnrolled: {
-                            $sum: {
-                                $cond: [
-                                    { $in: ['$academicStatus', ['Active', 'Graduating']] },
-                                    1,
-                                    0,
-                                ],
-                            },
-                        },
-                        graduating: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduating'] }, 1, 0] } },
-                        graduated: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Graduated'] }, 1, 0] } },
-                        dropped: { $sum: { $cond: [{ $eq: ['$academicStatus', 'Dropped'] }, 1, 0] } },
-                        placed: { $sum: { $cond: [{ $eq: ['$status', 'Placed'] }, 1, 0] } },
-                        completed: { $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] } },
-                        regions: { $addToSet: '$region' },
-                        institutions: { $addToSet: '$institution' },
-                    },
-                },
-                { $sort: { _id: -1 } },
-            ]),
             Learner.aggregate([
                 { $match: filter },
                 {
@@ -12742,21 +12666,11 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             visitsForProgress,
             assessmentsForProgress,
             evaluationsForProgress,
-            reportsForProgress
+            reportsForProgress,
+            systemSettings
         );
 
-        const intakeCohorts = intakeCohortsRaw.map((cohort) => withCohortRiskMeta({
-            intakeAcademicYear: cohort._id,
-            totalLearners: cohort.totalLearners,
-            currentEnrolled: cohort.currentEnrolled,
-            graduating: cohort.graduating,
-            graduated: cohort.graduated,
-            dropped: cohort.dropped,
-            placed: cohort.placed,
-            completed: cohort.completed,
-            regionCount: cohort.regions?.length || 0,
-            institutionCount: cohort.institutions?.length || 0,
-        }));
+        const intakeCohorts = learnerProgressSummary.intakeCohorts;
 
         const placementTrend = [];
         for (let i = 11; i >= 0; i--) {
