@@ -1,5 +1,29 @@
 [
   {
+    "id": "2026-10-05-delete-button-contrast",
+    "date": "2026-10-05",
+    "title": "Clearer learner deletion buttons",
+    "summary": "Learner deletion buttons now remain easy to see before and after selecting learners.",
+    "changes": [
+      {
+        "kind": "Fixed",
+        "title": "Visible delete controls",
+        "body": "Delete selected now uses readable red text on a pale red background until learners are selected, then changes to a solid red button. The deletion confirmation button is also clearly visible.",
+        "audience": "SuperAdmins and institution teams",
+        "roles": [
+          "SuperAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Learner Registry",
+          "path": "/learners"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-10-05-learner-delete-visibility",
     "date": "2026-10-05",
     "title": "Learner deletion is easier to find",

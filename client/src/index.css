@@ -154,7 +154,8 @@
   --muted-foreground: oklch(0.5 0.02 60);
   --accent: oklch(0.85 0.21 90);
   --accent-foreground: oklch(0.15 0.01 60);
-  --destructive: oklch(0.6 0.2 30);
+  /* Tailwind 3 wraps this token in hsl(), so it must contain HSL channels. */
+  --destructive: 0 72.2% 50.6%;
   --border: oklch(0.94 0.01 60);
   --input: oklch(0.94 0.01 60);
   --ring: oklch(0.85 0.21 90);
@@ -188,7 +189,7 @@
   --muted-foreground: oklch(0.705 0.015 286.067);
   --accent: oklch(0.274 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
+  --destructive: 0 62.8% 30.6%;
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.552 0.016 285.938);

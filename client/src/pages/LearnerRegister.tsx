@@ -524,7 +524,7 @@ export default function LearnerRegister() {
           ) : null}
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-           {canBulkDelete ? <Button variant="destructive" className="w-full sm:w-auto font-black h-12 px-6 rounded-2xl" disabled={!selectedLearners.length || bulkDeleteBusy || loading} onClick={() => setBulkDeleteTargets(selectedLearners)}>Delete selected ({selectedLearners.length})</Button> : null}
+           {canBulkDelete ? <Button variant="destructive" className="w-full sm:w-auto font-black h-12 px-6 rounded-2xl disabled:bg-red-100 disabled:text-red-800 disabled:opacity-100" disabled={!selectedLearners.length || bulkDeleteBusy || loading} onClick={() => setBulkDeleteTargets(selectedLearners)}>Delete selected ({selectedLearners.length})</Button> : null}
            {isRegionalOversight ? (
              <Badge className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-indigo-700">Regional · Read only</Badge>
            ) : null}
