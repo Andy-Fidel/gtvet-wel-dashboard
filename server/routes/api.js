@@ -12300,7 +12300,13 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         const totalVisits = await MonitoringVisit.countDocuments(filter);
         // Semester Report filter scoped by institution names
         const reportFilter = Object.keys(filter).length > 0 ? { institution: filter.institution } : {};
-        const totalReports = await SemesterReport.countDocuments(reportFilter);
+        const reportPipeline = await SemesterReport.aggregate([
+            { $match: reportFilter },
+            { $group: { _id: '$status', count: { $sum: 1 } } },
+            { $project: { _id: 0, status: '$_id', count: 1 } },
+            { $sort: { status: 1 } },
+        ]);
+        const totalReports = reportPipeline.reduce((total, entry) => total + entry.count, 0);
         const institutions = await Institution.find(instFilter).sort({ name: 1 });
         const partnerFilter = await partnerVisibilityFilter(req.user);
         const totalPartners = await IndustryPartner.countDocuments(partnerFilter);
@@ -13024,6 +13030,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             totalPlacements,
             totalVisits,
             totalReports,
+            reportPipeline,
             totalPartners,
             overallPlacementRate,
             partnersDetails,

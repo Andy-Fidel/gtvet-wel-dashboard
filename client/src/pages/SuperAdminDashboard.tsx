@@ -1,3 +1,5 @@
+import { LearnerOversight, type LearnerOversightData } from '@/components/dashboard/LearnerOversight';
+import { ReportApprovalPipeline } from '@/components/dashboard/ReportApprovalPipeline';
 import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import { formatDistanceToNow } from "date-fns"
 import {
@@ -86,7 +88,7 @@ interface RegionalStat {
 
 type HqActionCategory = "Reports" | "Support" | "Deadlines" | "Governance" | "Data quality";
 type HqActionPriority = "Critical" | "High" | "Medium";
-type HqDashboardView = "operations" | "performance" | "governance" | "registries";
+type HqDashboardView = "learners" | "operations" | "performance" | "governance" | "registries";
 
 const GENDER_CHART_COLORS = ['#4f46e5', '#ec4899', '#8b5cf6', '#6b7280'];
 const PROGRAM_CHART_COLORS = ['#FFB800', '#4f46e5', '#10b981', '#ec4899', '#f97316', '#8b5cf6', '#06b6d4'];
@@ -105,7 +107,8 @@ interface HqActionItem {
   score: number;
 }
 
-interface OverviewData {
+interface OverviewData extends LearnerOversightData {
+  reportPipeline?: { status: string; count: number }[];
   totalUsers: number;
   totalLearners: number;
   totalPlacements: number;
@@ -258,7 +261,7 @@ export default function SuperAdminDashboard() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedDashboardView = searchParams.get("view");
-  const dashboardView: HqDashboardView = requestedDashboardView === "performance" || requestedDashboardView === "governance" || requestedDashboardView === "registries"
+  const dashboardView: HqDashboardView = requestedDashboardView === "learners" || requestedDashboardView === "performance" || requestedDashboardView === "governance" || requestedDashboardView === "registries"
     ? requestedDashboardView
     : "operations";
 
@@ -829,9 +832,10 @@ export default function SuperAdminDashboard() {
       </Card>
 
       <div className="rounded-2xl border border-gray-200 bg-white p-2 shadow-sm" aria-label="HQ dashboard workspace">
-        <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
           {([
             { value: "operations", label: "Operational Queues", description: "Approvals and escalations" },
+            { value: "learners", label: "Learner Oversight", description: "Progress, attendance and outcomes" },
             { value: "performance", label: "Performance & Risk", description: "Health, deadlines and analytics" },
             { value: "governance", label: "Governance & Compliance", description: "Users, audit and data quality" },
             { value: "registries", label: "Registries", description: "Institutions and partners" },
@@ -855,6 +859,16 @@ export default function SuperAdminDashboard() {
       </div>
 
       {/* System Health Summary */}
+      {dashboardView === "learners" ? <LearnerOversight
+        adminData={data}
+        adminScopeLabel={scopeLabel || 'National Oversight'}
+        canExportInstitutionCohorts
+        downloadCSV={downloadCSV}
+        openLearnerRegister={(params) => navigate(`/learners?${new URLSearchParams(params)}`)}
+        openInterventionQueue={(params) => navigate(`/learner-progress?${new URLSearchParams(params)}`)}
+      /> : null}
+      {dashboardView === "operations" ? <ReportApprovalPipeline reports={data.reportPipeline} /> : null}
+
       <div className={`${dashboardView === "performance" ? "grid" : "hidden"} gap-6 md:grid-cols-3`}>
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-lg hover:shadow-xl transition-transform duration-300">
           <CardContent className="p-4 md:p-6">

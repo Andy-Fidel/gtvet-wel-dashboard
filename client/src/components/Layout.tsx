@@ -24,6 +24,10 @@ const HQ_NAV_GROUPS = [
   {
     label: 'Operations',
     items: [
+      { to: '/learners', label: 'Learner Register', icon: Users },
+      { to: '/learner-progress', label: 'Learner Risk & Progress', icon: Activity },
+      { to: '/placements', label: 'Placements', icon: Briefcase },
+      { to: '/attendance-logs', label: 'Attendance Logs', icon: Clock3 },
       { to: '/semester-reports', label: 'Report Approvals', icon: FileText },
       { to: '/monitoring-visits', label: 'Monitoring Reviews', icon: ClipboardList },
       { to: '/assessments', label: 'Assessments', icon: GraduationCap },

@@ -31,7 +31,7 @@ export const getHQScopeLabel = (user?: {
 
 export const canAccessHQPage = (role: string | undefined, path: string) => {
   if (role !== 'HQManager' && role !== 'HQStaff') return true
-  return /^\/(system-overview|semester-reports|monitoring-visits|assessments|vacancies|hq-industry-partners|activity-log|support-center|learners|placements|attendance-logs|profile|notifications|settings|whats-new)(\/|$)/.test(path) || path === '/'
+  return /^\/(system-overview|semester-reports|monitoring-visits|assessments|vacancies|hq-industry-partners|activity-log|support-center|learners|learner-progress|placements|attendance-logs|profile|notifications|settings|whats-new)(\/|$)/.test(path) || path === '/'
 }
 
 export type AdminRole = (typeof ADMIN_ROLES)[number]

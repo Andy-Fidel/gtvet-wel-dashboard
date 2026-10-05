@@ -1,5 +1,55 @@
 [
   {
+    "id": "2026-10-05-national-learner-oversight",
+    "date": "2026-10-05",
+    "title": "More complete National learner oversight",
+    "summary": "Find learner records, placements and attendance directly, with a new workspace for learner progress and outcomes.",
+    "changes": [
+      {
+        "kind": "New",
+        "title": "A Learner Oversight workspace for HQ",
+        "body": "Open Learner Oversight in the HQ Action Centre to review academic stages, intake cohorts, learner risk, attendance compliance, monitoring quality, assessments and employer feedback. Select a cohort or risk queue to investigate.",
+        "audience": "National and HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open HQ Action Centre",
+          "path": "/system-overview"
+        }
+      },
+      {
+        "kind": "Improved",
+        "title": "Direct access to learner operations",
+        "body": "The National menu now includes Learner Register, Learner Risk & Progress, Placements and Attendance Logs. HQ Managers and HQ Staff can open learner progress within their assigned scope.",
+        "audience": "National and HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open Learner Progress",
+          "path": "/learner-progress"
+        }
+      },
+      {
+        "kind": "Fixed",
+        "title": "Report approval stages now show their totals",
+        "body": "National and Regional dashboards now show report counts for Draft, Certified, Generated, Submitted, Regional approved, HQ approved and Rejected stages. Select a stage to open its reports.",
+        "audience": "National and Regional teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin"
+        ]
+      }
+    ]
+  },
+  {
     "id": "2026-10-05-delete-button-contrast",
     "date": "2026-10-05",
     "title": "Clearer learner deletion buttons",
