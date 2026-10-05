@@ -1,5 +1,34 @@
 [
   {
+    "id": "2026-10-04-account-management",
+    "date": "2026-10-04",
+    "title": "Safer account changes and clearer reassignment",
+    "summary": "Resolve assigned work before removing access, and keep account changes consistent.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Review assigned work before changing access",
+        "body": "Before suspending, deleting, or changing an account’s role or scope, administrators must resolve its assigned learners, active placements, and open support work. Monitoring delegations now appear in the workload review. Release a delegation so the originating institution can assign a replacement, then retry suspension or deletion.",
+        "audience": "Administrators",
+        "roles": ["SuperAdmin", "RegionalAdmin", "Admin"],
+        "action": { "label": "Open User Management", "path": "/users" }
+      },
+      {
+        "kind": "Fixed",
+        "title": "Account changes preserve administrator access",
+        "body": "An administrator cannot delete, suspend, or change the role of their own account. At least one active SuperAdmin must remain. HQ can mark an approved access request as implemented only when the selected account matches the approved role and scope.",
+        "audience": "Administrators",
+        "roles": ["SuperAdmin", "RegionalAdmin", "Admin"]
+      },
+      {
+        "kind": "Improved",
+        "title": "Clearer password setup and sign-in protection",
+        "body": "Accounts that need password setup must finish it before using the portal. If an administrator changes your access, sign in again to continue. Reactivating a suspended account requires a fresh sign-in.",
+        "audience": "Everyone"
+      }
+    ]
+  },
+  {
     "id": "2026-10-03-whats-new",
     "date": "2026-10-03",
     "title": "Portal updates and alerts for families",

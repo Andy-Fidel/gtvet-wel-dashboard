@@ -10,6 +10,7 @@ import { isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates }
 import { notifyUsers } from './notifications.js';
 import { notifyGuardianUpdates } from './guardianNotifications.js';
 import { logAuditEvent } from './audit.js';
+import { userAssignmentMutation, withUserManagementLock } from './userManagement.js';
 
 const operators = ['Admin', 'Manager', 'Staff'];
 const managers = ['Admin', 'Manager'];
@@ -155,6 +156,9 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
     const { documents } = await prepareActivation(req, destination, [String(source.learner)], source._id);
     const replacement = documents[0];
     replacement.owner = source.owner || transfer.submittedBy;
+    if (replacement.owner && !(await User.exists({ _id: replacement.owner, institution: source.institution, status: 'Active', role: { $in: operators } }))) {
+      throw placementError('The placement owner no longer has institution access. Reassign the original placement before applying this change.');
+    }
     replacement.previousPlacement = source._id;
     await replacement.validate();
     const values = replacement.toObject();
@@ -168,7 +172,7 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
     };
   }
 
-  router.post('/placement-transfers/:id/:action', async (req, res) => {
+  router.post('/placement-transfers/:id/:action', userAssignmentMutation(async (req, res) => {
     try {
       requireOperator(req);
       const action = req.params.action;
@@ -195,13 +199,13 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
       await logAuditEvent({ req, action: 'UPDATE', entityType: 'PlacementTransfer', entityId: transfer._id, summary: `Workplace change ${transfer.status}`, after: transfer });
       res.json(transfer);
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
-  });
+  }));
 
   return async function processDueTransfers() {
     const due = await PlacementTransfer.find({ status: 'Scheduled', effectiveDate: { $lte: new Date() } }).limit(50);
     for (const transfer of due) {
       try {
-        const plan = await runPlacementOperation(`apply-transfer:${transfer._id}`, async () => {
+        const plan = await withUserManagementLock(() => runPlacementOperation(`apply-transfer:${transfer._id}`, async () => {
           const fresh = await PlacementTransfer.findById(transfer._id);
           if (fresh.status !== 'Scheduled') return emptyPlan();
           const user = await User.findOne({ _id: fresh.reviewedBy, institution: fresh.institution, role: { $in: managers }, status: 'Active' });
@@ -209,7 +213,7 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
           const source = await Placement.findById(fresh.placement);
           if (!source) throw placementError('Original placement is missing.');
           return buildActivation({ user }, fresh, source);
-        });
+        }));
         if (plan.transfer) {
           const applied = await PlacementTransfer.findById(transfer._id);
           await notify(applied, 'Workplace change applied');

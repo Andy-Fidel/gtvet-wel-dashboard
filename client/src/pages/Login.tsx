@@ -7,14 +7,15 @@ import workplaceBg from '@/assets/Workplace.webp';
 import { InspectionBanner } from '@/components/InspectionBanner';
 
 export default function Login() {
-  const { login, changePassword } = useAuth();
+  const { login, changePassword, user, passwordChangeRequired } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [step, setStep] = useState<'login' | 'mfa' | 'change-password'>('login');
+  const [loginStep, setStep] = useState<'login' | 'mfa' | 'change-password'>('login');
+  const step = user && passwordChangeRequired ? 'change-password' : loginStep;
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);

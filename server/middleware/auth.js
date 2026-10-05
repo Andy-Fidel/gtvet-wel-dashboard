@@ -34,7 +34,7 @@ export const auth = async (req, res, next) => {
     const [user, session, mfa] = await Promise.all([
       User.findById(userId).select('+sessionVersion')
         .populate('partnerId')
-        .populate('linkedLearners', 'name trackingId institution'),
+        .populate('linkedLearners', 'firstName middleName lastName trackingId institution'),
       AuthSession.findOne({ _id: decoded.sid, userId, revokedAt: null, expiresAt: { $gt: new Date() } }).select('+credentialVersion'),
       MfaCredential.exists({ userId, enabled: true }),
     ]);
@@ -53,6 +53,12 @@ export const auth = async (req, res, next) => {
     }
     if (req.headers['x-session-user'] && req.headers['x-session-user'] !== String(user._id)) {
       return res.status(409).json({ code: 'SESSION_CONTEXT_CHANGED', message: 'Your session changed in another tab. Reload this page.' });
+    }
+    const path = (req.originalUrl || '').split('?')[0].replace(/\/+$/, '');
+    const passwordSetupRoute = (req.method === 'GET' && path === '/api/auth/me')
+      || (req.method === 'POST' && ['/api/auth/change-password', '/api/auth/logout'].includes(path));
+    if (user.passwordChangeRequired && !session.parentSessionId && !passwordSetupRoute) {
+      return res.status(403).json({ code: 'PASSWORD_CHANGE_REQUIRED', message: 'Change your password before using the portal.' });
     }
 
     req.user = user;

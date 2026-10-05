@@ -42,7 +42,24 @@ interface DeactivationImpact {
         partnerPlacementsAssigned: Array<{ _id: string; companyName: string; learnerName?: string; learnerTrackingId?: string; institution?: string }>
         supportAssignments: Array<{ _id: string; subject: string; institution?: string }>
         supportEscalations: Array<{ _id: string; subject: string; institution?: string }>
+        delegatedPlacements?: Array<{ _id: string; companyName: string; learnerName?: string; institution?: string }>
     }
+}
+
+function DelegationWorkload({ items = [], releasing, onRelease }: {
+    items?: NonNullable<DeactivationImpact['blockers']['delegatedPlacements']>
+    releasing: string | null
+    onRelease: (id: string) => void
+}) {
+    if (!items.length) return null
+    return <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+        <p className="text-sm font-black text-gray-900">Monitoring Delegations</p>
+        <p className="text-sm text-gray-600">Release these assignments so the originating institution can appoint a replacement officer.</p>
+        {items.map(item => <div key={item._id} className="rounded-xl border bg-white p-3 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+            <p className="text-sm">{item.companyName}{item.learnerName ? ` · ${item.learnerName}` : ''}{item.institution ? ` · ${item.institution}` : ''}</p>
+            <Button variant="outline" disabled={Boolean(releasing)} onClick={() => onRelease(item._id)}>{releasing === item._id ? 'Releasing…' : 'Release delegation'}</Button>
+        </div>)}
+    </div>
 }
 
 interface ReassignmentOptions {
@@ -176,6 +193,8 @@ export default function Users() {
     const [sorting, setSorting] = useState<SortingState>([])
     const [deactivationImpact, setDeactivationImpact] = useState<DeactivationImpact | null>(null)
     const [blockedUser, setBlockedUser] = useState<User | null>(null)
+    const [blockedAction, setBlockedAction] = useState<'suspend' | 'delete' | null>(null)
+    const [releasingDelegation, setReleasingDelegation] = useState<string | null>(null)
     const [reassignmentOptions, setReassignmentOptions] = useState<ReassignmentOptions>({ ownerCandidates: [], supportAssignees: [], partnerSupervisors: [] })
     const [reassignmentLoading, setReassignmentLoading] = useState(false)
     const [reassignmentDrafts, setReassignmentDrafts] = useState<Record<string, string>>({})
@@ -420,18 +439,22 @@ export default function Users() {
             })
             const payload = await res.json().catch(() => ({}))
             if (!res.ok) {
-                if (res.status === 409) {
+                if (res.status === 409 && payload.blockers) {
                     setDeactivationImpact(payload as DeactivationImpact)
                     setBlockedUser(user)
+                    setBlockedAction('suspend')
                     return
                 }
                 throw new Error(payload.message || "Failed to update status")
             }
             setRefreshKey(prev => prev + 1)
+            setDeactivationImpact(null)
+            setBlockedUser(null)
+            setBlockedAction(null)
             toast.success(`User marked as ${newStatus}`)
         } catch (error) {
             console.error("Error toggling status:", error)
-            toast.error("Failed to update user status")
+            toast.error(error instanceof Error ? error.message : "Failed to update user status")
         }
     }
 
@@ -473,11 +496,12 @@ export default function Users() {
 
     const refreshBlockedUserState = async () => {
         if (!blockedUser) return
-        setDeactivationImpact(null)
-        await handleToggleStatus(blockedUser)
+        if (blockedAction === 'delete') await handleDelete(blockedUser._id, true)
+        else if (blockedAction === 'suspend') await handleToggleStatus(blockedUser)
     }
 
     const openReassignmentWorkspace = async (targetUser: User) => {
+        setBlockedAction(null)
         setBlockedUser(targetUser)
         setReassignmentWorkspaceUserId(targetUser._id)
         setReassignmentWorkspaceOpen(true)
@@ -526,7 +550,7 @@ export default function Users() {
                 ])
                 setRefreshKey((prev) => prev + 1)
             } else {
-                await refreshBlockedUserState()
+                if (blockedUser) await loadDeactivationImpact(blockedUser)
             }
         } catch (error) {
             console.error("Error reassigning item:", error)
@@ -534,16 +558,41 @@ export default function Users() {
         }
     }
 
-    const handleDelete = async (id: string) => {
-        if (confirm("Are you sure you want to delete this user?")) {
+    const handleReleaseDelegation = async (placementId: string) => {
+        if (!blockedUser || releasingDelegation) return
+        setReleasingDelegation(placementId)
+        try {
+            const res = await authFetch(`/api/users/${blockedUser._id}/delegations/${placementId}/release`, { method: 'PUT' })
+            const payload = await res.json().catch(() => ({}))
+            if (!res.ok) throw new Error(payload.message || 'Failed to release delegation')
+            toast.success('Monitoring delegation released')
+            await loadDeactivationImpact(blockedUser)
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Failed to release delegation')
+        } finally { setReleasingDelegation(null) }
+    }
+
+    const handleDelete = async (id: string, confirmed = false) => {
+        if (confirmed || confirm("Are you sure you want to delete this user?")) {
             try {
                 const res = await authFetch(`/api/users/${id}`, { method: 'DELETE' })
-                if (!res.ok) throw new Error("Failed to delete")
+                const payload = await res.json().catch(() => ({}))
+                if (!res.ok) {
+                    if (res.status === 409 && payload.blockers) {
+                        const target = [...tableData, ...data].find(entry => entry._id === id)
+                        if (target) { setBlockedUser(target); setBlockedAction('delete'); setDeactivationImpact(payload as DeactivationImpact) }
+                        return
+                    }
+                    throw new Error(payload.message || 'Failed to delete user')
+                }
                 setRefreshKey(prev => prev + 1)
+                setDeactivationImpact(null)
+                setBlockedUser(null)
+                setBlockedAction(null)
                 toast.success("User deleted successfully")
             } catch (error) {
                 console.error("Error deleting user:", error)
-                toast.error("Failed to delete user")
+                toast.error(error instanceof Error ? error.message : "Failed to delete user")
             }
         }
     }
@@ -900,6 +949,7 @@ export default function Users() {
             + impact.blockers.partnerPlacementsAssigned.length
             + impact.blockers.supportAssignments.length
             + impact.blockers.supportEscalations.length
+            + (impact.blockers.delegatedPlacements?.length || 0)
         )
     }
 
@@ -1420,6 +1470,7 @@ export default function Users() {
                                 <p className="text-sm text-gray-600">
                                     {deactivationImpact.message}
                                 </p>
+                                <DelegationWorkload items={deactivationImpact.blockers.delegatedPlacements} releasing={releasingDelegation} onRelease={handleReleaseDelegation} />
 
                                 {deactivationImpact.blockers.learnersOwned.length > 0 ? (
                                     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3">
@@ -1521,16 +1572,17 @@ export default function Users() {
                     </div>
                 </DialogContent>
              </Dialog>
-             <Dialog open={Boolean(deactivationImpact) && !reassignmentWorkspaceOpen} onOpenChange={(open) => { if (!open) { setDeactivationImpact(null); setBlockedUser(null) } }}>
+             <Dialog open={Boolean(deactivationImpact) && !reassignmentWorkspaceOpen} onOpenChange={(open) => { if (!open) { setDeactivationImpact(null); setBlockedUser(null); setBlockedAction(null) } }}>
                 <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh]">
                     <DialogHeader>
-                        <DialogTitle>Reassign Work Before Deactivation</DialogTitle>
+                        <DialogTitle>Reassign Work Before Removing Access</DialogTitle>
                         <DialogDescription>
                             {deactivationImpact?.message || "This user still owns active work that must be reassigned before access can be removed."}
                         </DialogDescription>
                     </DialogHeader>
                     {deactivationImpact ? (
                         <div className="space-y-4">
+                            <DelegationWorkload items={deactivationImpact.blockers.delegatedPlacements} releasing={releasingDelegation} onRelease={handleReleaseDelegation} />
                             {reassignmentLoading ? (
                                 <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 text-sm text-gray-500">
                                     Loading reassignment options...
@@ -1627,7 +1679,10 @@ export default function Users() {
                                 </div>
                             ) : null}
 
-                            <Button variant="outline" onClick={() => setDeactivationImpact(null)} className="w-full rounded-2xl">
+                            {blockedAction ? <Button disabled={getBlockerCount(deactivationImpact) > 0 || Boolean(releasingDelegation)} onClick={refreshBlockedUserState} className="w-full rounded-2xl">
+                                {blockedAction === 'delete' ? 'Retry deletion' : 'Retry suspension'}
+                            </Button> : null}
+                            <Button variant="outline" onClick={() => { setDeactivationImpact(null); setBlockedAction(null) }} className="w-full rounded-2xl">
                                 Close
                             </Button>
                         </div>

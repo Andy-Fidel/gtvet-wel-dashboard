@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
-import releases from '../../src/data/releases.json'
+import releases from '../../src/data/releases.json' with { type: 'json' }
 
 const latest = releases[0].id
 const key = (userId: string) => `gtvets-release-read:v1:${userId}`

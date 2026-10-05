@@ -298,6 +298,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const hydratedUser = await response.json();
+    const requiresPasswordChange = Boolean(hydratedUser?.passwordChangeRequired);
+    setPasswordChangeRequired(requiresPasswordChange);
+    if (requiresPasswordChange) localStorage.setItem('passwordChangeRequired', 'true');
+    else localStorage.removeItem('passwordChangeRequired');
     setUser(hydratedUser || fallbackUser || null);
     activateOfflineScope(getOfflineScopeForUser(hydratedUser || fallbackUser || null));
     return hydratedUser as User;
@@ -328,6 +332,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(userData => {
         if (isMounted) {
             setUser(userData);
+            const requiresPasswordChange = Boolean(userData.passwordChangeRequired);
+            setPasswordChangeRequired(requiresPasswordChange);
+            if (requiresPasswordChange) localStorage.setItem('passwordChangeRequired', 'true');
+            else localStorage.removeItem('passwordChangeRequired');
             activateOfflineScope(getOfflineScopeForUser(userData));
             setIsLoading(false);
         }
@@ -582,6 +590,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setOfflineQueue([]);
         setOfflineQueueCount(0);
         setOfflineSyncHistory([]);
+      }
+      if (response.status === 403) {
+        const payload = await response.clone().json().catch(() => ({}));
+        if (payload.code === 'PASSWORD_CHANGE_REQUIRED') {
+          localStorage.setItem('passwordChangeRequired', 'true');
+          setPasswordChangeRequired(true);
+        }
       }
       if (response.status === 409) {
         const payload = await response.clone().json().catch(() => ({}));

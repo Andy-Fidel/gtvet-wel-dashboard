@@ -18,6 +18,8 @@ import { MonitoringVisit } from '../models/MonitoringVisit.js';
 import { SemesterReport } from '../models/SemesterReport.js';
 import { UNRESOLVED_REPORT_STATUSES, learnerYearAt, learnerAcademicStatusAt, learnerProgramAt, placementOverlapsPeriod, isReportSubmittedForDeadline } from '../utils/termClosure.js';
 import { User } from '../models/User.js';
+import { AuthSession } from '../models/AuthSession.js';
+import { serializeManagedUser, userInput, userManagementMutation, userAssignmentMutation } from '../utils/userManagement.js';
 import { Institution } from '../models/Institution.js';
 import { CompetencyAssessment } from '../models/CompetencyAssessment.js';
 import { AcademicCalendar } from '../models/AcademicCalendar.js';
@@ -1289,7 +1291,7 @@ export const issueSetupLink = async (user, { expiresInMs = 3600000, sendEmail = 
 const withUserLifecycleMeta = (userDoc) => {
   const user = userDoc.toObject ? userDoc.toObject() : userDoc;
   return {
-    ...user,
+    ...serializeManagedUser(userDoc),
     lifecycleStatus: getUserLifecycleState(user),
   };
 };
@@ -1416,12 +1418,13 @@ const attachUserAuditSummaries = async (users) => {
 };
 
 const getUserDeactivationImpact = async (userId) => {
-  const [ownedLearners, ownedPlacements, supervisorPlacements, assignedTickets, escalatedTickets] = await Promise.all([
+  const [ownedLearners, ownedPlacements, supervisorPlacements, assignedTickets, escalatedTickets, delegatedPlacements] = await Promise.all([
     Learner.find({ owner: userId }).select('_id trackingId firstName lastName lastName institution status').lean(),
     Placement.find({ owner: userId, status: 'Active' }).populate('learner', 'trackingId firstName lastName middleName').select('_id companyName status learner institution').lean(),
     Placement.find({ partnerSupervisor: userId, status: 'Active' }).populate('learner', 'trackingId firstName lastName middleName').select('_id companyName status learner institution partner').lean(),
     SupportTicket.find({ assignedTo: userId, status: { $in: ['Open', 'InProgress'] } }).select('_id subject status institution').lean(),
     SupportTicket.find({ escalatedTo: userId, status: { $in: ['Open', 'InProgress'] } }).select('_id subject status institution').lean(),
+    Placement.find({ delegate: userId, status: 'Active' }).populate('learner', 'trackingId firstName middleName lastName').select('_id companyName learner institution').lean(),
   ]);
 
   return {
@@ -1449,6 +1452,9 @@ const getUserDeactivationImpact = async (userId) => {
     })),
     supportAssignments: assignedTickets,
     supportEscalations: escalatedTickets,
+    delegatedPlacements: delegatedPlacements.map(placement => ({ _id: placement._id, companyName: placement.companyName, institution: placement.institution,
+      learnerName: placement.learner ? [placement.learner.lastName, placement.learner.middleName, placement.learner.firstName].filter(Boolean).join(' ') : '',
+      learnerTrackingId: placement.learner?.trackingId || '' })),
   };
 };
 
@@ -1459,6 +1465,7 @@ const hasDeactivationBlockers = (impact) => {
     || impact.partnerPlacementsAssigned.length > 0
     || impact.supportAssignments.length > 0
     || impact.supportEscalations.length > 0
+    || impact.delegatedPlacements.length > 0
   );
 };
 
@@ -3358,11 +3365,10 @@ router.put('/access-approvals/:id/decision', requireRole('SuperAdmin'), async (r
         }
 
         const before = approval.toObject();
-        approval.status = decision;
-        approval.decisionComment = comment;
-        approval.decisionBy = req.user._id;
-        approval.decidedAt = new Date();
-        await approval.save();
+        const decided = await AccessApproval.findOneAndUpdate({ _id: approval._id, status: 'Pending' }, { $set: {
+            status: decision, decisionComment: comment, decisionBy: req.user._id, decidedAt: new Date(),
+        } }, { returnDocument: 'after', runValidators: true });
+        if (!decided) return res.status(409).json({ message: 'Another reviewer has already decided this request. Refresh the queue.' });
 
         await logAuditEvent({
             req,
@@ -3371,7 +3377,7 @@ router.put('/access-approvals/:id/decision', requireRole('SuperAdmin'), async (r
             entityId: approval._id,
             summary: `${decision} access approval "${approval.subject}"`,
             before,
-            after: approval,
+            after: decided,
             changedFields: ['status', 'decisionComment', 'decisionBy', 'decidedAt'],
         });
 
@@ -3399,7 +3405,7 @@ router.put('/access-approvals/:id/decision', requireRole('SuperAdmin'), async (r
     }
 });
 
-router.put('/access-approvals/:id/implement', requireRole('SuperAdmin'), async (req, res) => {
+router.put('/access-approvals/:id/implement', requireRole('SuperAdmin'), userManagementMutation(async (req, res, assertLease) => {
     try {
         const { implementedUserId } = req.body;
         const approval = await AccessApproval.findById(req.params.id);
@@ -3411,13 +3417,30 @@ router.put('/access-approvals/:id/implement', requireRole('SuperAdmin'), async (
             return res.status(400).json({ message: 'Only approved access requests can be marked as implemented' });
         }
 
-        const before = approval.toObject();
-        approval.implementedBy = req.user._id;
-        approval.implementedAt = new Date();
-        if (implementedUserId) {
-            approval.implementedUser = implementedUserId;
+        if (!mongoose.isValidObjectId(implementedUserId)) return res.status(400).json({ message: 'Select the account that implements this request.' });
+        if (approval.implementedAt) {
+            if (String(approval.implementedUser) !== String(implementedUserId)) return res.status(409).json({ message: 'This request has already been implemented for another account.' });
+            return res.json(approval);
         }
-        await approval.save();
+        const implementedUser = await User.findById(implementedUserId);
+        if (!implementedUser) return res.status(404).json({ message: 'Implementation account not found.' });
+        if (approval.targetUser && String(approval.targetUser) !== String(implementedUser._id)) return res.status(409).json({ message: 'Implement the change for the account named in this request.' });
+        if (approval.requestedRole && approval.requestedRole !== implementedUser.role) return res.status(409).json({ message: 'The account role does not match the approved request.' });
+        const institutionScoped = ['Admin', 'Manager', 'Staff', 'Guardian'].includes(implementedUser.role)
+            || (isScopedHQRole(implementedUser.role) && implementedUser.hqScopeType === 'Institution');
+        const regionScoped = implementedUser.role === 'RegionalAdmin' || (isScopedHQRole(implementedUser.role) && implementedUser.hqScopeType === 'Region');
+        if (institutionScoped && approval.requestedInstitution && approval.requestedInstitution !== 'N/A' && approval.requestedInstitution !== implementedUser.institution)
+            return res.status(409).json({ message: 'The account institution does not match the approved request.' });
+        if ((institutionScoped || regionScoped) && approval.requestedRegion && approval.requestedRegion !== implementedUser.region)
+            return res.status(409).json({ message: 'The account region does not match the approved request.' });
+        if (approval.requestType === 'AccountRecovery' && (implementedUser.status !== 'Active' || implementedUser.passwordChangeRequired))
+            return res.status(409).json({ message: 'The account must be active and finish password setup before recovery can be marked complete.' });
+        const before = approval.toObject();
+        await assertLease();
+        const implemented = await AccessApproval.findOneAndUpdate({ _id: approval._id, status: 'Approved', implementedAt: null }, { $set: {
+            implementedBy: req.user._id, implementedAt: new Date(), implementedUser: implementedUser._id,
+        } }, { returnDocument: 'after', runValidators: true });
+        if (!implemented) return res.status(409).json({ message: 'The request changed. Refresh before continuing.' });
 
         await logAuditEvent({
             req,
@@ -3426,7 +3449,7 @@ router.put('/access-approvals/:id/implement', requireRole('SuperAdmin'), async (
             entityId: approval._id,
             summary: `Marked access approval "${approval.subject}" as implemented`,
             before,
-            after: approval,
+            after: implemented,
             changedFields: ['implementedBy', 'implementedAt', 'implementedUser'],
         });
 
@@ -3450,11 +3473,11 @@ router.put('/access-approvals/:id/implement', requireRole('SuperAdmin'), async (
         res.json(populated);
     } catch (error) {
         console.error('Error marking access approval as implemented:', error);
-        res.status(500).json({ message: 'Error marking access approval as implemented' });
+        res.status(error.status || 500).json({ message: error.status ? error.message : 'Error marking access approval as implemented' });
     }
-});
+}));
 
-router.post('/support-tickets', async (req, res) => {
+router.post('/support-tickets', userAssignmentMutation(async (req, res) => {
     try {
         const {
             subject,
@@ -3646,7 +3669,7 @@ router.post('/support-tickets', async (req, res) => {
         }
         res.status(500).json({ message: 'Error creating support ticket' });
     }
-});
+}));
 
 router.post('/support-tickets/:id/replies', async (req, res) => {
     try {
@@ -3726,7 +3749,7 @@ router.post('/support-tickets/:id/replies', async (req, res) => {
     }
 });
 
-router.put('/support-tickets/:id/status', async (req, res) => {
+router.put('/support-tickets/:id/status', userAssignmentMutation(async (req, res) => {
     try {
         const scope = await getSupportTicketScope(req.user, { includeArchived: true });
         const ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
@@ -3819,9 +3842,9 @@ router.put('/support-tickets/:id/status', async (req, res) => {
         console.error('Error updating support ticket status:', error);
         res.status(500).json({ message: 'Error updating support ticket status' });
     }
-});
+}));
 
-router.put('/support-tickets/:id/assignment', async (req, res) => {
+router.put('/support-tickets/:id/assignment', userAssignmentMutation(async (req, res) => {
     try {
         if (!canManageSupportAssignments(req.user)) {
             return res.status(403).json({ message: 'You do not have permission to assign tickets' });
@@ -3888,9 +3911,9 @@ router.put('/support-tickets/:id/assignment', async (req, res) => {
         console.error('Error updating support ticket assignment:', error);
         res.status(500).json({ message: 'Error updating support ticket assignment' });
     }
-});
+}));
 
-router.put('/support-tickets/:id/escalation', async (req, res) => {
+router.put('/support-tickets/:id/escalation', userAssignmentMutation(async (req, res) => {
     try {
         if (!canManageSupportAssignments(req.user)) {
             return res.status(403).json({ message: 'You do not have permission to escalate tickets' });
@@ -3969,7 +3992,7 @@ router.put('/support-tickets/:id/escalation', async (req, res) => {
         console.error('Error escalating support ticket:', error);
         res.status(500).json({ message: 'Error escalating support ticket' });
     }
-});
+}));
 
 // ==================== AUDIT LOGS ====================
 
@@ -7688,7 +7711,7 @@ router.get('/learners/placement-options', async (req, res) => {
   }
 });
 
-router.post('/learners', async (req, res) => {
+router.post('/learners', userAssignmentMutation(async (req, res) => {
   try {
     if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
@@ -7696,6 +7719,10 @@ router.post('/learners', async (req, res) => {
     const inst = await Institution.findOne({ name: req.user.institution });
     const region = inst ? inst.region : 'Unknown';
     const academicYear = req.body.intakeAcademicYear || await resolveCurrentAcademicYear();
+
+    if (req.body.owner && !(await User.exists({ _id: req.body.owner, institution: req.user.institution, status: 'Active', role: { $in: ['Admin', 'Manager', 'Staff'] } }))) {
+      return res.status(400).json({ message: 'Selected owner must be active and belong to this institution.' });
+    }
 
     const newLearner = new Learner({
       ...req.body,
@@ -7733,10 +7760,10 @@ router.post('/learners', async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Error creating learner' });
   }
-});
+}));
 
 // Bulk CSV upload
-router.post('/learners/bulk', async (req, res) => {
+router.post('/learners/bulk', userAssignmentMutation(async (req, res) => {
   try {
     if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
@@ -7801,7 +7828,7 @@ router.post('/learners/bulk', async (req, res) => {
     console.error('Bulk upload error:', error);
     res.status(500).json({ message: 'Bulk upload failed' });
   }
-});
+}));
 
 router.get('/learners/:id', async (req, res) => {
   try {
@@ -7831,7 +7858,7 @@ router.get('/learners/:id', async (req, res) => {
   }
 });
 
-router.put('/learners/:id', async (req, res) => {
+router.put('/learners/:id', userAssignmentMutation(async (req, res) => {
     try {
         if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
@@ -7843,6 +7870,9 @@ router.put('/learners/:id', async (req, res) => {
         }
 
         const payload = { ...req.body };
+        if (payload.owner && !(await User.exists({ _id: payload.owner, institution: existingLearner.institution, status: 'Active', role: { $in: ['Admin', 'Manager', 'Staff'] } }))) {
+            return res.status(400).json({ message: 'Selected owner must be active and belong to this institution.' });
+        }
         ['idmsLearnerId', 'idmsProgrammeId', 'idmsAcademicStatus', 'recordSource', 'idmsUpdatedAt', 'lastIdmsSyncAt', 'idmsSyncStatus', 'progressionHistory']
             .forEach((field) => delete payload[field]);
         if (payload.dateOfBirth === '') {
@@ -7890,7 +7920,7 @@ router.put('/learners/:id', async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: 'Error updating learner' });
     }
-});
+}));
 
 router.post('/learners/promote-year', async (req, res) => {
     try {
@@ -8007,7 +8037,7 @@ router.post('/learners/graduate', async (req, res) => {
     }
 });
 
-router.put('/learners/:id/owner', async (req, res) => {
+router.put('/learners/:id/owner', userAssignmentMutation(async (req, res) => {
     try {
         if (!canManageOperationalOwnership(req.user)) {
             return res.status(403).json({ message: 'You do not have permission to assign learner owners' });
@@ -8022,7 +8052,7 @@ router.put('/learners/:id/owner', async (req, res) => {
         const { ownerId } = req.body;
         let owner = null;
         if (ownerId) {
-            owner = await User.findOne({ _id: ownerId, institution: learner.institution, role: { $in: ['Admin', 'Manager', 'Staff'] } }).select('_id name role institution');
+            owner = await User.findOne({ _id: ownerId, institution: learner.institution, status: 'Active', role: { $in: ['Admin', 'Manager', 'Staff'] } }).select('_id name role institution');
             if (!owner) {
                 return res.status(400).json({ message: 'Selected owner is invalid for this learner' });
             }
@@ -8051,7 +8081,7 @@ router.put('/learners/:id/owner', async (req, res) => {
         console.error('Error updating learner owner:', error);
         res.status(500).json({ message: 'Error updating learner owner' });
     }
-});
+}));
 
 router.delete('/learners/:id', async (req, res) => {
     try {
@@ -9960,7 +9990,7 @@ async function notifyPlacementActivation(req, plan) {
     if (plan.request) await notifyInstitutionAdmins(req.user.institution, sendPlacementApprovalEmail, `${count} selected learner(s)`, plan.placements[0]?.values?.companyName || 'Host organization', 'See Placement Requests');
 }
 
-router.post('/placements', async (req, res) => {
+router.post('/placements', userAssignmentMutation(async (req, res) => {
     try {
         if (!['Admin', 'Manager'].includes(req.user.role)) return res.status(403).json({ message: 'Only institution management can activate placements. Staff may submit placement requests.' });
         try { normalizeCoordinates(req.body.coordinates, req.user.role !== 'Admin' || req.body.approveLocationException !== true
@@ -9981,7 +10011,7 @@ router.post('/placements', async (req, res) => {
         await logAuditEvent({ req, action: 'CREATE', entityType: 'Placement', entityId: plan.placements.map(item => item.id).join(','), summary: 'Activated placement batch', metadata: { operationKey: key, replayed: !!plan.replayed, welWindowOverride: plan.override }, after: placements });
         res.status(plan.replayed ? 200 : 201).json(placements);
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
-});
+}));
 
 function applyPlacementClosureMetadata(existingPlacement, payload, user) {
     const nextPayload = { ...payload };
@@ -10030,7 +10060,7 @@ export async function recheckPendingPlacementVisits(placement, req) {
     }
 }
 
-router.put('/placements/:id', async (req, res) => {
+router.put('/placements/:id', userAssignmentMutation(async (req, res) => {
     try {
         if (!['Admin', 'Manager', 'Staff'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Access denied' });
         const filter = { _id: req.params.id, institution: req.user.institution };
@@ -10096,9 +10126,9 @@ router.put('/placements/:id', async (req, res) => {
         await logAuditEvent({ req, action: 'UPDATE', entityType: 'Placement', entityId: req.params.id, summary: 'Updated placement and reconciled operational links', before: plan.before, after: updated, metadata: { operationKey: key } });
         res.json(updated);
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
-});
+}));
 
-router.put('/placements/:id/owner', async (req, res) => {
+router.put('/placements/:id/owner', userAssignmentMutation(async (req, res) => {
     try {
         if (!canManageOperationalOwnership(req.user)) {
             return res.status(403).json({ message: 'You do not have permission to assign placement owners' });
@@ -10113,7 +10143,7 @@ router.put('/placements/:id/owner', async (req, res) => {
         const { ownerId } = req.body;
         let owner = null;
         if (ownerId) {
-            owner = await User.findOne({ _id: ownerId, institution: placement.institution, role: { $in: ['Admin', 'Manager', 'Staff'] } }).select('_id name role institution');
+            owner = await User.findOne({ _id: ownerId, institution: placement.institution, status: 'Active', role: { $in: ['Admin', 'Manager', 'Staff'] } }).select('_id name role institution');
             if (!owner) {
                 return res.status(400).json({ message: 'Selected owner is invalid for this placement' });
             }
@@ -10144,9 +10174,9 @@ router.put('/placements/:id/owner', async (req, res) => {
         console.error('Error updating placement owner:', error);
         res.status(500).json({ message: 'Error updating placement owner' });
     }
-});
+}));
 
-router.put('/placements/:id/partner-supervisor', requireRole('SuperAdmin'), async (req, res) => {
+router.put('/placements/:id/partner-supervisor', requireRole('SuperAdmin'), userAssignmentMutation(async (req, res) => {
     try {
         const placement = await Placement.findById(req.params.id).populate('partner', 'name');
         if (!placement) {
@@ -10188,7 +10218,7 @@ router.put('/placements/:id/partner-supervisor', requireRole('SuperAdmin'), asyn
         console.error('Error updating admin partner supervisor assignment:', error);
         res.status(500).json({ message: 'Error updating partner supervisor assignment' });
     }
-});
+}));
 
 // ==================== CROSS-REGION DELEGATION ====================
 const notifyPreviousDelegate = async (before, placement, user) => {
@@ -10200,7 +10230,7 @@ const notifyPreviousDelegate = async (before, placement, user) => {
 };
 
 // Assign or remove a delegate on a placement
-router.put('/placements/:id/delegate', async (req, res) => {
+router.put('/placements/:id/delegate', userAssignmentMutation(async (req, res) => {
     try {
         if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for placement delegation.' });
@@ -10344,7 +10374,7 @@ router.put('/placements/:id/delegate', async (req, res) => {
         console.error('Error updating placement delegate:', error);
         res.status(500).json({ message: 'Error updating placement delegate' });
     }
-});
+}));
 
 // Get placements delegated to the current user
 router.get('/placements/:id/delegated-learner', async (req, res) => {
@@ -11177,7 +11207,7 @@ router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'
             User.countDocuments(filter),
             User.find(filter)
                 .populate('partnerId', 'name')
-                .populate('linkedLearners', 'name trackingId institution')
+                .populate('linkedLearners', 'firstName middleName lastName trackingId institution')
                 .sort({ createdAt: -1, name: 1 })
                 .skip((page - 1) * pageSize)
                 .limit(pageSize),
@@ -11208,7 +11238,7 @@ router.get('/users/governance/overview', requireRole('SuperAdmin'), async (req, 
 
         const users = await User.find({})
             .populate('partnerId', 'name')
-            .populate('linkedLearners', 'name trackingId institution');
+            .populate('linkedLearners', 'firstName middleName lastName trackingId institution');
         const enrichedUsers = await attachUserAuditSummaries(users);
 
         const roleCounts = enrichedUsers.reduce((acc, entry) => {
@@ -11334,7 +11364,7 @@ router.get('/users/institution-team-overview', requireRole('Admin'), async (req,
         const filter = await getFilter(req.user);
         const users = await User.find(filter)
             .populate('partnerId', 'name')
-            .populate('linkedLearners', 'name trackingId institution');
+            .populate('linkedLearners', 'firstName middleName lastName trackingId institution');
         const enrichedUsers = await attachUserAuditSummaries(users);
         const teamUsers = enrichedUsers.filter((entry) => ['Admin', 'Manager', 'Staff', 'Guardian'].includes(entry.role));
         const managers = teamUsers.filter((entry) => entry.role === 'Manager');
@@ -11388,7 +11418,7 @@ router.get('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async 
         const filter = await getUserManagementFilter(req.user);
         const users = await User.find(filter)
             .populate('partnerId', 'name')
-            .populate('linkedLearners', 'name trackingId institution');
+            .populate('linkedLearners', 'firstName middleName lastName trackingId institution');
         const enrichedUsers = await attachUserAuditSummaries(users);
         res.json(enrichedUsers);
     } catch (error) {
@@ -11404,7 +11434,8 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
         }
 
         const { password } = req.body;
-        const validation = await normalizeUserPayloadForRole(req.user, req.body);
+        if (password && (typeof password !== 'string' || password.length < 6)) return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        const validation = await normalizeUserPayloadForRole(req.user, userInput(req.body));
         if (validation.message) {
             return res.status(validation.status || 400).json({ message: validation.message });
         }
@@ -11445,7 +11476,7 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
 
         const populatedUser = await User.findById(newUser._id)
           .populate('partnerId', 'name')
-          .populate('linkedLearners', 'name trackingId institution');
+          .populate('linkedLearners', 'firstName middleName lastName trackingId institution');
 
         res.status(201).json({ ...withUserLifecycleMeta(populatedUser), emailDelivery });
     } catch (error) {
@@ -11457,9 +11488,9 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
     }
 });
 
-router.put('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.put('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), userManagementMutation(async (req, res, assertLease) => {
     try {
-        const userToUpdate = await User.findById(req.params.id);
+        const userToUpdate = await User.findById(req.params.id).select('+sessionVersion');
         if (!userToUpdate) return res.status(404).json({ message: 'User not found' });
 
         // Scoping checks
@@ -11481,8 +11512,10 @@ router.put('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), as
         // We use save() instead of findByIdAndUpdate to trigger hooks
         const mergedPayload = {
             ...userToUpdate.toObject(),
-            ...req.body,
+            ...userInput(req.body),
+            privilegedRoleConfirmed: req.body.privilegedRoleConfirmed === true,
         };
+        if (req.body.password && (typeof req.body.password !== 'string' || req.body.password.length < 6)) return res.status(400).json({ message: 'Password must be at least 6 characters' });
         const privilegedConfirmation = requirePrivilegedRoleConfirmation(req.user, mergedPayload, userToUpdate);
         if (privilegedConfirmation) {
             return res.status(privilegedConfirmation.status).json(privilegedConfirmation);
@@ -11493,24 +11526,37 @@ router.put('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), as
         }
 
         const before = userToUpdate.toObject();
-        const updatePayload = { ...validation.normalized };
+        const updatePayload = userInput(validation.normalized);
         if (!updatePayload.password) {
             delete updatePayload.password;
         }
 
         const statusBeingDeactivated = before.status === 'Active' && updatePayload.status === 'Inactive';
-        if (statusBeingDeactivated) {
+        const scopeFields = ['role', 'institution', 'region', 'hqScopeType', 'partnerId', 'partnerPortalRole'];
+        const scopeChanged = scopeFields.some(field => String(before[field] || '') !== String(updatePayload[field] || ''));
+        if (String(req.user._id) === String(userToUpdate._id) && (updatePayload.status === 'Inactive' || updatePayload.role !== before.role)) {
+            return res.status(409).json({ message: 'Ask another administrator to suspend or change the role of your own account.' });
+        }
+        if (before.role === 'SuperAdmin' && before.status === 'Active' && (updatePayload.role !== 'SuperAdmin' || updatePayload.status !== 'Active')
+            && !(await User.exists({ _id: { $ne: userToUpdate._id }, role: 'SuperAdmin', status: 'Active' }))) {
+            return res.status(409).json({ message: 'At least one active SuperAdmin must remain. Add another active SuperAdmin before changing this account.' });
+        }
+        if (statusBeingDeactivated || scopeChanged) {
             const impact = await getUserDeactivationImpact(userToUpdate._id);
             if (hasDeactivationBlockers(impact)) {
                 return res.status(409).json({
-                    message: 'This user still owns active work and cannot be deactivated until assignments are reassigned.',
+                    message: 'Reassign this user’s work and release monitoring delegations before suspending the account or changing its role or scope.',
                     blockers: impact,
                 });
             }
         }
 
         Object.assign(userToUpdate, updatePayload);
+        const credentialsChanged = [...scopeFields, 'status', 'password', 'linkedLearners'].some(field => userToUpdate.isModified(field));
+        if (credentialsChanged) userToUpdate.sessionVersion = (userToUpdate.sessionVersion || 0) + 1;
+        await assertLease();
         await userToUpdate.save();
+        if (credentialsChanged) await AuthSession.updateMany({ userId: userToUpdate._id, revokedAt: null }, { $set: { revokedAt: new Date(), revokedBy: req.user._id, reason: 'Account access changed' } });
         await logAuditEvent({
             req,
             action: 'UPDATE',
@@ -11522,13 +11568,13 @@ router.put('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), as
         });
         const populatedUser = await User.findById(userToUpdate._id)
             .populate('partnerId')
-            .populate('linkedLearners', 'name trackingId institution');
+            .populate('linkedLearners', 'firstName middleName lastName trackingId institution');
         res.json(withUserLifecycleMeta(populatedUser));
     } catch (error) {
         console.error("Error updating user:", error);
-        res.status(500).json({ message: 'Error updating user' });
+        res.status(error.status || (['ValidationError', 'CastError'].includes(error.name) ? 400 : error.code === 11000 ? 409 : 500)).json({ message: error.status ? error.message : error.code === 11000 ? 'Email already exists' : 'Error updating user' });
     }
-});
+}));
 
 router.post('/users/:id/send-setup-link', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
@@ -11652,7 +11698,25 @@ router.get('/users/:id/reassignment-options', requireRole('Admin', 'SuperAdmin',
     }
 });
 
-router.delete('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.put('/users/:id/delegations/:placementId/release', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), userManagementMutation(async (req, res, assertLease) => {
+    const target = await User.findOne({ _id: req.params.id, ...await getUserManagementFilter(req.user) }).select('_id role');
+    if (!target || !getManageableUserRoles(req.user.role).includes(target.role)) return res.status(404).json({ message: 'User not found in your management scope.' });
+    await assertLease();
+    const placement = await Placement.findOneAndUpdate({ _id: req.params.placementId, delegate: target._id, status: 'Active' }, {
+        $unset: { delegate: 1, delegatedAt: 1, delegatedBy: 1, delegateInstitution: 1 }, $inc: { workflowVersion: 1 },
+    }, { returnDocument: 'before' });
+    if (!placement) return res.status(409).json({ message: 'This monitoring delegation has changed. Refresh the workload.' });
+    await logAuditEvent({ req, action: 'UPDATE', entityType: 'Placement', entityId: placement._id,
+        summary: 'Released monitoring delegation during account reassignment', before: placement,
+        after: { ...placement.toObject(), delegate: null, delegatedAt: null, delegatedBy: null, delegateInstitution: '' },
+        changedFields: ['delegate', 'delegatedAt', 'delegatedBy', 'delegateInstitution'], scope: { institution: placement.institution } });
+    await notifyUsers({ recipientIds: [placement.owner, target._id], institution: placement.institution, roles: ['Admin', 'Manager'], sender: req.user._id, type: 'visit',
+        title: 'Monitoring delegation released', message: `The monitoring delegation at ${placement.companyName} was released during an account update. The originating institution should assign a replacement officer.`, link: '/placements',
+        dedupeKey: `delegate-release:${placement._id}:${placement.workflowVersion || 0}` });
+    res.json({ message: 'Monitoring delegation released.' });
+}));
+
+router.delete('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), userManagementMutation(async (req, res, assertLease) => {
     try {
         const userToDelete = await User.findById(req.params.id);
         if (!userToDelete) return res.status(404).json({ message: 'User not found' });
@@ -11674,7 +11738,16 @@ router.delete('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'),
             }
         }
 
+        if (String(req.user._id) === String(userToDelete._id)) return res.status(409).json({ message: 'Ask another administrator to delete your account.' });
+        if (userToDelete.role === 'SuperAdmin' && userToDelete.status === 'Active'
+            && !(await User.exists({ _id: { $ne: userToDelete._id }, role: 'SuperAdmin', status: 'Active' }))) {
+            return res.status(409).json({ message: 'At least one active SuperAdmin must remain.' });
+        }
+        const impact = await getUserDeactivationImpact(userToDelete._id);
+        if (hasDeactivationBlockers(impact)) return res.status(409).json({ message: 'Reassign this user’s work and release monitoring delegations before deleting the account.', blockers: impact });
+        await assertLease();
         await User.findByIdAndDelete(req.params.id);
+        await AuthSession.updateMany({ userId: userToDelete._id, revokedAt: null }, { $set: { revokedAt: new Date(), revokedBy: req.user._id, reason: 'Account deleted' } });
         await logAuditEvent({
             req,
             action: 'DELETE',
@@ -11685,9 +11758,9 @@ router.delete('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'),
         });
         res.json({ message: 'User deleted' });
     } catch (error) {
-        res.status(500).json({ message: 'Error deleting user' });
+        res.status(error.status || 500).json({ message: error.status ? error.message : 'Error deleting user' });
     }
-});
+}));
 
 // ==================== MY INSTITUTION ====================
 
@@ -14638,7 +14711,7 @@ router.get('/partner-portal/performance', requireRole('IndustryPartner'), async 
     }
 });
 
-router.put('/partner-portal/placements/:id/supervisor', requireRole('IndustryPartner'), async (req, res) => {
+router.put('/partner-portal/placements/:id/supervisor', requireRole('IndustryPartner'), userAssignmentMutation(async (req, res) => {
     try {
         if (!canManagePartnerAssignments(req.user)) {
             return res.status(403).json({ message: 'Only partner coordinators can assign placement supervisors' });
@@ -14701,7 +14774,7 @@ router.put('/partner-portal/placements/:id/supervisor', requireRole('IndustryPar
         console.error('Error updating partner supervisor assignment:', error);
         res.status(500).json({ message: 'Error updating partner supervisor assignment' });
     }
-});
+}));
 
 router.post('/partner-portal/placements/:id/employer-agreement-sign', requireRole('IndustryPartner'), async (req, res) => {
     try {
@@ -15055,7 +15128,7 @@ router.put('/placement-requests/:id/self-source-status', async (req, res) => {
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 });
 
-router.post('/placement-requests/:id/convert', async (req, res) => {
+router.post('/placement-requests/:id/convert', userAssignmentMutation(async (req, res) => {
     try {
         if (!['Admin', 'Manager'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Only institution management can activate placement requests' });
         const filter = { _id: req.params.id, institution: req.user.institution };
@@ -15105,7 +15178,7 @@ router.post('/placement-requests/:id/convert', async (req, res) => {
         await notifyPlacementActivation(req, plan);
         res.json(await PlacementRequest.findOne(filter).populate('partner', 'name sector region totalSlots usedSlots partnerType operatingModel locationVerificationStatus coordinates').populate('learners', 'firstName lastName trackingId'));
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
-});
+}));
 
 
 export const processDuePlacementTransfers = registerPlacementTransfers(router, { prepareActivation: preparePlacementActivation, getScope: getPlacementScope, partnerVisibility: partnerVisibilityFilter });

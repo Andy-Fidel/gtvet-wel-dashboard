@@ -1,4 +1,6 @@
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
+import { mockUserManagementLock } from './helpers/userManagementLock.js';
+beforeEach(mockUserManagementLock);
 import assert from 'node:assert/strict';
 import { hasCoordinates, normalizeCoordinates, locationCheck, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
@@ -98,8 +100,8 @@ test('mobile worksite rechecks capture the visit location without a fixed-radius
 
 test('partner edits persist coordinates including zero longitude', async t => {
   let updated;
-  t.mock.method(IndustryPartner, 'findOne', async () => ({ _id: 'partner' }));
-  t.mock.method(IndustryPartner, 'findOneAndUpdate', async (filter, value) => { updated = value; return { _id: filter._id, ...value }; });
+  t.mock.method(IndustryPartner, 'findOne', () => ({ populate() { return this; }, lean: async () => ({ _id: 'partner' }) }));
+  t.mock.method(IndustryPartner, 'findOneAndUpdate', async (_filter, value) => { updated = value.$set; return { _id: 'partner', ...updated }; });
   t.mock.method(AuditLog, 'create', async () => ({}));
   const result = await call('/industry-partners/:id', 'put', { coordinates: { lat: 5, lng: 0 } }, { role: 'SuperAdmin' }, '507f1f77bcf86cd799439011');
   assert.equal(result.statusCode, 200);
