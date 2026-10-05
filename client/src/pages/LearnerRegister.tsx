@@ -1,4 +1,6 @@
 import { isHQRole } from '@/lib/rbac'
+import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useEffect, useState, useRef } from "react"
 import { type Learner, columns } from "./learners/columns"
 import { DataTable } from "@/components/ui/data-table"
@@ -33,6 +35,16 @@ const LEARNER_DISTRIBUTION_COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444",
 
 type RegionalSection = "overview" | "exceptions" | "records"
 type DistributionItem = { name: string; value: number }
+type BulkDeleteResult = { deletedCount: number; deletedIds: string[]; skipped: Array<{ id: string; name?: string; reason: string }> }
+const learnerRowId = (learner: Learner) => learner._id
+const learnerSelectionColumn: ColumnDef<Learner> = {
+  id: 'select',
+  header: ({ table }) => <Checkbox aria-label="Select all rows" checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() ? 'indeterminate' : false)} onCheckedChange={checked => table.toggleAllPageRowsSelected(checked === true)} disabled={(table.options.meta as { bulkDeleteBusy?: boolean })?.bulkDeleteBusy} />,
+  cell: ({ row, table }) => <Checkbox aria-label={`Select ${row.original.name}`} checked={row.getIsSelected()} onCheckedChange={checked => row.toggleSelected(checked === true)} disabled={(table.options.meta as { bulkDeleteBusy?: boolean })?.bulkDeleteBusy} />,
+  enableSorting: false,
+  enableHiding: false,
+}
+const selectableLearnerColumns = [learnerSelectionColumn, ...columns]
 
 type IdmsSyncStatus = {
   enabled: boolean
@@ -117,6 +129,10 @@ export default function LearnerRegister() {
   const [csvUploading, setCsvUploading] = useState(false)
   const [csvResult, setCsvResult] = useState<{ created: number; errors: { row: number; message: string }[] } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
+  const [bulkDeleteTargets, setBulkDeleteTargets] = useState<Learner[]>([])
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false)
+  const [bulkDeleteResult, setBulkDeleteResult] = useState<BulkDeleteResult | null>(null)
   const [viewingLearner, setViewingLearner] = useState<Learner | null>(null)
   const [idmsOpen, setIdmsOpen] = useState(false)
   const [idmsBusy, setIdmsBusy] = useState(false)
@@ -137,6 +153,8 @@ export default function LearnerRegister() {
   const regionalSection: RegionalSection = requestedView === "exceptions" || requestedView === "records" ? requestedView : "overview"
   const effectivePageSize = isRegionalOversight && regionalSection === "exceptions" ? 10 : pageSize
   const canSyncIdms = user?.role === "Admin" || user?.role === "Manager"
+  const canBulkDelete = ['Admin', 'Manager', 'Staff'].includes(user?.role || '') && !user?.inspection
+  const selectedLearners = data.filter(learner => rowSelection[learner._id])
   const idmsAcademicYearOptions = Array.from({ length: 4 }, (_, index) => {
     const startYear = Number(idmsAcademicYear.slice(0, 4)) - index
     return `${startYear}/${startYear + 1}`
@@ -164,6 +182,7 @@ export default function LearnerRegister() {
   useEffect(() => {
     const fetchLearners = async () => {
       setLoading(true);
+      setRowSelection({})
       try {
         const params = new URLSearchParams()
         if (academicStatusFilter) params.set("academicStatus", academicStatusFilter)
@@ -284,7 +303,9 @@ export default function LearnerRegister() {
   const confirmDelete = async () => {
     if (!deleteTarget) return
     try {
-      await authFetch(`/api/learners/${deleteTarget}`, { method: 'DELETE' })
+      const response = await authFetch(`/api/learners/${deleteTarget}`, { method: 'DELETE' })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.message || 'Failed to delete learner')
       toast.success("Learner deleted successfully")
       if (data.length === 1 && page > 1) {
         setPage((prev) => prev - 1)
@@ -297,6 +318,25 @@ export default function LearnerRegister() {
     } finally {
       setDeleteTarget(null)
     }
+  }
+
+  const confirmBulkDelete = async () => {
+    if (!bulkDeleteTargets.length || bulkDeleteBusy) return
+    setBulkDeleteBusy(true)
+    try {
+      if (!navigator.onLine) throw new Error('Connect to the internet before deleting learners.')
+      const response = await authFetch('/api/learners/bulk-delete', { method: 'POST', body: JSON.stringify({ learnerIds: bulkDeleteTargets.map(learner => learner._id) }) })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(`${payload.message || 'Unable to delete the selected learners'}${response.status >= 500 ? '. Refresh the registry before retrying.' : ''}`)
+      if (payload.offlineQueued) throw new Error('Bulk deletion requires an online connection. Refresh the registry before retrying.')
+      setBulkDeleteResult(payload as BulkDeleteResult)
+      setBulkDeleteTargets([])
+      setRowSelection({})
+      if (payload.deletedCount === data.length && page > 1) setPage(prev => prev - 1)
+      else setRefreshKey(prev => prev + 1)
+    } catch (error) {
+      toast.error(error instanceof TypeError ? 'Bulk deletion requires an online connection. Reconnect and refresh the registry before retrying.' : error instanceof Error ? error.message : 'Unable to delete the selected learners')
+    } finally { setBulkDeleteBusy(false) }
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -826,10 +866,31 @@ export default function LearnerRegister() {
       ) : null}
       {/* Delete Confirmation Dialog */}
       <ConfirmationDialog
+        open={bulkDeleteTargets.length > 0}
+        onOpenChange={open => { if (!open && !bulkDeleteBusy) setBulkDeleteTargets([]) }}
+        title={`Delete ${bulkDeleteTargets.length} selected learner${bulkDeleteTargets.length === 1 ? '' : 's'}?`}
+        description="This permanently deletes the selected learner records. Learners with linked placement, learning, support, or guardian records will be kept."
+        confirmLabel="Delete selected learners"
+        variant="danger"
+        onConfirm={confirmBulkDelete}
+      >
+        <ul className="max-h-40 overflow-y-auto text-sm text-gray-700 space-y-1">{bulkDeleteTargets.map(learner => <li key={learner._id}>{learner.name} · {learner.trackingId || learner.indexNumber}</li>)}</ul>
+      </ConfirmationDialog>
+      <Dialog open={Boolean(bulkDeleteResult)} onOpenChange={open => { if (!open) setBulkDeleteResult(null) }}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Bulk deletion results</DialogTitle>
+            <DialogDescription>{bulkDeleteResult?.deletedCount || 0} learner(s) deleted. {bulkDeleteResult?.skipped.length || 0} kept.</DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-3 text-sm">{bulkDeleteResult?.skipped.map(item => <li key={item.id}><p className="font-semibold">{item.name || 'Unavailable learner'}</p><p className="text-gray-600">{item.reason}</p></li>)}</ul>
+          <Button variant="outline" onClick={() => setBulkDeleteResult(null)}>Close results</Button>
+        </DialogContent>
+      </Dialog>
+      <ConfirmationDialog
         open={Boolean(deleteTarget) && !isRegionalOversight}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
         title="Delete Learner"
-        description="This action is permanent. The learner and all associated records will be removed from the system."
+        description="This permanently deletes the learner record. Learners with linked placement, learning, support, or guardian records must be kept."
         confirmLabel="Delete Learner"
         variant="danger"
         onConfirm={confirmDelete}
@@ -1036,12 +1097,21 @@ export default function LearnerRegister() {
                 </Button>
               </div>
             </div>
+            {canBulkDelete && data.length > 0 ? <div className="flex flex-wrap items-center gap-3 py-3">
+              <Checkbox aria-label="Select current page" disabled={bulkDeleteBusy} checked={selectedLearners.length === data.length || (selectedLearners.length > 0 ? 'indeterminate' : false)} onCheckedChange={checked => setRowSelection(checked === true ? Object.fromEntries(data.map(learner => [learner._id, true])) : {})} />
+              <span className="text-sm text-gray-600">{selectedLearners.length} selected on this page</span>
+              <Button variant="destructive" disabled={!selectedLearners.length || bulkDeleteBusy || loading} onClick={() => setBulkDeleteTargets(selectedLearners)}>Delete selected ({selectedLearners.length})</Button>
+              {selectedLearners.length > 0 ? <Button variant="outline" disabled={bulkDeleteBusy} onClick={() => setRowSelection({})}>Clear selection</Button> : null}
+            </div> : null}
             <DataTable 
               exportTitle="Learner Register Export"
               data={data}
               disablePagination
-              columns={columns} 
-              meta={{ onEdit: handleEdit, onDelete: handleDelete, onView: setViewingLearner, role: user?.role }}
+              columns={canBulkDelete ? selectableLearnerColumns : columns}
+              rowSelection={rowSelection}
+              onRowSelectionChange={setRowSelection}
+              getRowId={learnerRowId}
+              meta={{ onEdit: handleEdit, onDelete: handleDelete, onView: setViewingLearner, role: user?.role, bulkDeleteBusy }}
             />
           </div>
       )

@@ -11,6 +11,7 @@ import {
   type ColumnFiltersState,
   type VisibilityState,
   type OnChangeFn,
+  type RowSelectionState,
 } from "@tanstack/react-table"
 
 import {
@@ -41,6 +42,9 @@ interface DataTableProps<TData, TValue> {
   disablePagination?: boolean
   columnVisibility?: VisibilityState
   onColumnVisibilityChange?: OnChangeFn<VisibilityState>
+  rowSelection?: RowSelectionState
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>
+  getRowId?: (row: TData, index: number) => string
 }
 
 type ExportableColumnMeta<TData> = {
@@ -57,6 +61,9 @@ export function DataTable<TData, TValue>({
   disablePagination = false,
   columnVisibility: externalColumnVisibility,
   onColumnVisibilityChange: setExternalColumnVisibility,
+  rowSelection,
+  onRowSelectionChange,
+  getRowId,
 }: DataTableProps<TData, TValue>) {
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
@@ -84,6 +91,8 @@ export function DataTable<TData, TValue>({
   const table = useReactTable({
     data,
     columns,
+    getRowId,
+    onRowSelectionChange,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     onSortingChange: onSortingChange,
@@ -95,6 +104,7 @@ export function DataTable<TData, TValue>({
       sorting,
       columnFilters,
       columnVisibility,
+      ...(rowSelection ? { rowSelection } : {}),
     },
     initialState: {
       pagination: {

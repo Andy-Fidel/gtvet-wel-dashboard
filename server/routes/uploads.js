@@ -1,3 +1,4 @@
+import { userAssignmentMutation } from '../utils/userManagement.js';
 import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import express from 'express';
 import multer from 'multer';
@@ -352,7 +353,7 @@ router.post('/user-profile-picture', imageUpload.single('file'), async (req, res
 });
 
 // ==================== UPLOAD ====================
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', upload.single('file'), userAssignmentMutation(async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -473,7 +474,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     }
     res.status(500).json({ message: error.message || 'Upload failed' });
   }
-});
+}));
 
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {

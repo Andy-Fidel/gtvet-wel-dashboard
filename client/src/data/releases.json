@@ -1,5 +1,21 @@
 [
   {
+    "id": "2026-10-05-learner-bulk-delete",
+    "date": "2026-10-05",
+    "title": "Delete selected learner records together",
+    "summary": "Clean up the learner registry with a clear selection, confirmation, and result summary.",
+    "changes": [
+      {
+        "kind": "New",
+        "title": "Bulk delete from the learner registry",
+        "body": "Institution teams can select individual learners or the current page, choose Delete selected, and review the names before confirming. Learners with linked placement, learning, support, or guardian records are kept. The result shows how many records were deleted and why others were kept. Bulk deletion requires an online connection.",
+        "audience": "Institution teams",
+        "roles": ["Admin", "Manager", "Staff"],
+        "action": { "label": "Open Learner Registry", "path": "/learners" }
+      }
+    ]
+  },
+  {
     "id": "2026-10-04-account-management",
     "date": "2026-10-04",
     "title": "Safer account changes and clearer reassignment",

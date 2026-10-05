@@ -12,6 +12,7 @@ import { registerPlacementTransfers } from '../utils/placementTransfers.js';
 import { registerPartnerChanges, canRequestPartnerChanges } from '../utils/partnerChanges.js';
 import { approvalComment, approvalVersionFilter, canResubmitPartner } from '../utils/partnerApproval.js';
 import { learnerSearchFilter } from '../utils/learnerSearch.js';
+import { bulkDeleteLearners, validateBulkLearnerIds } from '../utils/learnerDeletion.js';
 import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
 import { MonitoringVisit } from '../models/MonitoringVisit.js';
@@ -4565,7 +4566,7 @@ const determineMonitoringVisitVerification = async ({ learnerId, placementId, de
     return { ...result, placement: placement?._id, gpsCapturedAt: hasCoordinates(submittedLocation) ? new Date() : undefined };
 };
 
-router.post('/monitoring-visits', async (req, res) => {
+router.post('/monitoring-visits', userAssignmentMutation(async (req, res) => {
     try {
         if (!canLogMonitoringVisit(req.user)) {
             return res.status(403).json({ message: 'Oversight portal access is read-only for monitoring visits.' });
@@ -4660,7 +4661,7 @@ router.post('/monitoring-visits', async (req, res) => {
         console.error("Error creating visit:", error);
         res.status(500).json({ message: 'Error creating visit' });
     }
-});
+}));
 
 // Haversine formula: returns distance in metres between two GPS points
 function haversineDistance(lat1, lon1, lat2, lon2) {
@@ -6511,7 +6512,7 @@ export const buildTermClosureData = async (institution, start, end, yearGroup = 
 };
 
 // Initiate term closure (replaces manual generate)
-router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
+router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), userAssignmentMutation(async (req, res) => {
     try {
         const { termId, yearGroup } = req.body;
         const institution = req.user.institution;
@@ -6575,10 +6576,10 @@ router.post('/semester-reports/initiate', requireRole(...INSTITUTION_MANAGEMENT_
         console.error('Error initiating term closure:', error);
         res.status(error?.code === 11000 ? 409 : academicErrorStatus(error)).json({ message: error?.code === 11000 ? 'That year-group closure report already exists.' : error.message || 'Failed to initiate term closure' });
     }
-});
+}));
 
 // Keep legacy generate endpoint for backward compat
-router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
+router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_ROLES), userAssignmentMutation(async (req, res) => {
     try {
         const { semester, academicYear, periodStart, periodEnd, yearGroup = 'All' } = req.body;
         const institution = req.user.institution;
@@ -6640,7 +6641,7 @@ router.post('/semester-reports/generate', requireRole(...INSTITUTION_MANAGEMENT_
         console.error('Error generating semester report:', error);
         res.status(500).json({ message: 'Failed to generate semester report' });
     }
-});
+}));
 
 // List semester reports
 router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMENT_ROLES), async (req, res) => {
@@ -6748,7 +6749,7 @@ router.get('/semester-reports/:id', requireRole('HQManager', 'HQStaff', ...MANAG
 });
 
 // Refresh metrics (only in Draft status)
-router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
+router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_MANAGEMENT_ROLES), userAssignmentMutation(async (req, res) => {
     try {
         const scopeFilter = await getFilter(req.user);
         const report = await SemesterReport.findOne({ _id: req.params.id, ...scopeFilter });
@@ -6796,7 +6797,7 @@ router.put('/semester-reports/:id/refresh-metrics', requireRole(...INSTITUTION_M
         console.error('Error refreshing metrics:', error);
         reportMutationError(res, error, 'Failed to refresh metrics');
     }
-});
+}));
 
 // Certify report (saves commentary, marks as certified)
 router.put('/semester-reports/:id/certify', requireRole(...INSTITUTION_MANAGEMENT_ROLES), async (req, res) => {
@@ -8083,28 +8084,23 @@ router.put('/learners/:id/owner', userAssignmentMutation(async (req, res) => {
     }
 }));
 
-router.delete('/learners/:id', async (req, res) => {
-    try {
-        if (['SuperAdmin', 'RegionalAdmin'].includes(req.user.role)) {
-            return res.status(403).json({ message: 'Oversight portal access is read-only for learners.' });
-        }
-        const filter = await getFilter(req.user);
-        const deletedLearner = await Learner.findOneAndDelete({ _id: req.params.id, ...filter });
-        if (deletedLearner) {
-            await logAuditEvent({
-                req,
-                action: 'DELETE',
-                entityType: 'Learner',
-                entityId: deletedLearner._id,
-                summary: `Deleted learner ${deletedLearner.name}`,
-                before: deletedLearner,
-            });
-        }
-        res.json({ message: 'Learner deleted' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error deleting learner' });
+router.post('/learners/bulk-delete', userAssignmentMutation(async (req, res, assertLease) => {
+    if (!['Admin', 'Manager', 'Staff'].includes(req.user.role) || !req.user.institution) {
+        return res.status(403).json({ message: 'Only institution teams can delete learners in their registry.' });
     }
-});
+    const error = validateBulkLearnerIds(req.body?.learnerIds);
+    if (error) return res.status(400).json({ message: error });
+    res.json(await bulkDeleteLearners(req, assertLease));
+}));
+
+router.delete('/learners/:id', userAssignmentMutation(async (req, res, assertLease) => {
+    if (!['Admin', 'Manager', 'Staff'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Only institution teams can delete learners in their registry.' });
+    const error = validateBulkLearnerIds([req.params.id]);
+    if (error) return res.status(400).json({ message: 'Invalid learner ID.' });
+    const result = await bulkDeleteLearners(req, assertLease, { bulk: false, learnerIds: [req.params.id] });
+    if (!result.deletedCount) return res.status(result.skipped[0]?.name ? 409 : 404).json({ message: result.skipped[0]?.reason || 'Learner not found.' });
+    res.json({ message: 'Learner deleted' });
+}));
 
 // ==================== LEARNER PROFILE ====================
 
@@ -11426,7 +11422,7 @@ router.get('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async 
     }
 });
 
-router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
+router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), userAssignmentMutation(async (req, res) => {
     try {
         const privilegedConfirmation = requirePrivilegedRoleConfirmation(req.user, req.body);
         if (privilegedConfirmation) {
@@ -11486,7 +11482,7 @@ router.post('/users', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async
         }
         res.status(500).json({ message: 'Error creating user', error: error.message });
     }
-});
+}));
 
 router.put('/users/:id', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), userManagementMutation(async (req, res, assertLease) => {
     try {
@@ -14956,7 +14952,7 @@ router.get('/placement-requests/:id', async (req, res) => {
     }
 });
 
-router.post('/placement-requests', async (req, res) => {
+router.post('/placement-requests', userAssignmentMutation(async (req, res) => {
     try {
         if (!['Admin', 'Manager', 'Staff'].includes(req.user.role)) return res.status(403).json({ message: 'Access denied' });
         if (!req.user.institution) return res.status(403).json({ message: 'An institution is required.' });
@@ -15101,7 +15097,7 @@ router.post('/placement-requests', async (req, res) => {
             summary: 'Submitted placement request for institution management activation', after: pending });
         res.status(201).json(pending);
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
-});
+}));
 
 router.put('/placement-requests/:id/self-source-status', async (req, res) => {
     try {

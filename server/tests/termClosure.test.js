@@ -1,4 +1,6 @@
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
+import { mockUserManagementLock } from './helpers/userManagementLock.js';
+beforeEach(mockUserManagementLock);
 import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
 import router, { buildTermClosureData } from '../routes/api.js';
