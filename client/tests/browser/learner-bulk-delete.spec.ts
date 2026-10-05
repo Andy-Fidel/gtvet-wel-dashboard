@@ -92,7 +92,20 @@ test('failed network requests do not queue destructive work or report success', 
   await expect(page.getByRole('dialog', { name: 'Bulk deletion results' })).toHaveCount(0)
 })
 
-for (const role of ['SuperAdmin', 'HQStaff', 'RegionalAdmin']) {
+test('SuperAdmin sees the header action and can submit selected learners for deletion', async ({ page }) => {
+  const { writes } = await setup(page, 'SuperAdmin')
+  await page.goto('/learners')
+  const button = page.getByRole('button', { name: 'Delete selected (0)', exact: true })
+  await expect(button).toBeVisible()
+  await expect(button).toBeDisabled()
+  await page.getByRole('checkbox', { name: 'Select current page', exact: true }).check()
+  await page.getByRole('button', { name: 'Delete selected (2)', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Delete 2 selected learners?' }).getByRole('button', { name: 'Delete selected learners', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Bulk deletion results' })).toBeVisible()
+  expect(writes).toEqual([[learners[0]._id, learners[1]._id]])
+})
+
+for (const role of ['HQStaff', 'RegionalAdmin']) {
   test(`${role} retains read-only learner registry access`, async ({ page }) => {
     await setup(page, role)
     await page.goto('/learners?view=records')

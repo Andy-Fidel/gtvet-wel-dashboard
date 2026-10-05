@@ -153,7 +153,7 @@ export default function LearnerRegister() {
   const regionalSection: RegionalSection = requestedView === "exceptions" || requestedView === "records" ? requestedView : "overview"
   const effectivePageSize = isRegionalOversight && regionalSection === "exceptions" ? 10 : pageSize
   const canSyncIdms = user?.role === "Admin" || user?.role === "Manager"
-  const canBulkDelete = ['Admin', 'Manager', 'Staff'].includes(user?.role || '') && !user?.inspection
+  const canBulkDelete = ['SuperAdmin', 'Admin', 'Manager', 'Staff'].includes(user?.role || '') && !user?.inspection
   const selectedLearners = data.filter(learner => rowSelection[learner._id])
   const idmsAcademicYearOptions = Array.from({ length: 4 }, (_, index) => {
     const startYear = Number(idmsAcademicYear.slice(0, 4)) - index
@@ -524,6 +524,7 @@ export default function LearnerRegister() {
           ) : null}
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+           {canBulkDelete ? <Button variant="destructive" className="w-full sm:w-auto font-black h-12 px-6 rounded-2xl" disabled={!selectedLearners.length || bulkDeleteBusy || loading} onClick={() => setBulkDeleteTargets(selectedLearners)}>Delete selected ({selectedLearners.length})</Button> : null}
            {isRegionalOversight ? (
              <Badge className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-indigo-700">Regional · Read only</Badge>
            ) : null}
@@ -1100,7 +1101,6 @@ export default function LearnerRegister() {
             {canBulkDelete && data.length > 0 ? <div className="flex flex-wrap items-center gap-3 py-3">
               <Checkbox aria-label="Select current page" disabled={bulkDeleteBusy} checked={selectedLearners.length === data.length || (selectedLearners.length > 0 ? 'indeterminate' : false)} onCheckedChange={checked => setRowSelection(checked === true ? Object.fromEntries(data.map(learner => [learner._id, true])) : {})} />
               <span className="text-sm text-gray-600">{selectedLearners.length} selected on this page</span>
-              <Button variant="destructive" disabled={!selectedLearners.length || bulkDeleteBusy || loading} onClick={() => setBulkDeleteTargets(selectedLearners)}>Delete selected ({selectedLearners.length})</Button>
               {selectedLearners.length > 0 ? <Button variant="outline" disabled={bulkDeleteBusy} onClick={() => setRowSelection({})}>Clear selection</Button> : null}
             </div> : null}
             <DataTable 

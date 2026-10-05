@@ -1,5 +1,19 @@
 [
   {
+    "id": "2026-10-05-learner-delete-visibility",
+    "date": "2026-10-05",
+    "title": "Learner deletion is easier to find",
+    "summary": "Delete selected is now beside the Learner Register heading and available to SuperAdmins.",
+    "changes": [{
+      "kind": "Fixed",
+      "title": "Find Delete selected at the top of the registry",
+      "body": "SuperAdmins and institution teams can now find Delete selected beside the Learner Register heading. Select learners to enable it. SuperAdmins can clean up selected records across institutions; linked placement and learning records remain protected.",
+      "audience": "SuperAdmins and institution teams",
+      "roles": ["SuperAdmin", "Admin", "Manager", "Staff"],
+      "action": { "label": "Open Learner Registry", "path": "/learners" }
+    }]
+  },
+  {
     "id": "2026-10-05-learner-bulk-delete",
     "date": "2026-10-05",
     "title": "Delete selected learner records together",

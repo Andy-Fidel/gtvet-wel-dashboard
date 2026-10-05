@@ -33,7 +33,10 @@ export function validateBulkLearnerIds(ids) {
 
 export async function bulkDeleteLearners(req, assertLease, { bulk = true, learnerIds = req.body.learnerIds } = {}) {
   const ids = learnerIds.map(id => String(id).toLowerCase());
-  const learners = await Learner.find({ _id: { $in: ids }, institution: req.user.institution }).lean();
+  // National cleanup is limited to the explicitly selected IDs. Institution
+  // accounts retain their institution boundary; no client scope is trusted.
+  const scope = bulk && req.user.role === 'SuperAdmin' ? {} : { institution: req.user.institution };
+  const learners = await Learner.find({ _id: { $in: ids }, ...scope }).lean();
   const matchedIds = learners.map(learner => learner._id);
   // Read dependencies in batches; retain every historical reference rather than
   // removing evidence or cascading through unrelated business workflows.
@@ -50,14 +53,14 @@ export async function bulkDeleteLearners(req, assertLease, { bulk = true, learne
       skipped.push({ id, name, reason: 'Linked placement, learning, support, or guardian records must be retained.' });
     } else {
       await assertLease();
-      const result = await Learner.deleteOne({ _id: learner._id, institution: req.user.institution, workflowVersion: learner.workflowVersion ?? null });
+      const result = await Learner.deleteOne({ _id: learner._id, ...scope, workflowVersion: learner.workflowVersion ?? null });
       if (!result.deletedCount) {
         skipped.push({ id, name, reason: 'The learner changed. Refresh the registry and try again.' });
         continue;
       }
       deletedIds.push(String(id));
       await logAuditEvent({ req, action: 'DELETE', entityType: 'Learner', entityId: learner._id,
-        summary: `${bulk ? 'Bulk deleted' : 'Deleted'} learner ${name}`, before: learner, metadata: { bulkDelete: bulk } });
+        summary: `${bulk ? 'Bulk deleted' : 'Deleted'} learner ${name}`, before: learner, metadata: { bulkDelete: bulk }, scope: { institution: learner.institution } });
     }
   }
   return { deletedCount: deletedIds.length, deletedIds, skipped };

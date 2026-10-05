@@ -1,13 +1,14 @@
 # Learner registry deletion
 
-Institution Admins, Managers and Staff can select learners on the current registry
+SuperAdmins and institution Admins, Managers and Staff can select learners on the current registry
 page and delete up to 100 IDs per request. Selection clears when the registry page
 or filters change. The confirmation names the selected learners. Bulk deletion
 requires connectivity and is excluded from the offline mutation queue.
 
 `POST /api/learners/bulk-delete` accepts `{ "learnerIds": ["..."] }` and returns
 `deletedCount`, `deletedIds`, and `skipped` items with reasons. IDs must be valid
-and unique. Matching always uses the authenticated institution; unavailable and
+and unique. SuperAdmins can clean up explicitly selected learners across institutions;
+institution accounts always use the authenticated institution. Unavailable and
 out-of-scope IDs return the same explanation without disclosing learner details.
 Deletion is idempotent in effect: repeating an already-deleted ID cannot remove
 another record or generate a second deletion audit event.

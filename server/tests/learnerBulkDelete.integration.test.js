@@ -21,7 +21,7 @@ test('MongoDB and HTTP: selected learners delete safely, protect references, enf
     const base = `http://127.0.0.1:${server.address().port}/api`;
     const clients = {};
     for (const role of ['Admin', 'Manager', 'Staff', 'SuperAdmin', 'RegionalAdmin', 'HQStaff', 'Guardian', 'IndustryPartner']) {
-      const user = await User.create({ name: `QA ${role}`, email: `${role}@example.invalid`, password: 'QA-password-123', role, institution: 'QA', region: 'Ashanti', passwordChangeRequired: false, ...(role === 'IndustryPartner' ? { partnerId: new mongoose.Types.ObjectId() } : {}) });
+      const user = await User.create({ name: `QA ${role}`, email: `${role}@example.invalid`, password: 'QA-password-123', role, institution: role === 'SuperAdmin' ? '' : 'QA', region: 'Ashanti', passwordChangeRequired: false, ...(role === 'IndustryPartner' ? { partnerId: new mongoose.Types.ObjectId() } : {}) });
       if (role === 'IndustryPartner') await mongoose.model('IndustryPartner').collection.insertOne({ _id: user.partnerId, name: 'QA Partner' });
       const session = await createAuthSession(user, { headers: {} });
       const token = jwt.sign({ userId: String(user._id), sid: String(session._id) }, JWT_SECRET, { expiresIn: '1h' });
@@ -36,7 +36,7 @@ test('MongoDB and HTTP: selected learners delete safely, protect references, enf
       return String(id);
     };
     const free = await insert(), foreign = await insert('Other Institution'), missing = String(new mongoose.Types.ObjectId());
-    for (const role of ['SuperAdmin', 'RegionalAdmin', 'HQStaff', 'Guardian', 'IndustryPartner']) assert.equal((await clients[role]([free])).status, 403, role);
+    for (const role of ['RegionalAdmin', 'HQStaff', 'Guardian', 'IndustryPartner']) assert.equal((await clients[role]([free])).status, 403, role);
     assert.equal((await clients.Admin([])).status, 400);
     assert.equal((await clients.Admin([free, free.toUpperCase()])).status, 400);
     await withUserManagementLock(async () => {
@@ -77,6 +77,13 @@ test('MongoDB and HTTP: selected learners delete safely, protect references, enf
       assert.equal((await clients[role]([id])).body.deletedCount, 1);
       assert.equal(await Learner.findById(id), null);
     }
+    const untouched = await insert('Other Institution');
+    const cleanup = await clients.SuperAdmin([foreign, blocked[0]]);
+    assert.equal(cleanup.status, 200);
+    assert.deepEqual(cleanup.body.deletedIds, [foreign]);
+    assert.equal(cleanup.body.skipped[0].id, blocked[0]);
+    assert.ok(await Learner.findById(untouched), 'Unselected learners must remain');
+    assert.equal((await AuditLog.findOne({ entityType: 'Learner', entityId: foreign })).institution, 'Other Institution');
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     assert.equal(mongoose.connection.name, database);

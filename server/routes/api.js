@@ -8085,8 +8085,8 @@ router.put('/learners/:id/owner', userAssignmentMutation(async (req, res) => {
 }));
 
 router.post('/learners/bulk-delete', userAssignmentMutation(async (req, res, assertLease) => {
-    if (!['Admin', 'Manager', 'Staff'].includes(req.user.role) || !req.user.institution) {
-        return res.status(403).json({ message: 'Only institution teams can delete learners in their registry.' });
+    if (req.user.role !== 'SuperAdmin' && (!['Admin', 'Manager', 'Staff'].includes(req.user.role) || !req.user.institution)) {
+        return res.status(403).json({ message: 'Only SuperAdmins and institution teams can bulk delete learners.' });
     }
     const error = validateBulkLearnerIds(req.body?.learnerIds);
     if (error) return res.status(400).json({ message: error });

@@ -22,7 +22,7 @@ test('bulk learner IDs reject empty, oversized, malformed and duplicated selecti
 
 test('oversight, partner and guardian roles cannot bulk delete, even with an institution', async t => {
   t.mock.method(Learner, 'find', () => { throw new Error('Unauthorized database access'); });
-  for (const role of ['SuperAdmin', 'RegionalAdmin', 'HQManager', 'HQStaff', 'IndustryPartner', 'Guardian']) assert.equal((await call([one], { role, institution: 'QA' })).code, 403);
+  for (const role of ['RegionalAdmin', 'HQManager', 'HQStaff', 'IndustryPartner', 'Guardian']) assert.equal((await call([one], { role, institution: 'QA' })).code, 403);
   assert.equal((await call([one], { role: 'Admin' })).code, 403);
   assert.equal((await call([])).code, 400);
 });
