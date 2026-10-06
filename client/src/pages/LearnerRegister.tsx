@@ -539,6 +539,15 @@ export default function LearnerRegister() {
                  onChange={handleFileSelect}
                />
                <Button
+                 asChild
+                 variant="outline"
+                 className="font-black h-12 px-6 rounded-2xl border-gray-200"
+               >
+                 <a href="/templates/learner-upload-template.csv" download="learner-upload-template.csv">
+                   <FileSpreadsheet className="mr-2 h-5 w-5" /> Download CSV Template
+                 </a>
+               </Button>
+               <Button
                  onClick={() => fileInputRef.current?.click()}
                  variant="outline"
                  className="font-black h-12 px-6 rounded-2xl border-gray-200"
@@ -698,14 +707,16 @@ export default function LearnerRegister() {
                     </div>
 
                     <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
-                      <p className="text-xs font-black uppercase tracking-wider text-amber-700">Required Columns</p>
+                      <p className="text-xs font-black uppercase tracking-wider text-amber-700">CSV Columns</p>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {["Last Name", "First Name", "Middle Name", "Gender", "Phone", "Guardian Contact", "Index Number", "Program", "Year"].map((column) => (
+                        {["Last Name", "First Name", "Middle Name", "Gender", "Date of Birth", "Phone", "Guardian Contact", "Index Number", "Program", "Year", "Intake Academic Year"].map((column) => (
                           <span key={column} className="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-bold text-amber-800">
                             {column}
                           </span>
                         ))}
                       </div>
+                      <p className="mt-3 text-sm text-amber-900">Keep the template headers and add one learner per row. Fill in Last Name, First Name, Gender (Male, Female or Other), Index Number, Program and Year. Use YYYY-MM-DD for dates of birth. An empty intake academic year defaults to the current academic year. Institution and region are assigned automatically.</p>
+                      <p className="mt-2 text-sm text-amber-900">Format phone numbers and index numbers as text in your spreadsheet to preserve leading zeros, then save as CSV.</p>
                     </div>
 
                     <div className="rounded-2xl border border-gray-200 overflow-hidden">

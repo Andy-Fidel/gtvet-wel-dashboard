@@ -112,7 +112,7 @@ const createApp = () => {
       originCallback(new Error('Not allowed by CORS'));
       },
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Session-User'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Session-User', 'X-Offline-Action'],
       credentials: true,
       optionsSuccessStatus: 200
     });

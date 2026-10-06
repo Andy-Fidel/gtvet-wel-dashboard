@@ -219,7 +219,7 @@ export function IndustryPartnerForm({ onSuccess, initialData, resubmit = false, 
             )} />
             <FormField control={form.control} name="tradeArea" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-gray-700">Trade Area</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Trade Area/Programme</FormLabel>
                   <Select value={field.value || NO_TRADE_AREA} onValueChange={value => field.onChange(value === NO_TRADE_AREA ? '' : value)} disabled={loadingTradeAreas}>
                     <FormControl><SelectTrigger><SelectValue placeholder={loadingTradeAreas ? 'Loading programmes…' : 'Select programme'} /></SelectTrigger></FormControl>
                     <SelectContent className="max-h-72">
@@ -277,7 +277,7 @@ export function IndustryPartnerForm({ onSuccess, initialData, resubmit = false, 
             )} />
             <FormField control={form.control} name="website" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-gray-700">Website</FormLabel>
+                  <FormLabel className="text-sm font-semibold text-gray-700">Website (Optional)</FormLabel>
                   <FormControl><Input placeholder="https://company.com" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>

@@ -1,6 +1,10 @@
 const OFFLINE_CONFLICT_BRIDGE_KEY = "gtvets-offline-conflict-bridge"
 
 export type OfflineConflictBridgePayload = {
+  userId?: string
+  queueId?: string
+  requestUrl?: string
+  requestMethod?: string
   type: "monitoring-visit" | "attendance-log" | "support-ticket" | "support-reply"
   payload: Record<string, unknown>
   ticketId?: string
@@ -16,7 +20,9 @@ export const getOfflineConflictBridge = (): OfflineConflictBridgePayload | null 
   try {
     const raw = window.sessionStorage.getItem(OFFLINE_CONFLICT_BRIDGE_KEY)
     if (!raw) return null
-    return JSON.parse(raw) as OfflineConflictBridgePayload
+    const bridge = JSON.parse(raw) as OfflineConflictBridgePayload
+    if (!bridge.userId || window.localStorage.getItem('gtvets-offline-storage-scope') !== `user:${bridge.userId}`) return null
+    return bridge
   } catch {
     return null
   }

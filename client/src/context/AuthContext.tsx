@@ -4,6 +4,8 @@ import { toast } from '@/lib/toast';
 import { useQueryClient } from '@tanstack/react-query';
 import { AUTH_CONTEXT_KEY, endInspection, INSPECTION_KEY } from '@/lib/inspection';
 import { ensureCsrfToken } from '@/lib/csrf';
+import { supportsOfflineAction, offlineLock } from '@/lib/offlinePolicy';
+import { getOfflineConflictBridge, clearOfflineConflictBridge } from '@/lib/offlineConflictBridge';
 
 interface User {
   _id: string;
@@ -13,6 +15,7 @@ interface User {
   status: string;
   institution: string;
   phone?: string;
+  passwordChangeRequired?: boolean;
   inspection?: { readOnly: true; actorName: string; expiresAt: string };
   region?: string;
   hqScopeType?: 'National' | 'Region' | 'Institution';
@@ -196,16 +199,26 @@ const normalizeHeaders = (headers?: HeadersInit): Record<string, string> => {
   return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)]));
 };
 
-const isQueueableMutation = (url: string, options: RequestInit = {}) => {
-  const method = (options.method || 'GET').toUpperCase();
-  if (!['POST', 'PUT', 'PATCH'].includes(method)) return false;
-  if (!url.startsWith('/api/')) return false;
-  if (url.startsWith('/api/auth/')) return false;
-  if (url.startsWith('/api/push/')) return false;
-  if (url.startsWith('/api/idms/')) return false;
-  if (url.split('?')[0] === '/api/learners/bulk-delete') return false;
-  if (options.body instanceof FormData) return false;
-  return typeof options.body === 'string';
+const isQueueableMutation = (url: string, options: RequestInit = {}) => (
+  supportsOfflineAction(url, (options.method || 'GET').toUpperCase())
+  && typeof options.body === 'string'
+);
+const SESSION_SNAPSHOT_KEY = 'gtvets-offline-session';
+const saveOfflineSession = (sessionUser: User) => {
+  try {
+    if (!sessionUser.inspection && !sessionUser.passwordChangeRequired) {
+      localStorage.setItem(SESSION_SNAPSHOT_KEY, JSON.stringify({ user: sessionUser, savedAt: Date.now() }));
+    } else localStorage.removeItem(SESSION_SNAPSHOT_KEY);
+  } catch { /* Offline snapshots are optional; online sign-in must still work. */ }
+};
+const cachedOfflineUser = (): User | null => {
+  try {
+    const snapshot = JSON.parse(localStorage.getItem(SESSION_SNAPSHOT_KEY) || 'null');
+    if (snapshot && Date.now() - snapshot.savedAt < 24 * 60 * 60 * 1000 && !snapshot.user.inspection && !snapshot.user.passwordChangeRequired
+      && ['Admin', 'Manager', 'Staff', 'IndustryPartner'].includes(snapshot.user.role)
+      && getActiveOfflineScope() === `user:${snapshot.user._id}`) return snapshot.user;
+  } catch { /* Invalid local data is not a session. */ }
+  return null;
 };
 
 const getOfflineScopeForUser = (sessionUser?: Pick<User, '_id' | 'inspection'> | null) => (
@@ -275,8 +288,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isSyncingOfflineQueue, setIsSyncingOfflineQueue] = useState(false);
   const syncInFlightRef = useRef(false);
   const isLoggingInRef = useRef(false);
+  const offlineScopeRef = useRef<string | null>(null);
 
-  const loadOfflineState = useCallback((scope = getActiveOfflineScope()) => {
+  const loadOfflineState = useCallback((scope = offlineScopeRef.current) => {
     const queue = readOfflineQueue(scope);
     const history = readOfflineSyncHistory(scope);
     setOfflineQueueCount(queue.length);
@@ -285,6 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const activateOfflineScope = useCallback((scope: string | null) => {
+    offlineScopeRef.current = scope;
     setActiveOfflineScope(scope);
     loadOfflineState(scope);
   }, [loadOfflineState]);
@@ -304,6 +319,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (requiresPasswordChange) localStorage.setItem('passwordChangeRequired', 'true');
     else localStorage.removeItem('passwordChangeRequired');
     setUser(hydratedUser || fallbackUser || null);
+    if (hydratedUser) saveOfflineSession(hydratedUser);
     activateOfflineScope(getOfflineScopeForUser(hydratedUser || fallbackUser || null));
     return hydratedUser as User;
   }, [activateOfflineScope]);
@@ -327,12 +343,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       credentials: 'include',
     })
       .then(res => {
-        if (!res.ok) throw new Error('Invalid session');
+        if (!res.ok) {
+          localStorage.removeItem(SESSION_SNAPSHOT_KEY);
+          throw new Error('Invalid session');
+        }
         return res.json();
       })
       .then(userData => {
         if (isMounted) {
             setUser(userData);
+            saveOfflineSession(userData);
             const requiresPasswordChange = Boolean(userData.passwordChangeRequired);
             setPasswordChangeRequired(requiresPasswordChange);
             if (requiresPasswordChange) localStorage.setItem('passwordChangeRequired', 'true');
@@ -343,8 +363,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         if (isMounted) {
+            const cachedUser = !navigator.onLine ? cachedOfflineUser() : null;
+            if (cachedUser) {
+              setUser(cachedUser);
+              activateOfflineScope(getOfflineScopeForUser(cachedUser));
+              setIsLoading(false);
+              return;
+            }
+            localStorage.removeItem(SESSION_SNAPSHOT_KEY);
             setActiveOfflineScope(null);
             setUser(null);
+            clearOfflineConflictBridge();
             loadOfflineState(null);
             setIsLoading(false);
         }
@@ -438,6 +467,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearLegacyOfflineStorage();
     queryClient.clear();
     setUser(null);
+    localStorage.removeItem(SESSION_SNAPSHOT_KEY);
+    clearOfflineConflictBridge();
     setActiveOfflineScope(null);
     setOfflineQueue([]);
     setOfflineQueueCount(0);
@@ -452,6 +483,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const activeScope = getActiveOfflineScope();
+    if (activeScope !== getOfflineScopeForUser(user)) return;
     const queuedRequests = readOfflineQueue(activeScope);
     if (!queuedRequests.length) {
       setOfflineQueueCount(0);
@@ -462,104 +494,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     syncInFlightRef.current = true;
     setIsSyncingOfflineQueue(true);
 
-    const remaining: OfflineMutation[] = [];
-    const history = readOfflineSyncHistory(activeScope);
     let syncedCount = 0;
-    const csrfToken = await ensureCsrfToken();
-
-    for (const request of queuedRequests) {
-      try {
-        const response = await fetch(request.url, {
-          method: request.method,
-          headers: {
-            ...request.headers,
-            'X-Session-User': user._id,
-            ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-          },
-          credentials: 'include',
-          body: request.body,
-        });
-
-        if (response.ok) {
-          syncedCount += 1;
-          history.unshift({
-            id: request.id,
-            url: request.url,
-            method: request.method,
-            queuedAt: request.queuedAt,
-            status: 'synced',
-            syncedAt: new Date().toISOString(),
-            lastError: null,
+    try {
+      await offlineLock(`sync:${activeScope}`, async () => {
+        const csrfToken = await ensureCsrfToken();
+        for (const request of readOfflineQueue(activeScope)) {
+          if (getActiveOfflineScope() !== activeScope) break;
+          if (request.syncStatus === 'needs-review') continue;
+          if (!readOfflineQueue(activeScope).some(item => item.id === request.id)) continue;
+          let updatedRequest: OfflineMutation | null = null;
+          let stop = false;
+          try {
+            if (!supportsOfflineAction(request.url, request.method) || !request.headers['X-Offline-Action']) {
+              updatedRequest = { ...request, syncStatus: 'needs-review', lastError: 'This older action cannot be retried safely. Check the server record before submitting again.' };
+            } else {
+              const response = await fetch(request.url, {
+                method: request.method,
+                headers: { ...request.headers, 'X-Session-User': user._id, 'X-CSRF-Token': csrfToken },
+                credentials: 'include', body: request.body, signal: AbortSignal.timeout(30000),
+              });
+              if (response.ok) {
+                syncedCount += 1;
+              } else {
+                const payload = await response.json().catch(() => ({}));
+                stop = response.status === 401 || payload.code === 'SESSION_CONTEXT_CHANGED' || payload.code === 'PASSWORD_CHANGE_REQUIRED';
+                updatedRequest = {
+                  ...request,
+                  syncStatus: response.status >= 400 && response.status < 500 && !stop && response.status !== 429 ? 'needs-review' : 'failed',
+                  lastError: payload.message || `Sync failed (HTTP ${response.status})`, conflictDetails: payload.conflict || null,
+                };
+              }
+            }
+          } catch {
+            updatedRequest = { ...request, syncStatus: 'failed', lastError: 'Connection interrupted. Your action remains saved for retry.' };
+            stop = true;
+          }
+          const attemptedAt = new Date().toISOString();
+          if (updatedRequest) updatedRequest = { ...updatedRequest, lastAttemptAt: attemptedAt, attemptCount: (request.attemptCount || 0) + 1 };
+          await offlineLock(`storage:${activeScope}`, async () => {
+            const latest = readOfflineQueue(activeScope);
+            writeOfflineQueue(latest.flatMap(item => item.id !== request.id ? [item] : updatedRequest ? [updatedRequest] : []), activeScope);
+            const history = readOfflineSyncHistory(activeScope);
+            history.unshift({ id: request.id, url: request.url, method: request.method, queuedAt: request.queuedAt,
+              status: updatedRequest?.syncStatus || 'synced', syncedAt: attemptedAt, lastError: updatedRequest?.lastError || null });
+            writeOfflineSyncHistory(history, activeScope);
           });
-        } else {
-          const errorPayload = await response.json().catch(() => ({}));
-          const permanentFailure = response.status >= 400 && response.status < 500;
-          const updatedRequest: OfflineMutation = {
-            ...request,
-            syncStatus: permanentFailure ? 'needs-review' : 'failed',
-            lastAttemptAt: new Date().toISOString(),
-            lastError: errorPayload.message || `Sync failed with status ${response.status}`,
-            attemptCount: (request.attemptCount || 0) + 1,
-            conflictDetails: errorPayload.conflict || null,
-          };
-          remaining.push(updatedRequest);
-          history.unshift({
-            id: request.id,
-            url: request.url,
-            method: request.method,
-            queuedAt: request.queuedAt,
-            status: permanentFailure ? 'needs-review' : 'failed',
-            syncedAt: updatedRequest.lastAttemptAt,
-            lastError: updatedRequest.lastError,
-          });
+          if (getActiveOfflineScope() === activeScope) loadOfflineState(activeScope);
+          if (stop) break;
         }
-      } catch {
-        const updatedRequest: OfflineMutation = {
-          ...request,
-          syncStatus: 'failed',
-          lastAttemptAt: new Date().toISOString(),
-          lastError: 'Connection interrupted during sync',
-          attemptCount: (request.attemptCount || 0) + 1,
-          conflictDetails: null,
-        };
-        remaining.push(updatedRequest);
-        history.unshift({
-          id: request.id,
-          url: request.url,
-          method: request.method,
-          queuedAt: request.queuedAt,
-          status: 'failed',
-          syncedAt: updatedRequest.lastAttemptAt,
-          lastError: updatedRequest.lastError,
-        });
+      });
+      if (syncedCount > 0) {
+        void queryClient.invalidateQueries();
+        toast.success(`${syncedCount} offline action${syncedCount === 1 ? '' : 's'} synced successfully.`);
       }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to sync. Your queued actions are still saved.');
+    } finally {
+      syncInFlightRef.current = false;
+      setIsSyncingOfflineQueue(false);
     }
 
-    writeOfflineQueue(remaining, activeScope);
-    writeOfflineSyncHistory(history, activeScope);
-    setOfflineQueueCount(remaining.length);
-    setOfflineQueue(mapOfflineQueueState(remaining));
-    setOfflineSyncHistory(history.slice(0, 25));
-    syncInFlightRef.current = false;
-    setIsSyncingOfflineQueue(false);
-
-    if (syncedCount > 0) {
-      toast.success(`${syncedCount} offline action${syncedCount === 1 ? '' : 's'} synced successfully.`);
-    }
-  }, [user]);
+  }, [user, loadOfflineState, queryClient]);
 
   const removeOfflineQueueItem = useCallback((id: string) => {
-    const nextQueue = readOfflineQueue().filter((item) => item.id !== id);
-    writeOfflineQueue(nextQueue);
-    setOfflineQueueCount(nextQueue.length);
-    setOfflineQueue(mapOfflineQueueState(nextQueue));
-  }, []);
+    const scope = getActiveOfflineScope();
+    if (!scope || scope !== offlineScopeRef.current) return;
+    void offlineLock(`storage:${scope}`, async () => {
+      writeOfflineQueue(readOfflineQueue(scope).filter(item => item.id !== id), scope);
+      if (getActiveOfflineScope() === scope) loadOfflineState(scope);
+    });
+  }, [loadOfflineState]);
 
   const clearOfflineQueue = useCallback(() => {
-    writeOfflineQueue([]);
-    setOfflineQueue([]);
-    setOfflineQueueCount(0);
-  }, []);
+    const scope = getActiveOfflineScope();
+    if (!scope || scope !== offlineScopeRef.current) return;
+    void offlineLock(`storage:${scope}`, async () => {
+      writeOfflineQueue([], scope);
+      if (getActiveOfflineScope() === scope) loadOfflineState(scope);
+    });
+  }, [loadOfflineState]);
 
   const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     const method = (options.method || 'GET').toUpperCase();
@@ -567,25 +580,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return new Response(JSON.stringify({ message: 'Inspection mode is read-only. Return to Super Admin to make changes.' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
     }
     const isFormData = options.body instanceof FormData;
-    const csrfToken = !['GET', 'HEAD', 'OPTIONS'].includes(method) ? await ensureCsrfToken() : null;
-    const headers = {
+    const queueable = isQueueableMutation(url, options);
+    const actionId = queueable ? crypto.randomUUID() : null;
+    const capturedScope = getOfflineScopeForUser(user);
+    const cacheable = method === 'GET' && Boolean(capturedScope) && (
+      /^\/api\/learners\/options(?:\?|$)/.test(url)
+      || url === '/api/attendance-logs/learner-options'
+      || url === '/api/partner-portal/placements?status=Active'
+    );
+    const optionScope = JSON.stringify([user?.role, user?.institution, user?.region, user?.partnerId?._id]);
+    const cacheKey = `gtvets-offline-options:${capturedScope}:${optionScope}:${url}`;
+    const cachedResponse = () => {
+      if (!cacheable || navigator.onLine || getActiveOfflineScope() !== capturedScope) return null;
+      try {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+        if (cached && Date.now() - cached.savedAt < 24 * 60 * 60 * 1000) {
+          return new Response(cached.body, { status: 200, headers: { 'Content-Type': 'application/json', 'X-Offline-Cache': 'true' } });
+        }
+      } catch { /* Missing or invalid offline data needs an online refresh. */ }
+      return null;
+    };
+    let csrfToken: string | null = null;
+    const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-      ...options.headers,
+      ...normalizeHeaders(options.headers),
+      ...(actionId ? { 'X-Offline-Action': actionId } : {}),
       ...(user?._id ? { 'X-Session-User': user._id } : {}),
     };
 
     try {
+      const cached = cachedResponse();
+      if (cached) return cached;
+      if (queueable && !navigator.onLine) throw new Error('Offline');
+      csrfToken = !['GET', 'HEAD', 'OPTIONS'].includes(method) ? await ensureCsrfToken() : null;
+      if (csrfToken) Object.assign(headers, { 'X-CSRF-Token': csrfToken });
       const response = await fetch(url, {
         ...options,
         headers,
         credentials: 'include',
+        ...(queueable && !options.signal ? { signal: AbortSignal.timeout(30000) } : {}),
       });
+      if (cacheable && response.ok && getActiveOfflineScope() === capturedScope) {
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ body: await response.clone().text(), savedAt: Date.now() }));
+        } catch { /* Storage exhaustion must not prevent online work. */ }
+      }
 
       if (response.status === 401) {
         localStorage.removeItem('passwordChangeRequired');
         queryClient.clear();
         setUser(null);
+        localStorage.removeItem(SESSION_SNAPSHOT_KEY);
+        clearOfflineConflictBridge();
         setPasswordChangeRequired(false);
         setActiveOfflineScope(null);
         setOfflineQueue([]);
@@ -604,21 +650,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (payload.code === 'SESSION_CONTEXT_CHANGED') window.location.reload();
       }
 
+      if (response.ok && queueable) {
+        const bridge = getOfflineConflictBridge();
+        if (bridge?.queueId && bridge.userId === user?._id && bridge.requestUrl === url && bridge.requestMethod === method) {
+          await offlineLock(`storage:${capturedScope}`, async () => {
+            writeOfflineQueue(readOfflineQueue(capturedScope).filter(item => item.id !== bridge.queueId), capturedScope);
+          });
+          if (getActiveOfflineScope() === capturedScope) loadOfflineState(capturedScope);
+        }
+      }
       return response;
     } catch (error) {
+      if (options.signal?.aborted) throw error;
       if (!user?.inspection && localStorage.getItem(INSPECTION_KEY) !== 'true' && isQueueableMutation(url, options)) {
         const activeScope = getActiveOfflineScope();
-        if (!activeScope) {
+        if (!activeScope || activeScope !== capturedScope) {
           throw error;
         }
 
-        const queue = readOfflineQueue();
         const queuedRequest: OfflineMutation = {
           id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
           url,
           method,
           body: options.body as string,
-          headers: normalizeHeaders(options.headers),
+          headers: { 'Content-Type': 'application/json', 'X-Offline-Action': actionId! },
           queuedAt: new Date().toISOString(),
           syncStatus: 'pending',
           lastAttemptAt: null,
@@ -626,10 +681,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           attemptCount: 0,
           conflictDetails: null,
         };
-        queue.push(queuedRequest);
-        writeOfflineQueue(queue, activeScope);
-        setOfflineQueueCount(queue.length);
-        setOfflineQueue(mapOfflineQueueState(queue));
+        await offlineLock(`storage:${activeScope}`, async () => {
+          const queue = readOfflineQueue(activeScope);
+          const bridge = getOfflineConflictBridge();
+          const retained = bridge?.queueId && bridge.userId === user?._id && bridge.requestUrl === url && bridge.requestMethod === method ? queue.filter(item => item.id !== bridge.queueId) : queue;
+          retained.push(queuedRequest);
+          writeOfflineQueue(retained, activeScope);
+        });
+        if (getActiveOfflineScope() === activeScope) loadOfflineState(activeScope);
 
         return new Response(
           JSON.stringify({
@@ -646,7 +705,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       throw error;
     }
-  }, [queryClient, user]);
+  }, [queryClient, user, loadOfflineState]);
 
   const changePassword = useCallback(async (newPassword: string, currentPassword?: string) => {
     const res = await authFetch(`${API_BASE}/auth/change-password`, {
@@ -673,12 +732,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleOnline = () => {
-      syncOfflineQueue();
+      void hydrateSessionUser().then(() => syncOfflineQueue()).catch(() => undefined);
     };
 
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
-  }, [syncOfflineQueue]);
+  }, [syncOfflineQueue, hydrateSessionUser]);
+
+  useEffect(() => {
+    const refresh = (event: StorageEvent) => {
+      if (event.key === OFFLINE_STORAGE_SCOPE_KEY && event.newValue !== offlineScopeRef.current) {
+        window.location.reload();
+        return;
+      }
+      if (event.key?.startsWith(LEGACY_OFFLINE_QUEUE_KEY) || event.key?.startsWith(LEGACY_OFFLINE_SYNC_HISTORY_KEY)) loadOfflineState();
+    };
+    window.addEventListener('storage', refresh);
+    return () => window.removeEventListener('storage', refresh);
+  }, [loadOfflineState]);
 
   const contextValue: AuthContextType = {
     user,

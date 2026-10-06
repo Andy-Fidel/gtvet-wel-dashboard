@@ -1,5 +1,35 @@
 [
   {
+    "id": "2026-10-06-field-tools-and-offline-sync",
+    "date": "2026-10-06",
+    "title": "Safer offline work and easier form setup",
+    "summary": "Keep field work safely queued, review corrections, find industry partners and prepare learner CSV uploads.",
+    "changes": [
+      {
+        "kind": "Fixed",
+        "title": "More reliable offline sync",
+        "body": "New actions stay saved when sync is running. Drafts are shown only for your account. Failed security checks allow another sync attempt, and actions needing review wait for your correction. Reviewing an edit keeps its original record; saving the correction replaces the old queued action. Repeat attempts use a saved acknowledgement to prevent duplicate writes. If a result is uncertain, check the server record before submitting again.",
+        "audience": "Institution teams and industry partners",
+        "roles": ["Admin", "Manager", "Staff", "IndustryPartner"],
+        "action": { "label": "Open Offline Sync", "path": "/offline-sync" }
+      },
+      {
+        "kind": "Improved",
+        "title": "Resume recent field work offline",
+        "body": "Institution officers and partner users can reopen a recent session offline for up to 24 hours and use learner choices loaded previously on the same browser. Saved work is checked against your current access when it reaches the server. Older queued actions require review before they can be submitted safely.",
+        "audience": "Institution teams and industry partners",
+        "roles": ["Admin", "Manager", "Staff", "IndustryPartner"]
+      },
+      {
+        "kind": "New",
+        "title": "Industry partner search and learner upload template",
+        "body": "Search partners by name, region or location in the placement form and the industry partner user form. On the learner registry, Download CSV Template provides the accepted columns for bulk uploads. Upload guidance explains dates, required values and preserving leading zeros.",
+        "audience": "Administrators and institution teams",
+        "roles": ["SuperAdmin", "Admin", "Manager", "Staff"]
+      }
+    ]
+  },
+  {
     "id": "2026-10-05-simple-cohort-comparison",
     "date": "2026-10-05",
     "title": "A clearer cohort comparison",

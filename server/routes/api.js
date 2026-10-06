@@ -3,6 +3,7 @@ import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js'
 import { canLogMonitoringVisit, monitoringScope } from '../utils/monitoringAccess.js';
 import { canReadAssessment, canWriteAssessment, assessmentLearnerFields, serializeAssessment, assessmentInput, validateAssessmentInput, safeAssessmentCsvCell } from '../utils/assessmentAccess.js';
 import express from 'express';
+import { offlineReplay } from '../utils/offlineReplay.js';
 import { isInspection } from '../utils/inspectionContext.js';
 import mongoose from 'mongoose';
 import { LRUCache } from 'lru-cache';
@@ -72,6 +73,7 @@ const INSTITUTION_MANAGEMENT_ROLES = ['Admin', 'Manager'];
 // All routes below require authentication
 router.use(auth);
 router.use(enforceHQAccess);
+router.use(offlineReplay);
 router.use((req, res, next) => {
   if (Object.hasOwn(req.body || {}, 'workflowVersion')) return res.status(400).json({ message: 'Workflow version is managed by the server.' });
   if (Object.keys(req.body || {}).some(field => ['changeRequests', 'institutionDetails'].includes(field.split('.')[0]))) return res.status(400).json({ message: 'Use the partner change workflow to update these details.' });

@@ -94,6 +94,10 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const [lat, setLat] = useState('')
   const [lng, setLng] = useState('')
   const [partners, setPartners] = useState<IndustryPartner[]>([])
+  const [partnerSearch, setPartnerSearch] = useState('')
+  const matchingPartners = partners.filter(partner =>
+    [partner.name, partner.region, partner.location].some(value => value?.toLowerCase().includes(partnerSearch.trim().toLowerCase()))
+  )
   const [learners, setLearners] = useState<Learner[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [overrideWelWindow, setOverrideWelWindow] = useState(false)
@@ -468,6 +472,17 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 <FormField control={form.control} name="partner" render={({ field }) => (
                     <FormItem>
                     <FormLabel className="text-sm font-semibold text-gray-900">Select Industry Partner *</FormLabel>
+                    <Input
+                      type="search"
+                      aria-label="Search industry partners"
+                      placeholder="Search partners by name, region or location"
+                      value={partnerSearch}
+                      onChange={event => setPartnerSearch(event.target.value)}
+                      className="bg-white"
+                    />
+                    <p role="status" className="text-xs text-gray-600">
+                      {matchingPartners.length ? `${matchingPartners.length} partners found. Open the list below to select one.` : 'No matching partners. Try another search.'}
+                    </p>
                     <Select
                       onValueChange={(value) => {
                         field.onChange(value)
@@ -481,7 +496,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                         <FormControl><SelectTrigger className="bg-white"><SelectValue placeholder="Select an available partner" /></SelectTrigger></FormControl>
                         <SelectContent className="max-h-60">
                             {partners.length === 0 && <div className="p-4 text-sm text-gray-500 text-center">No partners have available slots.</div>}
-                            {partners.map(p => ( 
+                            {matchingPartners.length === 0 && partners.length > 0 && <p className="p-3 text-sm text-gray-500">No matching partners.</p>}
+                            {partners.filter(p => p._id === field.value || matchingPartners.includes(p)).map(p => (
                                 <SelectItem key={p._id} value={p._id} disabled={(p.institutionCapacity?.availableSlots ?? p.totalSlots - p.usedSlots) <= 0}>
                                     <span className="font-semibold">{p.name}</span> <span className="ml-2 text-gray-400">{p.partnerType === 'MasterCraftPerson' ? 'MCP' : p.region} · {p.coordinates?.lat !== undefined && p.coordinates?.lng !== undefined ? 'GPS available' : ['MobileField', 'NoFixedPremises'].includes(p.operatingModel || '') ? 'Mobile evidence' : 'GPS pending'} · {p.institutionCapacity?.availableSlots ?? p.totalSlots - p.usedSlots} slots for you</span>
                                 </SelectItem> 

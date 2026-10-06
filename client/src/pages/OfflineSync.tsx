@@ -8,6 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { RefreshCw, Trash2, WifiOff, FileWarning, Send } from "lucide-react"
 import { toast } from "@/lib/toast"
 import { useNavigate } from "react-router-dom"
+import { useState } from "react"
+import { ownsOfflineDraft } from "@/lib/offlinePolicy"
+import { ConfirmationDialog } from "@/components/ConfirmationDialog"
 
 type DraftItem = {
   key: string
@@ -32,7 +35,7 @@ const getQueueStatusBadge = (status: "pending" | "failed" | "needs-review" | "sy
 
 const formatDraftLabel = (key: string) => {
   if (key.startsWith("draft:monitoring-visit")) return "Monitoring visit draft"
-  if (key.startsWith("draft:attendance-log")) return "Attendance log draft"
+  if (key.includes(":attendance-log:")) return "Attendance log draft"
   if (key.startsWith("draft:support:") && key.endsWith(":new-ticket")) return "New support ticket draft"
   if (key.startsWith("draft:support:") && key.includes(":reply:")) return "Support reply draft"
   return "Offline draft"
@@ -53,6 +56,7 @@ export default function OfflineSync() {
   const navigate = useNavigate()
   const {
     user,
+    authFetch,
     offlineQueue,
     offlineQueueCount,
     offlineSyncHistory,
@@ -63,13 +67,14 @@ export default function OfflineSync() {
   } = useAuth()
 
   const userId = user?._id
+  const [discard, setDiscard] = useState<{ type: 'queue' | 'item' | 'draft'; id?: string } | null>(null)
 
   // Drafts live outside React state; read them on render so queue updates refresh the list.
   const drafts = (() => {
     if (typeof window === "undefined") return []
 
     return Object.keys(window.localStorage)
-      .filter((key) => key.startsWith("draft:") && (!key.startsWith("draft:support:") || Boolean(userId && key.startsWith(`draft:support:${userId}:`))))
+      .filter((key) => ownsOfflineDraft(key, userId))
       .map((key) => {
         const draft = loadDraft<Record<string, unknown> | string>(key)
         let summary = "Saved locally for later completion."
@@ -97,39 +102,46 @@ export default function OfflineSync() {
     window.location.reload()
   }
 
-  const handleOpenForReview = (item: (typeof offlineQueue)[number]) => {
+  const handleOpenForReview = async (item: (typeof offlineQueue)[number]) => {
     try {
-      const payload = JSON.parse(item.body) as Record<string, unknown>
+      let payload = JSON.parse(item.body) as Record<string, unknown>
+      const metadata = { userId, queueId: item.id, requestUrl: item.url, requestMethod: item.method }
+      if (item.method === 'PUT') {
+        const response = await authFetch(item.url)
+        const current = await response.json()
+        if (!response.ok) throw new Error(current.message || 'Unable to load the current record')
+        payload = { ...current, ...payload, _id: current._id, updatedAt: current.updatedAt }
+      }
       clearOfflineConflictBridge()
 
       if (item.url.startsWith("/api/monitoring-visits")) {
-        setOfflineConflictBridge({ type: "monitoring-visit", payload })
+        setOfflineConflictBridge({ ...metadata, type: "monitoring-visit", payload })
         navigate("/monitoring-visits?offlineReview=1")
         return
       }
 
       if (item.url.startsWith("/api/attendance-logs")) {
-        setOfflineConflictBridge({ type: "attendance-log", payload })
+        setOfflineConflictBridge({ ...metadata, type: "attendance-log", payload })
         navigate("/attendance-logs?offlineReview=1")
         return
       }
 
       if (item.url === "/api/support-tickets") {
-        setOfflineConflictBridge({ type: "support-ticket", payload })
+        setOfflineConflictBridge({ ...metadata, type: "support-ticket", payload })
         navigate("/support-center?compose=1&offlineReview=1")
         return
       }
 
       const replyMatch = item.url.match(/^\/api\/support-tickets\/([^/]+)\/replies$/)
       if (replyMatch) {
-        setOfflineConflictBridge({ type: "support-reply", payload, ticketId: replyMatch[1] })
+        setOfflineConflictBridge({ ...metadata, type: "support-reply", payload, ticketId: replyMatch[1] })
         navigate(`/support-center?ticket=${replyMatch[1]}&offlineReply=1`)
         return
       }
 
       toast.error("This queued action does not have a guided review form yet.")
     } catch {
-      toast.error("Could not open the queued payload for review.")
+      toast.error("Could not open this action for review. Reconnect and check that you still have access to the record.")
     }
   }
 
@@ -159,11 +171,8 @@ export default function OfflineSync() {
             <Button
               variant="outline"
               className="rounded-xl border-red-200 text-red-700 hover:bg-red-50"
-              onClick={() => {
-                clearOfflineQueue()
-                toast.success("Offline queue cleared")
-              }}
-              disabled={offlineQueueCount === 0}
+              onClick={() => setDiscard({ type: 'queue' })}
+              disabled={offlineQueueCount === 0 || isSyncingOfflineQueue}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Clear Queue
@@ -282,7 +291,8 @@ export default function OfflineSync() {
                         variant="ghost"
                         size="sm"
                         className="rounded-xl text-red-600 hover:text-red-700 hover:bg-red-50"
-                        onClick={() => removeOfflineQueueItem(item.id)}
+                        disabled={isSyncingOfflineQueue}
+                        onClick={() => setDiscard({ type: 'item', id: item.id })}
                       >
                         Remove
                       </Button>
@@ -291,7 +301,8 @@ export default function OfflineSync() {
                           variant="outline"
                           size="sm"
                           className="rounded-xl border-amber-200 text-amber-800 hover:bg-amber-50"
-                          onClick={() => handleOpenForReview(item)}
+                          disabled={isSyncingOfflineQueue}
+                          onClick={() => void handleOpenForReview(item)}
                         >
                           Review
                         </Button>
@@ -329,7 +340,7 @@ export default function OfflineSync() {
                       variant="ghost"
                       size="sm"
                       className="rounded-xl text-red-600 hover:text-red-700 hover:bg-red-50"
-                      onClick={() => handleClearDraft(draft.key)}
+                      onClick={() => setDiscard({ type: 'draft', id: draft.key })}
                     >
                       Clear
                     </Button>
@@ -379,6 +390,20 @@ export default function OfflineSync() {
           </CardContent>
         </Card>
       </div>
+      <ConfirmationDialog
+        open={Boolean(discard)}
+        onOpenChange={open => { if (!open) setDiscard(null) }}
+        title="Discard saved work?"
+        description={discard?.type === 'queue' ? 'All queued actions for your account will be removed from this browser. Work that has not reached the server will be lost.' : 'This saved action will be removed from this browser. Work that has not reached the server will be lost.'}
+        confirmLabel="Discard"
+        variant="danger"
+        onConfirm={() => {
+          if (discard?.type === 'queue') clearOfflineQueue()
+          if (discard?.type === 'item' && discard.id) removeOfflineQueueItem(discard.id)
+          if (discard?.type === 'draft' && discard.id) handleClearDraft(discard.id)
+          setDiscard(null)
+        }}
+      />
     </div>
   )
 }

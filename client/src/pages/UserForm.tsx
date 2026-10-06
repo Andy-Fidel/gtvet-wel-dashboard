@@ -147,7 +147,11 @@ const getManageableRoles = (actorRole?: string) => {
 export function UserForm({ onSuccess, initialData }: UserFormProps) {
   const [loading, setLoading] = useState(false)
   const [institutions, setInstitutions] = useState<{name: string, region: string}[]>([])
-  const [partners, setPartners] = useState<{_id: string, name: string}[]>([])
+  const [partners, setPartners] = useState<{_id: string, name: string, region?: string, location?: string}[]>([])
+  const [partnerSearch, setPartnerSearch] = useState('')
+  const matchingPartners = partners.filter(partner =>
+    [partner.name, partner.region, partner.location].some(value => value?.toLowerCase().includes(partnerSearch.trim().toLowerCase()))
+  )
   const [learnerOptions, setLearnerOptions] = useState<Array<{ _id: string; name: string; trackingId: string; institution?: string }>>([])
   const [confirmationState, setConfirmationState] = useState<PrivilegedConfirmationState | null>(null)
   const { authFetch, user: currentUser } = useAuth()
@@ -634,10 +638,21 @@ export function UserForm({ onSuccess, initialData }: UserFormProps) {
                 <FormField control={form.control} name="partnerId" render={({ field }) => (
                     <FormItem>
                       <FormLabel className="text-sm font-semibold text-gray-900">Industry Partner</FormLabel>
+                      <Input
+                        type="search"
+                        aria-label="Search industry partners"
+                        placeholder="Search partners by name, region or location"
+                        value={partnerSearch}
+                        onChange={event => setPartnerSearch(event.target.value)}
+                      />
+                      <p role="status" className="text-xs text-gray-600">
+                        {matchingPartners.length ? `${matchingPartners.length} partners found. Open the list below to select one.` : 'No matching partners. Try another search.'}
+                      </p>
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl><SelectTrigger><SelectValue placeholder="Select Partner" /></SelectTrigger></FormControl>
                         <SelectContent className="max-h-[250px]">
-                            {partners.map((p) => (
+                            {matchingPartners.length === 0 && <p className="p-3 text-sm text-gray-500">No matching partners.</p>}
+                            {partners.filter(p => p._id === field.value || matchingPartners.includes(p)).map((p) => (
                                 <SelectItem key={p._id} value={p._id}>{p.name}</SelectItem>
                             ))}
                         </SelectContent>
