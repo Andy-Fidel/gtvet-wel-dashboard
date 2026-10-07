@@ -67,6 +67,7 @@ class RecoveryTests(unittest.TestCase):
         self.execute()
         for args in self.calls:
             if args[0] == 'git':
+                self.assertIn('--no-optional-locks', args)
                 self.assertIn('safe.directory=' + str(Path(self.cfg['repository']).resolve()), args)
         start = next(i for i, args in enumerate(self.calls) if 'start' in args)
         encrypt = next(i for i, args in enumerate(self.calls) if args[0] == 'age')

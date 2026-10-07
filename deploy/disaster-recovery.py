@@ -79,7 +79,7 @@ def backup(cfg, allow_write_pause=False):
     destination.chmod(0o700)
     compose = ['docker', 'compose', '--project-directory', str(Path(cfg['repository']) / 'deploy')]
     # Root reads the deployment owned by ubuntu; trust only this configured checkout.
-    git = ['git', '-c', 'safe.directory=' + str(Path(cfg['repository']).resolve()), '-C', cfg['repository']]
+    git = ['git', '--no-optional-locks', '-c', 'safe.directory=' + str(Path(cfg['repository']).resolve()), '-C', cfg['repository']]
     timestamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     started = time.time()
     with (destination / '.recovery.lock').open('w') as lock:
