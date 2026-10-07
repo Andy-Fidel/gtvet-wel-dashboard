@@ -65,6 +65,9 @@ class RecoveryTests(unittest.TestCase):
 
     def test_success_resumes_before_transfer_and_verifies_complete_bundle(self):
         self.execute()
+        for args in self.calls:
+            if args[0] == 'git':
+                self.assertIn('safe.directory=' + str(Path(self.cfg['repository']).resolve()), args)
         start = next(i for i, args in enumerate(self.calls) if 'start' in args)
         encrypt = next(i for i, args in enumerate(self.calls) if args[0] == 'age')
         self.assertLess(start, encrypt)

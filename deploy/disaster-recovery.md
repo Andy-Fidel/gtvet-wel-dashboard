@@ -37,11 +37,23 @@ to `/etc/gtvet-wel/recovery.json`, fill in the real remote, and set permissions 
 `alert_webhook` is a chosen HTTPS endpoint accepting JSON with a `text` field.
 No alert destination is supplied by default.
 
+For UptimeRobot, create a Cron job / Heartbeat monitor and store its unique HTTPS
+URL as `uptimerobot_heartbeat_url` in the protected recovery configuration. The
+monitoring service sends a heartbeat only when the external backup is less than
+90 minutes old, disk usage is below 85%, and the public application is healthy.
+Use an expected heartbeat interval longer than the monitoring timer's five-minute
+interval (for example, ten minutes), and attach the desired UptimeRobot alert
+contacts. Missing heartbeats cover server outages as well as stale backups.
+Heartbeat availability depends on the UptimeRobot account plan; do not enable
+scheduled write pauses until the backup cadence and alert destination are agreed.
+
 For the approved Backblaze bucket `GTVET-WEL`, use the `recovery/` prefix.
 Install `configure-backblaze.py` as `/usr/local/sbin/gtvet-configure-backblaze`
 (0750), then run it through an interactive SSH terminal with `sudo`. It prompts
-for the application key without echoing input, saves `/etc/gtvet-wel/rclone.conf`
-with mode 0600, and verifies read access without uploading any files. Never paste
+for the Key ID and application key from the same key entry without echoing input,
+verifies read access without uploading files, then saves `/etc/gtvet-wel/rclone.conf`
+with mode 0600. Use `--replace` to correct an existing pair; failed verification
+preserves the existing configuration. Never paste
 the secret into chat or a shell command. The console-created Read and Write key
 also permits deletion; use the approved 14-day bucket lock and, where practical,
 replace it with a custom API key excluding deletion and retention-management

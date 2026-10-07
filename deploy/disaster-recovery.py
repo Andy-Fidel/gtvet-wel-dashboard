@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import urllib.parse
 
 
 def run(args, timeout=300):
@@ -77,14 +78,16 @@ def backup(cfg, allow_write_pause=False):
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
     destination.chmod(0o700)
     compose = ['docker', 'compose', '--project-directory', str(Path(cfg['repository']) / 'deploy')]
+    # Root reads the deployment owned by ubuntu; trust only this configured checkout.
+    git = ['git', '-c', 'safe.directory=' + str(Path(cfg['repository']).resolve()), '-C', cfg['repository']]
     timestamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     started = time.time()
     with (destination / '.recovery.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with tempfile.TemporaryDirectory(prefix='.recovery-', dir=destination) as temporary:
             stage = Path(temporary)
-            commit = run(['git', '-C', cfg['repository'], 'rev-parse', 'HEAD'])
-            if run(['git', '-C', cfg['repository'], 'status', '--porcelain']):
+            commit = run(git + ['rev-parse', 'HEAD'])
+            if run(git + ['status', '--porcelain']):
                 raise ValueError('Deployment checkout must be clean before creating a recovery bundle')
             container = run(compose + ['ps', '-q', 'app'])
             if not container:
@@ -95,7 +98,7 @@ def backup(cfg, allow_write_pause=False):
             uploads = next((m['Source'] for m in mounts if m['Destination'] == '/app/server/local-uploads'), None)
             if not uploads or not Path(uploads).is_dir():
                 raise ValueError('Persistent uploads directory not found')
-            run(['git', '-C', cfg['repository'], 'bundle', 'create', str(stage / 'source.bundle'), 'HEAD'])
+            run(git + ['bundle', 'create', str(stage / 'source.bundle'), 'HEAD'])
             stopped = False
             pause_started = time.time()
             try:
@@ -108,7 +111,7 @@ def backup(cfg, allow_write_pause=False):
                     archive.add(uploads, arcname='local-uploads')
                 with tarfile.open(stage / 'configuration.tar.gz', 'w:gz') as archive:
                     archive.add(cfg['secrets_directory'], arcname='gtvet-wel')
-                if run(['git', '-C', cfg['repository'], 'rev-parse', 'HEAD']) != commit:
+                if run(git + ['rev-parse', 'HEAD']) != commit:
                     raise ValueError('A deployment changed during backup; this bundle will not be published')
             finally:
                 if stopped:
@@ -227,6 +230,19 @@ def monitor(cfg):
             write_json(state, {'sent_at': time.time(), 'failures': failures})
         raise ValueError('Recovery monitoring needs attention')
     (Path(cfg['backup_directory']) / '.last-alert.json').unlink(missing_ok=True)
+    heartbeat = cfg.get('uptimerobot_heartbeat_url')
+    if heartbeat:
+        parsed = urllib.parse.urlsplit(heartbeat)
+        if parsed.scheme != 'https' or parsed.hostname != 'heartbeat.uptimerobot.com' or parsed.username or parsed.password or parsed.port not in (None, 443) or parsed.path in ('', '/'):
+            raise ValueError('Configure a valid HTTPS UptimeRobot heartbeat URL')
+        # Ping only after all checks pass: stale backups and server outages must alert.
+        try:
+            with urllib.request.urlopen(heartbeat, timeout=15) as response:
+                if not 200 <= response.status < 300:
+                    raise ValueError('Unexpected heartbeat response')
+        except Exception:
+            raise ValueError('UptimeRobot heartbeat delivery failed') from None
+        print(json.dumps({'event': 'recovery_heartbeat_sent'}))
 
 
 def main():
