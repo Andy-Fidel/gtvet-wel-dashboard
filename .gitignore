@@ -13,6 +13,8 @@ dist-ssr
 client/test-results/
 client/playwright-report/
 *.local
+__pycache__/
+*.pyc
 .env
 render.yaml
 
