@@ -5,5 +5,5 @@
   "mongo_config": "/etc/gtvet-wel/mongodump.yml",
   "recipients_file": "/etc/gtvet-wel/recovery-recipients.txt",
   "rclone_config": "/etc/gtvet-wel/rclone.conf",
-  "remote": "organisation-backups:gtvet-wel"
+  "remote": "organisation-backups:GTVET-WEL/recovery"
 }

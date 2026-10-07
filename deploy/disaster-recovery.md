@@ -37,6 +37,16 @@ to `/etc/gtvet-wel/recovery.json`, fill in the real remote, and set permissions 
 `alert_webhook` is a chosen HTTPS endpoint accepting JSON with a `text` field.
 No alert destination is supplied by default.
 
+For the approved Backblaze bucket `GTVET-WEL`, use the `recovery/` prefix.
+Install `configure-backblaze.py` as `/usr/local/sbin/gtvet-configure-backblaze`
+(0750), then run it through an interactive SSH terminal with `sudo`. It prompts
+for the application key without echoing input, saves `/etc/gtvet-wel/rclone.conf`
+with mode 0600, and verifies read access without uploading any files. Never paste
+the secret into chat or a shell command. The console-created Read and Write key
+also permits deletion; use the approved 14-day bucket lock and, where practical,
+replace it with a custom API key excluding deletion and retention-management
+capabilities. The key expires after 90 days and must be renewed before expiry.
+
 ## Bundle creation
 
 Install `disaster-recovery.py` as `/usr/local/sbin/gtvet-disaster-recovery` (0750).
