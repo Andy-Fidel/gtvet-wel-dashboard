@@ -1,0 +1,16 @@
+[Unit]
+Description=Encrypted, externally verified GTVET recovery backup
+After=docker.service mongod.service gtvet-recovery-resume.service
+Wants=gtvet-recovery-resume.service
+Requires=docker.service mongod.service
+ConditionPathExists=/etc/gtvet-wel/recovery.json
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/sbin/gtvet-disaster-recovery backup --allow-write-pause
+TimeoutStartSec=30min
+ExecStopPost=/usr/bin/python3 /usr/local/sbin/gtvet-disaster-recovery resume
+TimeoutStopSec=3min
+# Install only after approval of the write-pause window and a successful restore drill.

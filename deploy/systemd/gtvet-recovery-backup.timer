@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly GTVET recovery backup
+
+[Timer]
+OnCalendar=*-*-* *:15:00 Africa/Accra
+Persistent=true
+Unit=gtvet-recovery-backup.service
+
+[Install]
+WantedBy=timers.target

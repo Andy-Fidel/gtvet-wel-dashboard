@@ -1,0 +1,10 @@
+[Unit]
+Description=Check GTVET recovery protection every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=gtvet-recovery-monitor.service
+
+[Install]
+WantedBy=timers.target

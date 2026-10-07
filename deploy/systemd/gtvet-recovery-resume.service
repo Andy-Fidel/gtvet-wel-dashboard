@@ -1,0 +1,13 @@
+[Unit]
+Description=Resume GTVET after an interrupted backup
+After=docker.service mongod.service
+Requires=docker.service mongod.service
+ConditionPathExists=/etc/gtvet-wel/recovery.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/gtvet-disaster-recovery resume
+TimeoutStartSec=3min
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+{
+  "repository": "/opt/gtvet-wel",
+  "backup_directory": "/var/backups/gtvet-wel-recovery",
+  "secrets_directory": "/etc/gtvet-wel",
+  "mongo_config": "/etc/gtvet-wel/mongodump.yml",
+  "recipients_file": "/etc/gtvet-wel/recovery-recipients.txt",
+  "rclone_config": "/etc/gtvet-wel/rclone.conf",
+  "remote": "organisation-backups:gtvet-wel"
+}

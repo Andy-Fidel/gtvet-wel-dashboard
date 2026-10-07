@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GTVET backup freshness, disk usage and public health
+After=network-online.target
+ConditionPathExists=/etc/gtvet-wel/recovery.json
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/sbin/gtvet-disaster-recovery monitor
+TimeoutStartSec=60

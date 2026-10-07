@@ -35,6 +35,10 @@ archive every day and retains 14 days. The root-only
 URI. Copy these archives off-server as well; local retention alone does not
 protect against loss of the host or disk.
 
+For encrypted external bundles, monitoring and tested recovery, see
+[Disaster recovery operations](disaster-recovery.md). These tools are prepared
+separately; scheduling requires a configured destination and an approved write pause.
+
 ## DNS on TCP-only networks
 
 Some hosting networks block outbound UDP/53. In that case install Unbound,
