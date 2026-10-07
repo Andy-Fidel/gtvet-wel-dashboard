@@ -6,5 +6,6 @@
   "recipients_file": "/etc/gtvet-wel/recovery-recipients.txt",
   "rclone_config": "/etc/gtvet-wel/rclone.conf",
   "remote": "organisation-backups:GTVET-WEL/recovery",
-  "public_status_file": "/var/lib/gtvet-wel-backup-health/status.json"
+  "public_status_file": "/var/lib/gtvet-wel-backup-health/status.json",
+  "tiered_retention": true
 }

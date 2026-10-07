@@ -41,6 +41,56 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def publish_verified_copy(cfg, source, remote_path):
+    remote_directory, name = remote_path.rsplit('/', 1)
+    with tempfile.TemporaryDirectory(prefix='.verify-', dir=source.parent) as temporary:
+        local = Path(temporary) / name
+        shutil.copy2(source, local)
+        run(['rclone', '--config', cfg['rclone_config'], 'copyto', str(local), remote_path, '--immutable'], timeout=600)
+        run(['rclone', '--config', cfg['rclone_config'], 'check', temporary, remote_directory, '--one-way', '--download'], timeout=600)
+
+
+def publish_retention_points(cfg, encrypted, point_time):
+    directory = Path(cfg['backup_directory'])
+    state_path = directory / 'retention-points.json'
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    for tier, period in [('daily', point_time.strftime('%Y-%m-%d')), ('monthly', point_time.strftime('%Y-%m'))]:
+        point = state.get(tier, {})
+        if point.get('period') != period:
+            # Save the source before upload. A retry uses the same ciphertext,
+            # including after upload succeeds but receipt persistence fails.
+            point = {'period': period, 'bundle': encrypted.name, 'sha256': sha256(encrypted), 'verified': False}
+            state[tier] = point
+            write_json(state_path, state)
+        if point.get('verified') is True:
+            continue
+        name = point['bundle']
+        if Path(name).name != name or not name.startswith('recovery-'):
+            raise ValueError('Invalid retained recovery point')
+        source = directory / name
+        if sha256(source) != point['sha256']:
+            raise ValueError('Retained recovery source checksum mismatch')
+        publish_verified_copy(cfg, source, cfg['remote'].rstrip('/') + '/' + tier + '/' + period + '.tar.age')
+        point['verified'] = True
+        write_json(state_path, state)
+
+
+def promote(cfg):
+    directory = Path(cfg['backup_directory'])
+    with (directory / '.recovery.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        check(cfg)
+        status = json.loads((directory / 'last-success.json').read_text())
+        name = status['bundle']
+        if Path(name).name != name or not name.startswith('recovery-'):
+            raise ValueError('Invalid recovery bundle name')
+        source = directory / name
+        if sha256(source) != status['sha256']:
+            raise ValueError('Recovery source checksum mismatch')
+        publish_retention_points(cfg, source, dt.datetime.fromisoformat(status['verified_at']))
+        print(json.dumps({'event': 'recovery_retention_points_verified'}))
+
+
 def start_app(compose):
     run(compose + ['start', 'app'], timeout=60)
     deadline = time.monotonic() + 120
@@ -135,13 +185,15 @@ def backup(cfg, allow_write_pause=False):
             # Remove plaintext before making any external network request.
             for name in files + ['manifest.json', 'recovery.tar']:
                 (stage / name).unlink()
-            shutil.copy2(encrypted, stage / encrypted.name)
             remote = cfg['remote'].rstrip('/')
-            run(['rclone', '--config', cfg['rclone_config'], 'copyto', str(encrypted), remote + '/' + encrypted.name, '--immutable'], timeout=600)
-            run(['rclone', '--config', cfg['rclone_config'], 'check', str(stage), remote, '--one-way', '--download'], timeout=600)
+            remote_path = remote + ('/hourly/' if cfg.get('tiered_retention') else '/') + encrypted.name
+            publish_verified_copy(cfg, encrypted, remote_path)
+            if cfg.get('tiered_retention'):
+                publish_retention_points(cfg, encrypted, dt.datetime.fromtimestamp(started, dt.timezone.utc))
             write_json(destination / 'last-success.json', {
                 'verified_at': dt.datetime.now(dt.timezone.utc).isoformat(),
                 'bundle': encrypted.name, 'sha256': sha256(encrypted), 'commit': commit,
+                'remote_path': remote_path,
                 'write_pause_seconds': pause_seconds, 'total_seconds': round(time.time() - started, 2),
             })
             cutoff = time.time() - 14 * 86400
@@ -259,7 +311,7 @@ def monitor(cfg):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['backup', 'check', 'unpack', 'resume', 'monitor'])
+    parser.add_argument('operation', choices=['backup', 'check', 'unpack', 'resume', 'monitor', 'promote'])
     parser.add_argument('--config', default='/etc/gtvet-wel/recovery.json')
     parser.add_argument('--allow-write-pause', action='store_true')
     parser.add_argument('--bundle')
@@ -278,6 +330,8 @@ def main():
             backup(config(args.config), args.allow_write_pause)
         elif args.operation == 'resume':
             resume(config(args.config))
+        elif args.operation == 'promote':
+            promote(config(args.config))
         elif args.operation == 'monitor':
             monitor(config(args.config))
         else:

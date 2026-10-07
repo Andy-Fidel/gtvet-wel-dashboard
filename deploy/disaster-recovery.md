@@ -15,8 +15,33 @@ Use organisation-owned storage outside this host. Configure a named rclone remot
 with permissions to upload, list and read the designated backup prefix. It must
 not have permission to delete backups, alter retention, or disable object locks.
 An administrator must configure storage versioning/immutability and lifecycle
-retention separately. Suggested retention: hourly copies for 48 hours, daily for
-30 days, weekly for 12 weeks. The script does not delete remote backups.
+retention separately. The approved tiered policy keeps hourly copies for 14 days,
+daily copies for 30 days, and monthly copies for 365 days. These are operational
+retention choices, not a universal regulatory requirement. The script does not
+delete remote backups; expiry is enforced by Backblaze lifecycle rules.
+
+With `tiered_retention: true`, new bundles go to `recovery/hourly/`. The first
+verified bundle of each UTC day/month is also copied to `recovery/daily/YYYY-MM-DD.tar.age`
+and `recovery/monthly/YYYY-MM.tar.age`, respectively. Each copy is immutable and
+read back for comparison. Root-only `retention-points.json` receipts prevent
+duplicate copies; pending receipts preserve the source filename and checksum so
+retries reuse the original ciphertext. Failed tier publication prevents advancing
+the successful-backup timestamp. Local ciphertext is pruned only after success.
+
+During migration, run `promote` to create and verify daily/monthly points from a
+recently verified bundle, without pausing the application. Then run
+`backblaze-lifecycle.py --apply`. The helper changes only lifecycle rules in
+`GTVET-WEL`, retains unrelated rules, rejects conflicting overlapping prefixes,
+and uses the bucket revision to reject concurrent changes. The previous bucket
+settings are saved privately under the backup directory. Existing flat
+`recovery/recovery-*` bundles receive the same expiry as hourly copies.
+
+Each prefix is hidden at its retention age and permanently deleted after one more
+day hidden, subject to the 14-day compliance lock. Backblaze processes lifecycle
+rules daily, so actual removal can occur later. The policy does not override locks
+or legal holds. At the measured 13.04 MB bundle size, steady-state storage is
+estimated at roughly 5–6 GB including daily/monthly copies and deletion lag;
+growth must still be monitored. Older expired recovery points cannot be restored.
 
 Generate a dedicated age identity on an administrator's trusted machine:
 
