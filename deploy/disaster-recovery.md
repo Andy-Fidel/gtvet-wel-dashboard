@@ -40,7 +40,7 @@ No alert destination is supplied by default.
 For UptimeRobot, create a Cron job / Heartbeat monitor and store its unique HTTPS
 URL as `uptimerobot_heartbeat_url` in the protected recovery configuration. The
 monitoring service sends a heartbeat only when the external backup is less than
-90 minutes old, disk usage is below 85%, and the public application is healthy.
+90 minutes old, disk usage is below 85%, and the local application is healthy.
 Use an expected heartbeat interval longer than the monitoring timer's five-minute
 interval (for example, ten minutes), and attach the desired UptimeRobot alert
 contacts. Missing heartbeats cover server outages as well as stale backups.
@@ -85,7 +85,9 @@ In UptimeRobot, create an HTTP monitor for
 `https://wel.gtvets.gov.gh/backup-health`, check every five minutes, and attach the
 operator's existing email/push alert contacts. Backup freshness has a ninety-minute
 threshold; disk pressure and application health are checked as well. A stopped
-monitor service makes this endpoint unhealthy when its status expires. This uses
+monitor service makes this endpoint unhealthy when its status expires. The server
+checks its local application listener; UptimeRobot checks public reachability,
+avoiding reliance on the host being able to reach its own public IP. This uses
 HTTP monitoring without a paid heartbeat monitor.
 
 For the approved Backblaze bucket `GTVET-WEL`, use the `recovery/` prefix.

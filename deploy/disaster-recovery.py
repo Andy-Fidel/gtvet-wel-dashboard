@@ -210,11 +210,13 @@ def monitor(cfg):
     if usage.used / usage.total > 0.85:
         failures.append('Backup filesystem is over 85% full')
     try:
-        with urllib.request.urlopen('https://wel.gtvets.gov.gh/health', timeout=15) as response:
+        # UptimeRobot checks public reachability; this host cannot reliably loop
+        # through its public IP, so monitor the local application listener here.
+        with urllib.request.urlopen('http://127.0.0.1:5001/health', timeout=15) as response:
             if json.load(response).get('status') != 'ok':
                 raise ValueError('Unhealthy application')
     except Exception:
-        failures.append('Public application health check failed')
+        failures.append('Application health check failed')
     public_status = cfg.get('public_status_file')
     if public_status:
         path = Path(public_status)

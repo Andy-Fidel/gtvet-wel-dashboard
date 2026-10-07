@@ -1,5 +1,5 @@
 [Unit]
-Description=Check GTVET backup freshness, disk usage and public health
+Description=Check GTVET backup freshness, disk usage and application health
 After=network-online.target
 ConditionPathExists=/etc/gtvet-wel/recovery.json
 
