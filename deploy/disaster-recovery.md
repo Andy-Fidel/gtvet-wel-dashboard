@@ -46,6 +46,29 @@ interval (for example, ten minutes), and attach the desired UptimeRobot alert
 contacts. Missing heartbeats cover server outages as well as stale backups.
 Heartbeat availability depends on the UptimeRobot account plan; do not enable
 scheduled write pauses until the backup cadence and alert destination are agreed.
+Install `configure-uptimerobot.py` as `/usr/local/sbin/gtvet-configure-uptimerobot`
+(0750) and run it through an interactive SSH terminal with `sudo` to enter that
+URL without exposing it in chat or shell history. Then run the recovery monitor
+once and verify the UptimeRobot monitor receives a heartbeat before enabling
+`gtvet-recovery-monitor.timer`.
+
+### First production bundle verified, 7 October 2026
+
+`recovery-20261007T140430998539Z.tar.age` was uploaded to Backblaze and read back
+for comparison. Its encrypted size was 13,038,888 bytes; the application pause
+was 8.61 seconds and the full operation took 46.23 seconds. The Mac recovery
+identity decrypted it successfully. All manifest checksums passed, the MongoDB
+gzip stream was read successfully, and the uploads/configuration archives were
+checked without extracting their contents. Temporary decrypted data was removed.
+This verifies decryption and archive integrity; it does not constitute a full
+application restore drill. An isolated MongoDB restore was verified previously.
+
+The private identity is on the operator's Mac at
+`~/.local/share/gtvet-wel/recovery/recovery-identity.txt` (0600), alongside its
+public recipient and the official age tools. Only the public recipient was
+copied to production. The custodian must keep a second secure copy of the private
+identity outside this Mac. The hourly backup and monitoring timers remain disabled
+pending approval of the recurring pause and a verified UptimeRobot destination.
 
 For the approved Backblaze bucket `GTVET-WEL`, use the `recovery/` prefix.
 Install `configure-backblaze.py` as `/usr/local/sbin/gtvet-configure-backblaze`
