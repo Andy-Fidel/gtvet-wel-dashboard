@@ -67,8 +67,26 @@ The private identity is on the operator's Mac at
 `~/.local/share/gtvet-wel/recovery/recovery-identity.txt` (0600), alongside its
 public recipient and the official age tools. Only the public recipient was
 copied to production. The custodian must keep a second secure copy of the private
-identity outside this Mac. The hourly backup and monitoring timers remain disabled
-pending approval of the recurring pause and a verified UptimeRobot destination.
+identity outside this Mac. The hourly schedule was subsequently approved and
+enabled on 7 October 2026 at 15 minutes past every hour (Africa/Accra). The measured
+pause is an observation, not a guarantee for future backups or larger datasets.
+
+### Free UptimeRobot backup monitoring
+
+Set `public_status_file` to `/var/lib/gtvet-wel-backup-health/status.json` and enable
+`gtvet-recovery-monitor.timer`. Every five minutes the monitor publishes only a
+health flag and check timestamp. The application mounts this dedicated directory
+read-only and serves `/backup-health`: HTTP 200 when checks are healthy and fresh,
+HTTP 503 otherwise. Missing, malformed, future-dated or more than twelve-minute-old
+monitor results fail closed. No backup names, paths, credentials, or data are
+included in the response; caching is disabled.
+
+In UptimeRobot, create an HTTP monitor for
+`https://wel.gtvets.gov.gh/backup-health`, check every five minutes, and attach the
+operator's existing email/push alert contacts. Backup freshness has a ninety-minute
+threshold; disk pressure and application health are checked as well. A stopped
+monitor service makes this endpoint unhealthy when its status expires. This uses
+HTTP monitoring without a paid heartbeat monitor.
 
 For the approved Backblaze bucket `GTVET-WEL`, use the `recovery/` prefix.
 Install `configure-backblaze.py` as `/usr/local/sbin/gtvet-configure-backblaze`

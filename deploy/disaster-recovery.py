@@ -26,10 +26,10 @@ def run(args, timeout=300):
     return result.stdout.decode().strip()
 
 
-def write_json(path, value):
+def write_json(path, value, mode=0o600):
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value, indent=2) + '\n')
-    temporary.chmod(0o600)
+    temporary.chmod(mode)
     temporary.replace(path)
 
 
@@ -215,6 +215,15 @@ def monitor(cfg):
                 raise ValueError('Unhealthy application')
     except Exception:
         failures.append('Public application health check failed')
+    public_status = cfg.get('public_status_file')
+    if public_status:
+        path = Path(public_status)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        path.parent.chmod(0o755)
+        write_json(path, {
+            'healthy': not failures,
+            'checked_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+        }, mode=0o644)
     if failures:
         print(json.dumps({'event': 'recovery_monitor_failed', 'failures': failures}), file=sys.stderr)
         webhook = cfg.get('alert_webhook')
