@@ -26,6 +26,23 @@ Install `systemd/mongod.service.d/gtvet-wel.conf` under
 `/etc/systemd/system/mongod.service.d/` so MongoDB starts after Docker has
 restored the bridge during boot.
 
+## HQ post-deployment diagnostics
+
+HQ users can open **System Administration → System Health** after deploying the
+new page. See [System health](system-health.md) for check coverage and limitations.
+Build from a clean, committed checkout and record the build identity in the image:
+
+```bash
+test -z "$(git -C /opt/gtvet-wel status --porcelain)" && \
+APP_COMMIT="$(git -C /opt/gtvet-wel rev-parse HEAD)" \
+APP_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+docker compose --project-directory /opt/gtvet-wel/deploy build app
+```
+
+Then recreate the app container using the existing deployment procedure and check
+the HQ page. Missing build metadata is reported explicitly instead of guessing
+which commit is running.
+
 ## Database backups
 
 Install `mongodb-backup.sh` as `/usr/local/sbin/gtvet-mongodb-backup` and the two

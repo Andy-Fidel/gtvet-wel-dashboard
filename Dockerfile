@@ -8,6 +8,10 @@ RUN npm run build --prefix client
 
 FROM node:22-bookworm-slim AS runtime
 
+ARG APP_COMMIT=unknown
+ARG APP_BUILD_TIME=unknown
+ENV APP_COMMIT=$APP_COMMIT APP_BUILD_TIME=$APP_BUILD_TIME
+
 WORKDIR /app
 ENV NODE_ENV=production
 

@@ -1,5 +1,21 @@
 [
   {
+    "id": "2026-10-07-hq-system-health",
+    "date": "2026-10-07",
+    "title": "System health at a glance",
+    "summary": "HQ teams can check the portal’s services after a deployment and identify what needs attention.",
+    "changes": [
+      {
+        "kind": "New",
+        "title": "Check the portal after a deployment",
+        "body": "Open System Health to review the API, database, background notification queue, file storage, push, email, backups and running app version. Each check explains its result and next step. Refresh the checks or download a report. Offline or outdated results are clearly marked; diagnostics do not send test messages.",
+        "audience": "HQ teams",
+        "roles": ["SuperAdmin", "HQManager", "HQStaff"],
+        "action": { "label": "Open System Health", "path": "/system-health" }
+      }
+    ]
+  },
+  {
     "id": "2026-10-06-field-tools-and-offline-sync",
     "date": "2026-10-06",
     "title": "Safer offline work and easier form setup",

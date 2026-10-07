@@ -53,6 +53,7 @@ const HQ_NAV_GROUPS = [
     label: 'System Administration',
     items: [
       { to: '/settings', label: 'Settings', icon: Settings2 },
+      { to: '/system-health', label: 'System Health', icon: Activity },
       { to: '/offline-sync', label: 'Offline Sync', icon: WifiOff },
     ],
   },

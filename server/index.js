@@ -250,7 +250,15 @@ const startWorker = async () => {
         );
         if (lease) await processDueNotifications();
         await processPendingNotificationDeliveries();
-      } catch (error) { console.error('Notification processing failed:', error); }
+        await NotificationSchedule.updateOne({ key: 'delivery-worker-health' }, {
+          $set: { lastCompletedAt: new Date() }, $setOnInsert: { nextRunAt: new Date(0) },
+        }, { upsert: true });
+      } catch (error) {
+        console.error('Notification processing failed:', error);
+        await NotificationSchedule.updateOne({ key: 'delivery-worker-health' }, {
+          $set: { lastFailedAt: new Date() }, $setOnInsert: { nextRunAt: new Date(0) },
+        }, { upsert: true }).catch(() => console.error('Unable to record notification worker health'));
+      }
       finally { notificationsRunning = false; }
     };
     void processNotifications();

@@ -64,6 +64,7 @@ import { logAuditEvent } from '../utils/audit.js';
 import { canAccessSupportTicket, isSupportResponder } from '../utils/supportAccess.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
+import { systemHealthHandler } from '../utils/systemHealth.js';
 
 const router = express.Router();
 const ADMIN_ROLES = ['Admin', 'RegionalAdmin', 'SuperAdmin'];
@@ -81,6 +82,7 @@ router.use((req, res, next) => {
 });
 
 const DASHBOARD_CACHE_TTL_MS = Number(process.env.DASHBOARD_CACHE_TTL_MS || 60 * 1000);
+router.get('/system-health', requireRole('SuperAdmin', 'HQManager', 'HQStaff'), systemHealthHandler);
 const dashboardCache = new LRUCache({ max: 500, ttl: DASHBOARD_CACHE_TTL_MS });
 
 const getScopedCacheKey = (prefix, user, extras = '') => [

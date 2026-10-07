@@ -41,6 +41,7 @@ export function Navbar() {
       case '/semester-reports': return 'Semester Reports';
       case '/users': return 'User Management';
       case '/system-overview': return 'System Overview';
+      case '/system-health': return 'System Health';
       case '/academic-calendar': return 'Reporting Calendar';
       case '/guardian-dashboard': return 'Guardian Portal';
       case '/partner-dashboard': return 'Partner Portal';

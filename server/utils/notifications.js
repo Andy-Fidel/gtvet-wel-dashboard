@@ -9,7 +9,8 @@ const preferenceByType = {
   support: 'supportUpdates',
 };
 const channels = ['push', 'whatsApp'];
-const maxAttempts = 5;
+export const NOTIFICATION_MAX_ATTEMPTS = 5;
+const maxAttempts = NOTIFICATION_MAX_ATTEMPTS;
 const retryDelay = (attempt) => Math.min(60 * 60 * 1000, 30 * 1000 * 2 ** (attempt - 1));
 
 async function deliverChannel(notification, channel) {

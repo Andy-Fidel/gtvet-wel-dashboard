@@ -44,6 +44,7 @@ const OfflineSync = lazy(() => import('@/pages/OfflineSync'));
 const Vacancies = lazy(() => import('@/pages/Vacancies'));
 const PartnerVacancies = lazy(() => import('@/pages/PartnerVacancies'));
 const WhatsNew = lazy(() => import('@/pages/WhatsNew'));
+const SystemHealth = lazy(() => import('@/pages/SystemHealth'));
 
 const VACANCY_VIEW_ROLES = ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'] as const;
 
@@ -239,6 +240,11 @@ function App() {
                       <SuperAdminDashboard />
                     </Suspense>
                   </ErrorBoundary>
+                </ProtectedRoute>
+              } />
+              <Route path="system-health" element={
+                <ProtectedRoute requiredRoles={['SuperAdmin', 'HQManager', 'HQStaff']}>
+                  <ErrorBoundary><Suspense fallback={<PageSkeleton />}><SystemHealth /></Suspense></ErrorBoundary>
                 </ProtectedRoute>
               } />
               <Route path="hq-industry-partners" element={

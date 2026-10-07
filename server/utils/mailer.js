@@ -29,6 +29,19 @@ export const isMailerConfigured = () => smtpConfigured;
 
 export const verifyMailerConnection = async () => assertMailerConfigured().verify();
 
+// Diagnostics use a separate, bounded connection and never send a message.
+export const verifyMailerDiagnostics = async () => {
+  assertMailerConfigured();
+  const probe = nodemailer.createTransport({
+    host: process.env.SMTP_HOST, port: smtpPort, secure: smtpSecure,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    connectionTimeout: 3000, greetingTimeout: 3000, socketTimeout: 3000, dnsTimeout: 3000,
+    logger: false, debug: false,
+  });
+  try { return await probe.verify(); }
+  finally { probe.close(); }
+};
+
 const assertMailerConfigured = () => {
   if (!transporter) {
     const error = new Error('Email delivery is not configured on this server');
