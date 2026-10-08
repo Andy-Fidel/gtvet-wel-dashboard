@@ -45,6 +45,7 @@ const GPS_STATUS_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#3b82f6', '#64748b'
 const ATTENDANCE_COLORS = ['#10b981', '#ef4444', '#3b82f6', '#f59e0b']
 const RATING_COLORS = ['#10b981', '#f59e0b', '#ef4444']
 type OversightSection = 'overview' | 'exceptions' | 'records'
+const verificationLabel = (visit: { locationVerified?: string; verificationLocationType?: string }) => visit.locationVerified === 'Verified' && visit.verificationLocationType === 'Town' ? 'Within town radius' : visit.locationVerified || 'No GPS'
 
 export type MonitoringVisit = {
     _id: string
@@ -56,6 +57,9 @@ export type MonitoringVisit = {
     keyObservations: string
     issuesIdentified: string
     actionRequired: string
+    verificationLocationType?: string
+    verificationRadiusMetres?: number
+    verificationTownName?: string
     locationVerified?: string
     gpsReviewStatus?: string
     gpsExceptionReason?: string
@@ -193,7 +197,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
       const status = row.original.locationVerified || 'No GPS';
       const dist = row.original.distanceFromSite;
       if (status === 'Verified') return (
-        <Badge className="bg-emerald-100 text-emerald-700 border-0 rounded-lg font-bold gap-1"><ShieldCheck className="h-3 w-3" /> Verified</Badge>
+        <Badge className="bg-emerald-100 text-emerald-700 border-0 rounded-lg font-bold gap-1"><ShieldCheck className="h-3 w-3" /> {verificationLabel(row.original)}</Badge>
       );
       if (status === 'Unverified') return (
         <div className="space-y-0.5">
@@ -1190,9 +1194,10 @@ export default function MonitoringVisits() {
                                 <div className="rounded-2xl border border-gray-100 p-4">
                                     <p className="text-xs font-black uppercase tracking-wider text-gray-400">GPS evidence</p>
                                     <div className="mt-2 flex flex-wrap gap-2">
-                                        <Badge className="border-0 bg-slate-100 text-slate-700">{viewingVisit.locationVerified || 'No GPS'}</Badge>
+                                        <Badge className="border-0 bg-slate-100 text-slate-700">{verificationLabel(viewingVisit)}</Badge>
                                         <Badge className="border-0 bg-blue-50 text-blue-700">{viewingVisit.gpsReviewStatus || 'Pending review'}</Badge>
-                                        {viewingVisit.distanceFromSite ? <Badge className="border-0 bg-rose-50 text-rose-700">{(viewingVisit.distanceFromSite / 1000).toFixed(1)} km from site</Badge> : null}
+                                        {viewingVisit.verificationLocationType && <Badge className="border-0 bg-blue-50 text-blue-700">{viewingVisit.verificationLocationType === 'Town' ? `Town: ${viewingVisit.verificationTownName || 'Selected town'} · 5 km radius` : viewingVisit.verificationLocationType === 'Actual' ? 'Actual workplace · 500 m radius' : 'Operating area / review'}</Badge>}
+                                        {viewingVisit.distanceFromSite ? <Badge className="border-0 bg-rose-50 text-rose-700">{(viewingVisit.distanceFromSite / 1000).toFixed(1)} km from reference point</Badge> : null}
                                     </div>
                                     {viewingVisit.gpsExceptionReason ? <p className="mt-3 text-sm text-gray-700"><span className="font-bold">Exception reason:</span> {viewingVisit.gpsExceptionReason}</p> : null}
                                 </div>
@@ -1250,9 +1255,10 @@ export default function MonitoringVisits() {
                                 <p className="font-bold text-gray-900">{gpsReviewVisit.learner?.name} · {gpsReviewVisit.learner?.trackingId}</p>
                                 <p className="text-sm text-gray-500 mt-1">{gpsReviewVisit.learner?.placement?.companyName || "No placement company"} · {gpsReviewVisit.visitType} visit</p>
                                 <div className="mt-3 flex flex-wrap gap-2">
-                                    <Badge className="bg-gray-900 text-white border-0">{gpsReviewVisit.locationVerified || 'No GPS'}</Badge>
+                                    <Badge className="bg-gray-900 text-white border-0">{verificationLabel(gpsReviewVisit)}</Badge>
                                     <Badge className="bg-slate-100 text-slate-700 border-slate-200">{gpsReviewVisit.gpsReviewStatus || 'PendingReview'}</Badge>
-                                    {gpsReviewVisit.distanceFromSite ? <Badge className="bg-rose-100 text-rose-700 border-rose-200">{(gpsReviewVisit.distanceFromSite / 1000).toFixed(1)}km from site</Badge> : null}
+                                    {gpsReviewVisit.verificationLocationType && <Badge className="border-0 bg-blue-50 text-blue-700">{gpsReviewVisit.verificationLocationType === 'Town' ? `Town: ${gpsReviewVisit.verificationTownName || 'Selected town'} · 5 km radius` : gpsReviewVisit.verificationLocationType === 'Actual' ? 'Actual workplace · 500 m radius' : 'Operating area / review'}</Badge>}
+                                    {gpsReviewVisit.distanceFromSite ? <Badge className="bg-rose-100 text-rose-700 border-rose-200">{(gpsReviewVisit.distanceFromSite / 1000).toFixed(1)}km from reference point</Badge> : null}
                                 </div>
                                 {gpsReviewVisit.gpsExceptionReason ? (
                                     <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">

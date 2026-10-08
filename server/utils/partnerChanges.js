@@ -7,7 +7,7 @@ import { partnerVisibilityFilter, partnerRegionMatch } from './partnerVisibility
 import { notifyUsers } from './notifications.js';
 import { logAuditEvent } from './audit.js';
 import { runPlacementOperation } from './placementWorkflow.js';
-import { hasCoordinates, isFlexibleWorksite } from './workplaceCoordinates.js';
+import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, coordinateStatus } from './workplaceCoordinates.js';
 
 export const partnerChangeFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'coordinates', 'approximateLocation', 'partnerType', 'operatingModel', 'locationVerificationNotes', 'ghanaPostGps', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'programs', 'mouDocumentUrl'];
 const institutionRoles = ['Admin', 'Manager', 'Staff'];
@@ -42,7 +42,7 @@ export function normalizePartnerChanges(input) {
       result[key] = normalizeApproximateLocation(value);
     } else if (key === 'coordinates') {
       if (!value || typeof value.lat !== 'number' || typeof value.lng !== 'number' || !Number.isFinite(value.lat) || !Number.isFinite(value.lng) || Math.abs(value.lat) > 90 || Math.abs(value.lng) > 180) fail('Provide valid latitude and longitude.');
-      result[key] = { lat: value.lat, lng: value.lng };
+      result[key] = normalizeCoordinates(value);
     } else if (key === 'partnerType') {
       if (!['RegisteredCompany', 'MasterCraftPerson', 'Government', 'NGO', 'Other'].includes(value)) fail('Select a valid partner type.');
       result[key] = value;
@@ -104,7 +104,7 @@ async function proposal(req, partner) {
   if (Object.hasOwn(proposed, 'coordinates') || Object.hasOwn(proposed, 'operatingModel')) {
     const coordinates = proposed.coordinates ?? partner.coordinates;
     const operatingModel = proposed.operatingModel ?? partner.operatingModel ?? 'FixedSite';
-    proposed.locationVerificationStatus = hasCoordinates(coordinates) ? 'GPSVerified' : isFlexibleWorksite(operatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
+    proposed.locationVerificationStatus = hasCoordinates(coordinates) ? coordinateStatus(coordinates) : isFlexibleWorksite(operatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
     original.locationVerificationStatus = partner.locationVerificationStatus ?? 'PendingGPS';
   }
   if (!Object.keys(proposed).length) fail('Change at least one partner detail.');

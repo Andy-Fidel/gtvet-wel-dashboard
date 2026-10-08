@@ -132,6 +132,7 @@ export function HQPartnerDetailsDialog({
                     <p><span className="font-bold text-slate-800">Address:</span> {display(partner.location)}</p>
                     {partner.approximateLocation && <p><span className="font-bold text-slate-800">Approximate town location:</span> {partner.approximateLocation.name} ({partner.approximateLocation.lat}, {partner.approximateLocation.lng}) · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" className="underline">© OpenStreetMap contributors</a></p>}
                     <p><span className="font-bold text-slate-800">GhanaPost GPS:</span> {display(partner.ghanaPostGps)}</p>
+                    <p><span className="font-bold text-slate-800">Location type:</span> {partner.coordinates?.precision === 'Town' ? 'Town (approximate 5 km radius)' : 'Actual workplace (500 m radius)'}</p>
                     <p><span className="font-bold text-slate-800">Coordinates:</span> {partner.coordinates?.lat != null && partner.coordinates?.lng != null ? `${partner.coordinates.lat}, ${partner.coordinates.lng}` : 'Pending capture'}</p>
                     <p><span className="font-bold text-slate-800">Verification:</span> {display(partner.locationVerificationStatus).replace(/([a-z])([A-Z])/g, '$1 $2')}</p>
                     {partner.locationVerificationNotes ? <p className="rounded-xl bg-slate-50 p-3">{partner.locationVerificationNotes}</p> : null}

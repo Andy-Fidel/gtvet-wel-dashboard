@@ -239,6 +239,11 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
           })()
         )}
 
+        <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+          <strong>One location check for every visit</strong>
+          {selectedLearner?.monitoringLocation?.coordinates && <p>{selectedLearner.monitoringLocation.coordinates.precision === 'Town' ? `Selected town: ${selectedLearner.monitoringLocation.coordinates.townName} · approximate 5 km radius` : `Actual workplace: ${selectedLearner.monitoringLocation.companyName || 'Registered location'} · 500 m radius`}</p>}
+          <p>Your GPS is compared with the location selected during partner registration: 500 m for an actual workplace or an approximate 5 km radius for a town. Visits outside the area remain available for review.</p>
+        </div>
         {/* GPS Status Indicator */}
         {!initialData?._id && (
           <div className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold ${
@@ -351,8 +356,8 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
             )} />
             <FormField control={form.control} name="gpsExceptionReason" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-sm font-semibold text-gray-900">GPS Exception Reason</FormLabel>
-                  <FormControl><Textarea placeholder="Required if GPS is denied, unavailable, too far from site, or no placement coordinates exist." {...field} /></FormControl>
+                  <FormLabel className="text-sm font-semibold text-gray-900">Location explanation (if needed)</FormLabel>
+                  <FormControl><Textarea placeholder="Explain if GPS is unavailable, the visit is outside the selected workplace or town area, or a location reference is missing." {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />

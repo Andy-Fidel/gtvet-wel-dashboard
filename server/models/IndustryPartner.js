@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { workplaceCoordinateSchema } from './WorkplaceLocation.js';
 import { approximateLocationSchema } from './TownLookup.js';
 
 const partnerChangeSchema = new mongoose.Schema({
@@ -29,7 +30,7 @@ const industryPartnerSchema = new mongoose.Schema({
   town: { type: String },
   approximateLocation: { type: approximateLocationSchema, default: null },
   location: { type: String },
-  coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
+  coordinates: { type: workplaceCoordinateSchema, default: undefined },
   partnerType: {
     type: String,
     enum: ['RegisteredCompany', 'MasterCraftPerson', 'Government', 'NGO', 'Other'],
@@ -42,7 +43,7 @@ const industryPartnerSchema = new mongoose.Schema({
   },
   locationVerificationStatus: {
     type: String,
-    enum: ['PendingGPS', 'GPSVerified', 'NotApplicableMobile', 'ExceptionApproved'],
+    enum: ['PendingGPS', 'GPSVerified', 'TownSelected', 'NotApplicableMobile', 'ExceptionApproved'],
     default: 'PendingGPS',
   },
   locationVerificationNotes: { type: String, default: '', maxlength: 3000 },

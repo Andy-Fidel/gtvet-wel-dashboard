@@ -50,7 +50,7 @@ import { PartnerSlotAllocation } from '../models/PartnerSlotAllocation.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { decoratePartnerCapacities, partnerCapacityAt } from '../utils/partnerCapacity.js';
 import { isPartnerSector } from '../utils/partnerTaxonomy.js';
-import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, locationCheck, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
+import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates, coordinateStatus, registeredCoordinates, monitoringLocationCheck } from '../utils/workplaceCoordinates.js';
 import { getPartnerDependencySummary, getPartnerDeletionBlockers } from '../utils/partnerRegistry.js';
 import { sendPlacementApprovalEmail, sendReportStatusEmail, sendHQIndustryPartnerSubmissionEmail, isMailerConfigured } from '../utils/mailer.js';
 import bcrypt from 'bcryptjs';
@@ -4368,7 +4368,7 @@ router.get('/monitoring-visits', async (req, res) => {
       if (req.query.gpsReviewStatus) visitFilter.gpsReviewStatus = req.query.gpsReviewStatus;
 
       const visitsQuery = MonitoringVisit.find(visitFilter)
-        .select('visitDate visitType attendanceStatus performanceRating keyObservations issuesIdentified actionRequired locationVerified gpsReviewStatus gpsExceptionReason gpsReviewComment gpsReviewedAt distanceFromSite learner institution isDelegatedVisit delegatedFromInstitution createdAt updatedAt')
+        .select('visitDate visitType attendanceStatus performanceRating keyObservations issuesIdentified actionRequired locationVerified gpsReviewStatus gpsExceptionReason gpsReviewComment gpsReviewedAt distanceFromSite verificationLocationType verificationRadiusMetres verificationTownName referenceCoordinates learner institution isDelegatedVisit delegatedFromInstitution createdAt updatedAt')
         .populate({
             path: 'learner',
             select: 'firstName middleName lastName name trackingId program placement',
@@ -4572,13 +4572,15 @@ const canMutateMonitoringVisit = (user, visit, action = 'update') => {
 };
 
 const determineMonitoringVisitVerification = async ({ learnerId, placementId, delegateId, submittedLocation, gpsExceptionReason = '' }) => {
-    const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : { status: 'Active' }), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates worksiteMode locationVerificationStatus');
+    if (typeof gpsExceptionReason !== 'string' || gpsExceptionReason.length > 3000) return { error: 'Provide a location explanation of up to 3000 characters.' };
+    if (submittedLocation != null && (!hasCoordinates(submittedLocation) || (submittedLocation.accuracy != null && (!Number.isFinite(submittedLocation.accuracy) || submittedLocation.accuracy < 0)))) return { error: 'Provide a valid captured GPS location.' };
+    const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : { status: 'Active' }), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates worksiteMode locationVerificationStatus partner').populate('partner', 'coordinates approximateLocation');
+    if (placement && !hasCoordinates(placement.coordinates)) placement.coordinates = registeredCoordinates(placement.partner);
     if (delegateId && !placement) return { error: 'No active delegated placement is available for this learner.' };
-    const result = placement && isFlexibleWorksite(placement.worksiteMode) && hasCoordinates(submittedLocation)
-        ? { locationVerified: 'Verified', gpsReviewStatus: 'Verified', distanceFromSite: null }
-        : locationCheck(submittedLocation, placement?.coordinates);
+    const result = monitoringLocationCheck(submittedLocation, placement);
     if (!placement && hasCoordinates(submittedLocation)) result.locationVerified = 'No Placement';
     if (!hasCoordinates(submittedLocation) && !gpsExceptionReason?.trim()) return { error: 'A GPS exception reason is required when GPS is unavailable.' };
+    if (['Unverified', 'Site coordinates missing', 'No Placement'].includes(result.locationVerified) && !gpsExceptionReason?.trim()) return { error: 'Explain why the visit is outside the selected location or why no location reference is available. It can then be saved for review.' };
     return { ...result, placement: placement?._id, gpsCapturedAt: hasCoordinates(submittedLocation) ? new Date() : undefined };
 };
 
@@ -4628,6 +4630,10 @@ router.post('/monitoring-visits', userAssignmentMutation(async (req, res) => {
         const newVisit = new MonitoringVisit({
           ...visitData,
           submittedLocation: submittedLocation || undefined,
+          verificationLocationType: verification.verificationLocationType,
+          verificationRadiusMetres: verification.verificationRadiusMetres,
+          verificationTownName: verification.verificationTownName,
+          referenceCoordinates: verification.referenceCoordinates,
           locationVerified: verification.locationVerified,
           distanceFromSite: verification.distanceFromSite,
           gpsReviewStatus: verification.gpsReviewStatus,
@@ -4769,7 +4775,7 @@ router.get('/monitoring-visits/anomalies', async (req, res) => {
             .map(v => ({
                 type: 'location_mismatch',
                 severity: 'high',
-                message: `Visit submitted ${((v.distanceFromSite || 0) / 1000).toFixed(1)}km from placement site`,
+                message: `Visit submitted ${((v.distanceFromSite || 0) / 1000).toFixed(1)}km from ${v.verificationLocationType === 'Town' ? 'selected town' : 'workplace'} reference point`,
                 visit: v,
                 date: v.createdAt,
             }));
@@ -4837,6 +4843,7 @@ router.put('/monitoring-visits/:id', async (req, res) => {
         existingVisit.actionRequired = nextPayload.actionRequired;
         existingVisit.gpsExceptionReason = nextPayload.gpsExceptionReason;
         existingVisit.submittedLocation = nextPayload.submittedLocation;
+        for (const key of ['verificationLocationType', 'verificationRadiusMetres', 'verificationTownName', 'referenceCoordinates']) existingVisit[key] = verification[key];
         existingVisit.locationVerified = verification.locationVerified;
         existingVisit.distanceFromSite = verification.distanceFromSite;
         existingVisit.gpsReviewStatus = verification.gpsReviewStatus;
@@ -7641,9 +7648,18 @@ router.get('/learners/options', async (req, res) => {
       .limit(limit)
       .lean();
 
+    const monitoringPlacements = req.query.purpose === 'monitoring' && learners.length
+      ? await Placement.find({ learner: { $in: learners.map(learner => learner._id) }, status: 'Active' })
+        .select('learner coordinates worksiteMode companyName location partner').populate('partner', 'coordinates approximateLocation').lean()
+      : [];
+    const monitoringLocations = new Map(monitoringPlacements.map(placement => [String(placement.learner), {
+      coordinates: hasCoordinates(placement.coordinates) ? placement.coordinates : registeredCoordinates(placement.partner),
+      worksiteMode: placement.worksiteMode, companyName: placement.companyName, location: placement.location,
+    }]));
     res.json(learners.map((learner) => ({
       ...learner,
       name: buildLearnerDisplayName(learner),
+      ...(req.query.purpose === 'monitoring' ? { monitoringLocation: monitoringLocations.get(String(learner._id)) || null } : {}),
     })));
   } catch (error) {
     res.status(500).json({ message: 'Server Error' });
@@ -9882,7 +9898,7 @@ async function preparePlacementActivation(req, input, ids, excludeId = null) {
     const adminLocationApproval = req.user.role === 'Admin' && input.approveLocationException === true;
     if (coordinates) {
         data.coordinates = coordinates;
-        data.locationVerificationStatus = 'GPSVerified';
+        data.locationVerificationStatus = coordinateStatus(coordinates);
         data.locationVerificationDueDate = undefined;
     } else if (adminLocationApproval && flexibleWorksite) {
         data.coordinates = undefined;
@@ -10008,12 +10024,12 @@ export async function recheckPendingPlacementVisits(placement, req) {
     const visits = await MonitoringVisit.find({ learner: placement.learner, institution: placement.institution,
         gpsReviewStatus: 'PendingReview', $or: association });
     for (const visit of visits) {
-        const verification = isFlexibleWorksite(placement.worksiteMode) && hasCoordinates(visit.submittedLocation)
-            ? { locationVerified: 'Verified', gpsReviewStatus: 'Verified', distanceFromSite: null }
-            : locationCheck(visit.submittedLocation, placement.coordinates);
+        const verification = monitoringLocationCheck(visit.submittedLocation, placement);
         const before = { locationVerified: visit.locationVerified, gpsReviewStatus: visit.gpsReviewStatus, distanceFromSite: visit.distanceFromSite };
+        const unset = Object.fromEntries(Object.entries(verification).filter(([, value]) => value === undefined).map(([key]) => [key, 1]));
+        const fields = Object.fromEntries(Object.entries(verification).filter(([, value]) => value !== undefined));
         const updated = await MonitoringVisit.findOneAndUpdate({ _id: visit._id, gpsReviewStatus: 'PendingReview' },
-            { $set: { ...verification, placement: placement._id } }, { returnDocument: 'after' });
+            { $set: { ...fields, placement: placement._id }, ...(Object.keys(unset).length ? { $unset: unset } : {}) }, { returnDocument: 'after' });
         if (updated) await logAuditEvent({ req, action: 'UPDATE', entityType: 'MonitoringVisit', entityId: visit._id,
             summary: 'Rechecked pending visit against updated workplace coordinates', before, after: verification,
             metadata: { placementId: placement._id, coordinates: placement.coordinates } });
@@ -10055,7 +10071,7 @@ router.put('/placements/:id', userAssignmentMutation(async (req, res) => {
             if (locationChange) {
                 if (nextCoordinates) {
                     fields.coordinates = nextCoordinates;
-                    fields.locationVerificationStatus = 'GPSVerified';
+                    fields.locationVerificationStatus = coordinateStatus(nextCoordinates);
                     fields.locationVerificationDueDate = undefined;
                 } else if (adminLocationApproval) {
                     fields.coordinates = undefined;
@@ -13749,7 +13765,7 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
         const operatingModel = req.body.operatingModel || 'FixedSite';
         const locationVerificationNotes = String(req.body.locationVerificationNotes || '').trim();
         const locationVerificationStatus = coordinates
-            ? 'GPSVerified'
+            ? coordinateStatus(coordinates)
             : isFlexibleWorksite(operatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
         if (isFlexibleWorksite(operatingModel) && !locationVerificationNotes) {
             return res.status(400).json({ message: 'Describe the operating area and alternative location evidence for mobile or no-premises partners.' });
@@ -13898,7 +13914,7 @@ const updateIndustryPartner = (resubmit = false) => async (req, res) => {
         const resolvedCoordinates = Object.hasOwn(update, 'coordinates') ? update.coordinates : existingPartner.coordinates;
         const resolvedOperatingModel = update.operatingModel || existingPartner.operatingModel || 'FixedSite';
         update.locationVerificationStatus = hasCoordinates(resolvedCoordinates)
-            ? 'GPSVerified'
+            ? coordinateStatus(resolvedCoordinates)
             : isFlexibleWorksite(resolvedOperatingModel) ? 'NotApplicableMobile' : 'PendingGPS';
         if (isFlexibleWorksite(resolvedOperatingModel) && !(update.locationVerificationNotes ?? existingPartner.locationVerificationNotes)?.trim()) {
             return res.status(400).json({ message: 'Describe the operating area and alternative location evidence for mobile or no-premises partners.' });
@@ -13908,9 +13924,11 @@ const updateIndustryPartner = (resubmit = false) => async (req, res) => {
             update.approvalRequestedAt = new Date();
             update.approvalComment = '';
         }
+        const unsetFields = resubmit ? { approvalReviewedBy: 1, approvalReviewedAt: 1 } : {};
+        if (Object.hasOwn(update, 'coordinates') && !update.coordinates) { delete update.coordinates; unsetFields.coordinates = 1; }
         const updatedPartner = await IndustryPartner.findOneAndUpdate(
             { $and: [{ _id: req.params.id, ...partnerScope, approvalStatus: existingPartner.approvalStatus ?? null }, approvalVersionFilter(existingPartner.approvalVersion || 0)] },
-            { $set: update, $inc: { approvalVersion: 1 }, ...(resubmit ? { $unset: { approvalReviewedBy: 1, approvalReviewedAt: 1 } } : {}) },
+            { $set: update, $inc: { approvalVersion: 1 }, ...(Object.keys(unsetFields).length ? { $unset: unsetFields } : {}) },
             { returnDocument: 'after', runValidators: true }
         );
         if (!updatedPartner) return res.status(409).json({ message: 'The partner changed while saving. Reload and try again.' });
@@ -14978,7 +14996,7 @@ router.post('/placement-requests', userAssignmentMutation(async (req, res) => {
                 academicYear: placementAcademicYear,
                 coordinates,
                 worksiteMode,
-                locationVerificationStatus: coordinates ? 'GPSVerified' : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
+                locationVerificationStatus: coordinates ? coordinateStatus(coordinates) : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
                 locationVerificationNotes,
                 expectedOperatingArea,
                 worksiteLocation,
@@ -15019,7 +15037,7 @@ router.post('/placement-requests', userAssignmentMutation(async (req, res) => {
 
         const partnerDoc = await IndustryPartner.findOne({ $and: [{ _id: partner, status: 'Active', approvalStatus: 'Approved' }, await partnerVisibilityFilter(req.user)] });
         if (!partnerDoc) return res.status(400).json({ message: 'Select an approved, active partner visible to your institution.' });
-        if (!coordinates && hasCoordinates(partnerDoc.coordinates)) coordinates = normalizeCoordinates(partnerDoc.coordinates);
+        if (!coordinates && registeredCoordinates(partnerDoc)) coordinates = registeredCoordinates(partnerDoc);
         // Submission does not reserve capacity or activate learners. Management activates
         // through the same recoverable workflow used by direct placements and reopening.
         const pending = await PlacementRequest.create({
@@ -15027,7 +15045,7 @@ router.post('/placement-requests', userAssignmentMutation(async (req, res) => {
             requestedSlots: learners.length, placementRegion: placementRegion.trim(),
             academicYear: placementAcademicYear, startDate, endDate, coordinates,
             worksiteMode,
-            locationVerificationStatus: coordinates ? 'GPSVerified' : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
+            locationVerificationStatus: coordinates ? coordinateStatus(coordinates) : isFlexibleWorksite(worksiteMode) ? 'NotApplicableMobile' : 'PendingGPS',
             locationVerificationNotes, expectedOperatingArea,
             worksiteLocation, supervisorName, supervisorPhone, supervisorEmail,
             submittedBy: req.user._id, sourceType: 'InstitutionFound', status: 'Submitted',
@@ -15077,7 +15095,7 @@ router.post('/placement-requests/:id/convert', userAssignmentMutation(async (req
             worksiteMode: req.body.worksiteMode || request.worksiteMode || partner?.operatingModel || 'FixedSite',
             locationVerificationStatus: request.locationVerificationStatus,
         };
-        try { coordinates = normalizeCoordinates(req.body.coordinates ?? request.coordinates ?? partner?.coordinates,
+        try { coordinates = normalizeCoordinates(req.body.coordinates ?? request.coordinates ?? registeredCoordinates(partner),
             !(req.user.role === 'Admin' && req.body.approveLocationException === true) && worksiteRequiresCoordinates({ status: 'Active', ...conversionInput })); }
         catch (error) { return res.status(400).json({ message: error.message }); }
         const key = placementOperationKey({ ...req.user, _id: request.submittedBy }, 'convert', { request: String(request._id) });

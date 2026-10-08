@@ -25,6 +25,7 @@ export interface Learner {
   lastIdmsSyncAt?: string;
   idmsSyncStatus?: 'Linked' | 'Conflict' | 'Error';
   region?: string;
+  monitoringLocation?: { coordinates?: import('@/lib/workplaceCoordinates').WorkplacePoint; worksiteMode?: string; companyName?: string; location?: string } | null;
   hasActivePlacement?: boolean;
   readiness?: {
     isReadyForPlacement: boolean;
@@ -52,7 +53,7 @@ export interface Learner {
 
 /** Industry Partner entity */
 export interface IndustryPartner {
-  coordinates?: { lat?: number; lng?: number };
+  coordinates?: import('@/lib/workplaceCoordinates').WorkplacePoint;
   approximateLocation?: import('@/lib/workplaceCoordinates').TownLocation | null;
   _id: string;
   name: string;
@@ -61,7 +62,7 @@ export interface IndustryPartner {
   location?: string;
   partnerType?: 'RegisteredCompany' | 'MasterCraftPerson' | 'Government' | 'NGO' | 'Other';
   operatingModel?: 'FixedSite' | 'HomeBased' | 'MobileField' | 'MultipleSites' | 'TemporarySite' | 'NoFixedPremises';
-  locationVerificationStatus?: 'PendingGPS' | 'GPSVerified' | 'NotApplicableMobile' | 'ExceptionApproved';
+  locationVerificationStatus?: 'PendingGPS' | 'GPSVerified' | 'TownSelected' | 'NotApplicableMobile' | 'ExceptionApproved';
   locationVerificationNotes?: string;
   ghanaPostGps?: string;
   contactPerson?: string;

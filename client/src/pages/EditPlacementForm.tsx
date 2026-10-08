@@ -22,7 +22,7 @@ import {
 import { useState } from "react"
 import { Loader2, CalendarDays } from "lucide-react"
 import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
-import { readCoordinates } from '@/lib/workplaceCoordinates'
+import { readCoordinates, locationMeta, type LocationMeta, type WorkplacePoint } from '@/lib/workplaceCoordinates'
 import { useAuth } from "@/context/AuthContext"
 import { toast } from "@/lib/toast"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -75,7 +75,7 @@ interface EditPlacementFormProps {
         closureNote?: string;
         startDate?: string | Date;
         endDate?: string | Date;
-        coordinates?: { lat?: number; lng?: number };
+        coordinates?: WorkplacePoint;
     };
 }
 
@@ -84,6 +84,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
   const { authFetch, user } = useAuth()
   const [overrideWelWindow, setOverrideWelWindow] = useState(false)
 
+  const [meta, setMeta] = useState<LocationMeta>(locationMeta(initialData.coordinates))
   // GPS coordinates for the placement site
   const [coordLat, setCoordLat] = useState(String(initialData.coordinates?.lat ?? ''))
   const [coordLng, setCoordLng] = useState(String(initialData.coordinates?.lng ?? ''))
@@ -109,7 +110,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
   async function onSubmit(values: EditPlacementFormValues) {
     setLoading(true)
     try {
-        const coordinates = readCoordinates(coordLat, coordLng, values.status === 'Active')
+        const coordinates = readCoordinates(coordLat, coordLng, values.status === 'Active', meta)
         const url = `/api/placements/${initialData._id}`;
         const response = await authFetch(url, {
             method: 'PUT',
@@ -280,7 +281,7 @@ export function EditPlacementForm({ onSuccess, initialData }: EditPlacementFormP
           )}
         </div>
 
-        <WorkplaceCoordinates lat={coordLat} lng={coordLng} onChange={(a, b) => { setCoordLat(a); setCoordLng(b) }} disabled={loading} />
+        <WorkplaceCoordinates lat={coordLat} lng={coordLng} locationMeta={meta} onChange={(a, b, next) => { setCoordLat(a); setCoordLng(b); if (next) setMeta(next) }} disabled={loading} />
         <p className="text-sm text-gray-600">Required for active placements. Saving coordinates rechecks pending visits using their originally captured locations.</p>
 
          {/* Placement Region (for cross-region delegation) */}

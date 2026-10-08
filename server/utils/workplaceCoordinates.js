@@ -5,7 +5,16 @@ export function hasCoordinates(value) {
 
 export const WORKSITE_MODES = ['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'];
 export const FLEXIBLE_WORKSITE_MODES = ['MobileField', 'NoFixedPremises'];
-export const LOCATION_VERIFICATION_STATUSES = ['PendingGPS', 'GPSVerified', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'];
+export const LOCATION_VERIFICATION_STATUSES = ['PendingGPS', 'GPSVerified', 'TownSelected', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'];
+export const ACTUAL_LOCATION_RADIUS_METRES = 500;
+export const TOWN_LOCATION_RADIUS_METRES = 5000;
+export const coordinateStatus = point => point?.precision === 'Town' ? 'TownSelected' : 'GPSVerified';
+
+export function registeredCoordinates(partner) {
+  if (hasCoordinates(partner?.coordinates)) return normalizeCoordinates(partner.coordinates);
+  const town = partner?.approximateLocation;
+  return hasCoordinates(town) ? normalizeCoordinates({ lat: town.lat, lng: town.lng, precision: 'Town', townName: town.name }) : undefined;
+}
 
 export function isFlexibleWorksite(mode) {
   return FLEXIBLE_WORKSITE_MODES.includes(mode);
@@ -29,6 +38,11 @@ export function normalizeCoordinates(value, required = false) {
   }
   const result = { lat: Number(value.lat), lng: Number(value.lng) };
   if (!hasCoordinates(result)) throw new Error('Latitude must be between -90 and 90; longitude between -180 and 180.');
+  if (value.precision !== undefined && !['Actual', 'Town'].includes(value.precision)) throw new Error('Choose actual workplace or town location.');
+  if (value.precision === 'Town') {
+    if (typeof value.townName !== 'string' || !value.townName.trim() || value.townName.length > 500 || result.lat < 4 || result.lat > 12 || result.lng < -4 || result.lng > 2) throw new Error('Select a valid town location in Ghana.');
+    result.precision = 'Town'; result.townName = value.townName.trim();
+  } else if (value.precision === 'Actual') result.precision = 'Actual';
   return result;
 }
 
@@ -39,6 +53,20 @@ export function locationCheck(location, site) {
   const a = Math.sin(radians(site.lat - location.lat) / 2) ** 2
     + Math.cos(radians(location.lat)) * Math.cos(radians(site.lat)) * Math.sin(radians(site.lng - location.lng) / 2) ** 2;
   const distanceFromSite = 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
-  const verified = distanceFromSite <= 500;
+  const verified = distanceFromSite <= (site.precision === 'Town' ? TOWN_LOCATION_RADIUS_METRES : ACTUAL_LOCATION_RADIUS_METRES);
   return { locationVerified: verified ? 'Verified' : 'Unverified', gpsReviewStatus: verified ? 'Verified' : 'PendingReview', distanceFromSite };
+}
+
+export function monitoringLocationCheck(location, placement) {
+  const site = placement?.coordinates;
+  const flexible = isFlexibleWorksite(placement?.worksiteMode) && !hasCoordinates(site);
+  const result = flexible && hasCoordinates(location)
+    ? { locationVerified: 'Verified', gpsReviewStatus: 'Verified', distanceFromSite: null }
+    : locationCheck(location, site);
+  return { ...result,
+    verificationLocationType: hasCoordinates(site) ? site.precision === 'Town' ? 'Town' : 'Actual' : flexible ? 'OperatingArea' : 'Missing',
+    verificationRadiusMetres: hasCoordinates(site) ? site.precision === 'Town' ? TOWN_LOCATION_RADIUS_METRES : ACTUAL_LOCATION_RADIUS_METRES : null,
+    verificationTownName: site?.precision === 'Town' ? site.townName : undefined,
+    referenceCoordinates: hasCoordinates(site) ? normalizeCoordinates(site) : undefined,
+  };
 }

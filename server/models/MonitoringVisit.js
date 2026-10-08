@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { workplaceCoordinateSchema } from './WorkplaceLocation.js';
 
 const monitoringVisitSchema = new mongoose.Schema({
   visitDate: { type: Date, required: true },
@@ -34,6 +35,10 @@ const monitoringVisitSchema = new mongoose.Schema({
   gpsReviewComment: String,
   gpsReviewedAt: Date,
   gpsReviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  verificationLocationType: { type: String, enum: ['Actual', 'Town', 'OperatingArea', 'Missing'] },
+  verificationRadiusMetres: Number,
+  verificationTownName: String,
+  referenceCoordinates: { type: workplaceCoordinateSchema, default: undefined },
   distanceFromSite: Number,  // metres
   submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 

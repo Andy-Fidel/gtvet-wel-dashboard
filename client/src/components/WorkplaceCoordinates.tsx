@@ -3,14 +3,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/context/AuthContext'
 
-import { type TownLocation } from '@/lib/workplaceCoordinates'
+import { type TownLocation, type LocationMeta } from '@/lib/workplaceCoordinates'
 
 type LocationResult = TownLocation
 
-export function WorkplaceCoordinates({ lat, lng, onChange, disabled = false, townLocation, onTownChange }: {
-  lat: string; lng: string; onChange: (lat: string, lng: string) => void; disabled?: boolean
-  townLocation?: TownLocation | null; onTownChange?: (value: TownLocation | null) => void
+export function WorkplaceCoordinates({ lat, lng, onChange, disabled = false, townLocation, onTownChange, locationMeta = { precision: 'Actual' } }: {
+  lat: string; lng: string; onChange: (lat: string, lng: string, meta?: LocationMeta) => void; disabled?: boolean
+  locationMeta?: LocationMeta; townLocation?: TownLocation | null; onTownChange?: (value: TownLocation | null) => void
 }) {
+  const townMode = locationMeta.precision === 'Town'
   const [error, setError] = useState('')
   const [capturing, setCapturing] = useState(false)
   const { authFetch } = useAuth()
@@ -43,14 +44,18 @@ export function WorkplaceCoordinates({ lat, lng, onChange, disabled = false, tow
     if (!navigator.geolocation) { setError('Location is unavailable. Enter workplace coordinates manually.'); return }
     setCapturing(true); setError('')
     navigator.geolocation.getCurrentPosition(position => {
-      onChange(String(position.coords.latitude), String(position.coords.longitude)); setCapturing(false)
+      onChange(String(position.coords.latitude), String(position.coords.longitude), { precision: 'Actual' }); onTownChange?.(null); setCapturing(false)
     }, () => { setError('Could not capture location. Allow location access or enter coordinates manually.'); setCapturing(false) },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 })
   }
-  return <fieldset disabled={disabled} className="space-y-3 rounded-xl border p-4">
+  return <fieldset disabled={disabled || capturing} className="space-y-3 rounded-xl border p-4">
     <legend className="px-1 text-sm font-semibold">Workplace location</legend>
-    <p className="text-sm text-gray-600">Choose a town for a general location. Capture exact workplace GPS later for visit verification. Use my location only while physically at that site.</p>
-    <div className="space-y-2">
+    <p className="text-sm text-gray-600">Choose the location to use for registration and monitoring. Actual workplaces use a 500 m proximity check; towns use an approximate 5 km radius.</p>
+    <div className="flex flex-wrap gap-4" role="radiogroup" aria-label="Location type">
+      <label className="flex items-center gap-2 text-sm"><input type="radio" name={`${searchId}-mode`} checked={!townMode} onChange={() => { onTownChange?.(null); onChange('', '', { precision: 'Actual' }) }} />Use actual workplace location</label>
+      <label className="flex items-center gap-2 text-sm"><input type="radio" name={`${searchId}-mode`} checked={townMode} onChange={() => onChange(townLocation ? String(townLocation.lat) : '', townLocation ? String(townLocation.lng) : '', { precision: 'Town', townName: townLocation?.name })} />Use town location</label>
+    </div>
+    {townMode && <div className="space-y-2">
       <label htmlFor={searchId} className="text-sm font-medium">Search an area or town in Ghana</label>
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input id={searchId} value={query} maxLength={160} placeholder="e.g. Adenta, Accra or Kumasi, Ashanti" aria-describedby={`${searchId}-hint`} onChange={event => {
@@ -66,22 +71,22 @@ export function WorkplaceCoordinates({ lat, lng, onChange, disabled = false, tow
           <p className="text-sm font-medium">{result.name}</p>
           <p className="text-xs text-gray-600">Approximate town location: {result.lat}, {result.lng}</p>
           <a className="text-sm font-medium text-blue-700 underline" target="_blank" rel="noopener noreferrer" href={`https://www.openstreetmap.org/?mlat=${result.lat}&mlon=${result.lng}#map=13/${result.lat}/${result.lng}`}>View town on map</a>
-        {onTownChange && <Button type="button" variant="outline" className="ml-2" onClick={() => onTownChange(result)}>Use this town</Button>}
+        <Button type="button" variant="outline" className="ml-2" onClick={() => { onTownChange?.(result); onChange(String(result.lat), String(result.lng), { precision: 'Town', townName: result.name }) }}>Use this town</Button>
         </li>)}</ul>}
       </div>}
-    </div>
-    {townLocation && <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
-      <strong>Approximate town location</strong><p>{townLocation.name}</p>
-      <p className="text-xs">{townLocation.lat}, {townLocation.lng} · Used for general location only; not for visit verification.</p>
-      <a className="text-xs underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a>
-      {onTownChange && <Button type="button" variant="ghost" onClick={() => onTownChange(null)}>Remove town location</Button>}
     </div>}
-    <p className="text-sm font-medium">Exact workplace GPS (optional at registration)</p>
+    {townMode && locationMeta.townName && <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
+      <strong>Approximate town location</strong><p>{locationMeta.townName}</p>
+      <p className="text-xs">{lat}, {lng} · Monitoring compares the visitor’s GPS within 5 km of this selected town point.</p>
+      <a className="text-xs underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a>
+      <Button type="button" variant="ghost" onClick={() => { onTownChange?.(null); onChange('', '', { precision: 'Town' }) }}>Remove town location</Button>
+    </div>}
+    <p className="text-sm font-medium">{townMode ? 'Selected town coordinates' : 'Actual workplace coordinates'}</p>
     <div className="grid grid-cols-2 gap-3">
-      <label className="text-sm">Latitude<Input type="number" step="any" min={-90} max={90} value={lat} onChange={event => onChange(event.target.value, lng)} /></label>
-      <label className="text-sm">Longitude<Input type="number" step="any" min={-180} max={180} value={lng} onChange={event => onChange(lat, event.target.value)} /></label>
+      <label className="text-sm">Latitude<Input type="number" readOnly={townMode} step="any" min={-90} max={90} value={lat} onChange={event => onChange(event.target.value, lng)} /></label>
+      <label className="text-sm">Longitude<Input type="number" readOnly={townMode} step="any" min={-180} max={180} value={lng} onChange={event => onChange(lat, event.target.value)} /></label>
     </div>
-    <Button type="button" variant="outline" disabled={capturing || disabled} onClick={capture}>{capturing ? 'Capturing…' : 'Use my location'}</Button>
+    {!townMode && <Button type="button" variant="outline" disabled={capturing || disabled} onClick={capture}>{capturing ? 'Capturing…' : 'Use my location'}</Button>}
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
   </fieldset>
 }

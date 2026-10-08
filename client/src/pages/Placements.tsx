@@ -34,7 +34,7 @@ import { PromptDialog } from "@/components/PromptDialog"
 import { Handshake, Search as SearchIcon, Loader2, X } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
-import { readCoordinates } from '@/lib/workplaceCoordinates'
+import { readCoordinates, locationMeta, registeredPoint, type LocationMeta, type WorkplacePoint } from '@/lib/workplaceCoordinates'
 import { PlacementBatchDetailsDialog, type PlacementBatchDetails } from '@/components/PlacementBatchDetailsDialog'
 
 type DelegateUser = {
@@ -45,7 +45,7 @@ type DelegateUser = {
 };
 
 export type PlacementRequestData = {
-  coordinates?: { lat?: number; lng?: number };
+  coordinates?: WorkplacePoint;
   worksiteMode?: 'FixedSite' | 'HomeBased' | 'MobileField' | 'MultipleSites' | 'TemporarySite' | 'NoFixedPremises';
   locationVerificationStatus?: string;
   locationVerificationNotes?: string;
@@ -66,7 +66,7 @@ export type PlacementRequestData = {
   placementRegion?: string;
   createdAt: string;
   submittedBy: { name: string };
-  partner?: { name: string; sector: string; region: string; totalSlots: number; usedSlots: number; operatingModel?: PlacementRequestData['worksiteMode'] };
+  partner?: { name: string; sector: string; region: string; totalSlots: number; usedSlots: number; operatingModel?: PlacementRequestData['worksiteMode']; coordinates?: WorkplacePoint; approximateLocation?: import('@/lib/workplaceCoordinates').TownLocation | null };
   learners: { _id: string; firstName: string; lastName: string; trackingId: string }[];
   selfSourcedHost?: {
     companyName?: string;
@@ -582,6 +582,7 @@ export default function Placements() {
     const [convertRequest, setConvertRequest] = useState<PlacementRequestData | null>(null)
     const [convertLat, setConvertLat] = useState('')
     const [convertLng, setConvertLng] = useState('')
+    const [convertMeta, setConvertMeta] = useState<LocationMeta>({ precision: 'Actual' })
     const [convertWindowOverride, setConvertWindowOverride] = useState(false)
     const [convertWorksiteMode, setConvertWorksiteMode] = useState<NonNullable<PlacementRequestData['worksiteMode']>>('FixedSite')
     const [convertOperatingArea, setConvertOperatingArea] = useState('')
@@ -592,6 +593,7 @@ export default function Placements() {
 
     const handleConvertSelfSourcedPlacement = (request: PlacementRequestData) => {
         setConvertRequest(request)
+        setConvertMeta(locationMeta(request.coordinates || registeredPoint(request.partner)))
         setConvertWindowOverride(false)
         setConvertLocationApproval(false)
         setConvertWorksiteMode(request.worksiteMode || request.partner?.operatingModel || 'FixedSite')
@@ -599,8 +601,8 @@ export default function Placements() {
         setConvertLocationNotes(request.locationVerificationNotes || request.verificationNotes || '')
         setConvertSupervisorName(request.supervisorName || request.selfSourcedHost?.contactPerson || '')
         setConvertSupervisorPhone(request.supervisorPhone || request.selfSourcedHost?.contactPhone || '')
-        setConvertLat(String(request.coordinates?.lat ?? ''))
-        setConvertLng(String(request.coordinates?.lng ?? ''))
+        setConvertLat(String((request.coordinates || registeredPoint(request.partner))?.lat ?? ''))
+        setConvertLng(String((request.coordinates || registeredPoint(request.partner))?.lng ?? ''))
         setConvertConfirmOpen(true)
     }
 
@@ -612,7 +614,7 @@ export default function Placements() {
                 method: "POST",
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    coordinates: readCoordinates(convertLat, convertLng, !(user?.role === 'Admin' && convertLocationApproval)),
+                    coordinates: readCoordinates(convertLat, convertLng, !(user?.role === 'Admin' && convertLocationApproval), convertMeta),
                     worksiteMode: convertWorksiteMode,
                     expectedOperatingArea: convertOperatingArea,
                     locationVerificationNotes: convertLocationNotes,
@@ -1300,7 +1302,7 @@ export default function Placements() {
                     <DialogHeader><DialogTitle>Activate Placement Request</DialogTitle><DialogDescription>Confirm the worksite and location evidence before creating active placements for {convertRequest?.requestedSlots} learners.</DialogDescription></DialogHeader>
                     <label className="text-sm font-medium">Worksite mode<select className="mt-1 h-10 w-full rounded-md border bg-white px-3" value={convertWorksiteMode} onChange={event => { setConvertWorksiteMode(event.target.value as typeof convertWorksiteMode); setConvertLocationApproval(false) }}><option value="FixedSite">Fixed workshop</option><option value="HomeBased">Home-based</option><option value="MobileField">Mobile / field work</option><option value="MultipleSites">Multiple worksites</option><option value="TemporarySite">Temporary / project site</option><option value="NoFixedPremises">No fixed premises</option></select></label>
                     {['MobileField', 'NoFixedPremises'].includes(convertWorksiteMode) && <div className="grid gap-3 md:grid-cols-2"><label className="text-sm font-medium">Expected operating area<Input className="mt-1" value={convertOperatingArea} onChange={event => setConvertOperatingArea(event.target.value)} /></label><label className="text-sm font-medium">Alternative location evidence<Input className="mt-1" value={convertLocationNotes} onChange={event => setConvertLocationNotes(event.target.value)} /></label><label className="text-sm font-medium">Supervisor name<Input className="mt-1" value={convertSupervisorName} onChange={event => setConvertSupervisorName(event.target.value)} /></label><label className="text-sm font-medium">Supervisor phone<Input className="mt-1" value={convertSupervisorPhone} onChange={event => setConvertSupervisorPhone(event.target.value)} /></label></div>}
-                    <WorkplaceCoordinates lat={convertLat} lng={convertLng} onChange={(a, b) => { setConvertLat(a); setConvertLng(b) }} disabled={Boolean(selfSourcedActionLoading)} />
+                    <WorkplaceCoordinates lat={convertLat} lng={convertLng} locationMeta={convertMeta} onChange={(a, b, next) => { setConvertLat(a); setConvertLng(b); if (next) setConvertMeta(next) }} disabled={Boolean(selfSourcedActionLoading)} />
                     {user?.role === 'Admin' && !convertLat && !convertLng && <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm"><input type="checkbox" checked={convertLocationApproval} onChange={event => setConvertLocationApproval(event.target.checked)} /><span><strong>Approve {['MobileField', 'NoFixedPremises'].includes(convertWorksiteMode) ? 'alternative location evidence' : 'provisional activation'}</strong><span className="block text-xs">{['MobileField', 'NoFixedPremises'].includes(convertWorksiteMode) ? 'Visits will record the encounter location without fixed-radius comparison.' : 'GPS verification will be due within 14 days.'}</span></span></label>}
                     {user?.role === 'Admin' && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={convertWindowOverride} onChange={event => setConvertWindowOverride(event.target.checked)} />Explicitly override WEL calendar timing for this activation. Readiness, capacity, and duplicate-placement checks still apply.</label>}
                     <Button disabled={Boolean(selfSourcedActionLoading)} onClick={() => void confirmConvert()}>Activate Placements</Button>

@@ -1,6 +1,10 @@
 # Approximate town location
 
-Partner registration and rejection corrections can save a selected Ghana town under `approximateLocation` (name, point, OSM object, source and Town precision). Exact workplace `coordinates` and GPS verification status are separate. Town selection never fills the exact GPS inputs or activates a placement; monitoring continues to use exact GPS or the existing provisional/exception review workflow. Editing the town text clears its selected approximate point.
+Partner registration and correction use one location control: actual workplace or town. Both fill `coordinates`. Town points carry `precision: Town` and `townName`; actual points carry `precision: Actual`. Old points without precision retain the actual-workplace interpretation. `approximateLocation` retains OSM attribution metadata where present. Selecting a town satisfies the coordinates requirement; the server records `TownSelected`, rather than claiming exact GPS verification. Requests, activation, edits and transfers preserve the selected precision.
+
+Monitoring uses one server decision function for submission and pending rechecks. Actual workplaces use a 500 m radius; towns use a 5,000 m approximate radius around the selected point. This radius is a policy default, not an administrative town boundary. The chosen type, radius, town and reference coordinates are saved with each visit. Outside-area or missing-reference visits can be submitted with a location explanation for review. A mobile operating area without a fixed point keeps its existing evidence workflow; if a point is selected, the usual radius check applies.
+
+Existing placement coordinates remain the reference snapshot; missing legacy placement points can fall back to their registered partner point or selected approximate town. Completed review decisions are not rewritten. Editing the town text clears the selected town point in the registration form; switching to actual location clears town coordinates so users can capture or enter the workplace point.
 
 ## Free OpenStreetMap lookup
 
@@ -24,4 +28,4 @@ The endpoint can be disabled or switched to a compatible HTTPS Nominatim provide
 
 ## Deployment and verification
 
-No existing partner records are rewritten and no data migration is required. Mongoose creates the cache TTL index through its usual index initialization. Check its creation after deployment; partner approximate location is an optional field and old records remain valid. Retain existing monitoring GPS tests and verify: select/save/reload a town without exact GPS; exact GPS stays unchanged if present; editing town clears its approximate point; concurrent misses cannot make parallel provider requests; repeated searches hit cache; disabled/upstream failure preserves manual entry.
+No existing partner records are rewritten and no data migration is required. Mongoose creates the cache TTL index through its usual index initialization. Check its creation after deployment; partner approximate location is an optional field and old records remain valid. Retain existing monitoring GPS tests and verify: select/save/reload a town and check precision follows the coordinate boxes; switch to actual GPS; editing town clears its approximate point; concurrent misses cannot make parallel provider requests; repeated searches hit cache; disabled/upstream failure preserves manual entry.

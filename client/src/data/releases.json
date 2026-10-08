@@ -1,5 +1,28 @@
 [
   {
+    "id": "2026-10-08-flexible-location-monitoring",
+    "date": "2026-10-08",
+    "title": "One location flow for registration and visits",
+    "summary": "Choose an actual workplace or town location, then use that choice for monitoring.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Choose the location that works for your partner",
+        "body": "Select actual workplace or town location during registration. Either option fills the coordinate boxes and can be used for placement. Actual workplaces use a 500-metre proximity check; towns use an approximate 5-kilometre radius around the selected town point. The visit form shows the expected location. Outside-area visits can be saved with an explanation for review, and results show which type of location was checked.",
+        "audience": "Teams registering partners and monitoring learners",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ]
+      }
+    ]
+  },
+  {
     "id": "2026-10-08-workplace-area-search",
     "date": "2026-10-08",
     "title": "Find workplace areas more easily",

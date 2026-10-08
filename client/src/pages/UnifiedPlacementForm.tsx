@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
-import { readCoordinates } from '@/lib/workplaceCoordinates'
+import { readCoordinates, locationMeta, registeredPoint, type LocationMeta } from '@/lib/workplaceCoordinates'
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -93,6 +93,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const [loading, setLoading] = useState(false)
   const [lat, setLat] = useState('')
   const [lng, setLng] = useState('')
+  const [meta, setMeta] = useState<LocationMeta>({ precision: 'Actual' })
   const [partners, setPartners] = useState<IndustryPartner[]>([])
   const [partnerSearch, setPartnerSearch] = useState('')
   const matchingPartners = partners.filter(partner =>
@@ -137,8 +138,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const selectedPartner = useMemo(() => placementType === 'registered' ? partners.find(item => item._id === selectedPartnerId) : undefined, [placementType, partners, selectedPartnerId])
   const showWorksiteSection = placementType !== 'registered' || Boolean(selectedPartner)
   useEffect(() => {
-    const site = selectedPartner?.coordinates
-    setLat(String(site?.lat ?? '')); setLng(String(site?.lng ?? ''))
+    const site = registeredPoint(selectedPartner)
+    setLat(String(site?.lat ?? '')); setLng(String(site?.lng ?? '')); setMeta(locationMeta(site))
     setWorksiteChoice('partner')
     if (selectedPartner) {
       form.setValue('worksiteMode', selectedPartner.operatingModel || 'FixedSite')
@@ -283,7 +284,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
 
     setLoading(true)
     try {
-      const coordinates = readCoordinates(lat, lng)
+      const coordinates = readCoordinates(lat, lng, false, meta)
       const locationFields = {
           worksiteMode: data.worksiteMode,
           expectedOperatingArea: data.expectedOperatingArea,
@@ -499,7 +500,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                             {matchingPartners.length === 0 && partners.length > 0 && <p className="p-3 text-sm text-gray-500">No matching partners.</p>}
                             {partners.filter(p => p._id === field.value || matchingPartners.includes(p)).map(p => (
                                 <SelectItem key={p._id} value={p._id} disabled={(p.institutionCapacity?.availableSlots ?? p.totalSlots - p.usedSlots) <= 0}>
-                                    <span className="font-semibold">{p.name}</span> <span className="ml-2 text-gray-400">{p.partnerType === 'MasterCraftPerson' ? 'MCP' : p.region} · {p.coordinates?.lat !== undefined && p.coordinates?.lng !== undefined ? 'GPS available' : ['MobileField', 'NoFixedPremises'].includes(p.operatingModel || '') ? 'Mobile evidence' : 'GPS pending'} · {p.institutionCapacity?.availableSlots ?? p.totalSlots - p.usedSlots} slots for you</span>
+                                    <span className="font-semibold">{p.name}</span> <span className="ml-2 text-gray-400">{p.partnerType === 'MasterCraftPerson' ? 'MCP' : p.region} · {registeredPoint(p) ? registeredPoint(p)?.precision === 'Town' ? 'Town location available' : 'Workplace location available' : ['MobileField', 'NoFixedPremises'].includes(p.operatingModel || '') ? 'Mobile evidence' : 'Location pending'} · {p.institutionCapacity?.availableSlots ?? p.totalSlots - p.usedSlots} slots for you</span>
                                 </SelectItem> 
                             ))}
                         </SelectContent>
@@ -610,9 +611,9 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
               <div className="flex flex-wrap gap-2 text-xs font-bold"><span className="rounded-full bg-white px-3 py-1 text-indigo-700">{selectedPartner.partnerType === 'MasterCraftPerson' ? 'MCP' : (selectedPartner.partnerType || 'Registered company').replace(/([a-z])([A-Z])/g, '$1 $2')}</span><span className="rounded-full bg-white px-3 py-1 text-gray-700">{partnerCapacityAvailable} slots available</span></div>
             </div>
             <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-              {selectedPartner.approximateLocation && <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">Approximate town location</dt><dd className="mt-1 text-gray-900">{selectedPartner.approximateLocation.name}<p className="text-xs">Not used for visit verification · <a className="underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a></p></dd></div>}
+              {selectedPartner.approximateLocation && <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">Approximate town location</dt><dd className="mt-1 text-gray-900">{selectedPartner.approximateLocation.name}<p className="text-xs">Approximate 5 km town proximity check · <a className="underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a></p></dd></div>}
               <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">Workplace mode</dt><dd className="mt-1 font-bold text-gray-900">{(selectedPartner.operatingModel || 'FixedSite').replace(/([a-z])([A-Z])/g, '$1 $2')} <span className="ml-1 text-xs font-semibold text-indigo-600">From partner registry</span></dd></div>
-              <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">GPS status</dt><dd className={`mt-1 font-bold ${selectedPartner.coordinates?.lat !== undefined && selectedPartner.coordinates?.lng !== undefined ? 'text-emerald-700' : 'text-amber-700'}`}>{selectedPartner.coordinates?.lat !== undefined && selectedPartner.coordinates?.lng !== undefined ? 'GPS coordinates available' : flexibleWorksite ? 'Permanent GPS not required' : 'GPS coordinates not recorded'}</dd></div>
+              <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">GPS status</dt><dd className={`mt-1 font-bold ${selectedPartner.coordinates?.lat !== undefined && selectedPartner.coordinates?.lng !== undefined ? 'text-emerald-700' : 'text-amber-700'}`}>{selectedPartner.coordinates?.lat !== undefined && selectedPartner.coordinates?.lng !== undefined ? selectedPartner.coordinates?.precision === 'Town' ? 'Town location selected' : 'Actual workplace selected' : flexibleWorksite ? 'Permanent GPS not required' : 'GPS coordinates not recorded'}</dd></div>
               <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">Address</dt><dd className="mt-1 font-bold text-gray-900">{selectedPartner.location || 'Not recorded'} {selectedPartner.location && <span className="ml-1 text-xs font-semibold text-indigo-600">From partner registry</span>}</dd></div>
               <div className="rounded-xl bg-white p-3"><dt className="text-xs font-semibold text-gray-500">GhanaPost GPS</dt><dd className="mt-1 font-bold text-gray-900">{selectedPartner.ghanaPostGps || 'Not recorded'}</dd></div>
             </dl>
@@ -624,11 +625,11 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
             <div><h3 className="font-black text-gray-900">Will the learner work at this location?</h3><p className="text-sm text-gray-600">Confirm the registry location or enter the actual branch or project site for this placement.</p></div>
             <div className="grid gap-3 sm:grid-cols-2">
               <button type="button" onClick={() => {
-                setWorksiteChoice('partner'); setLat(String(selectedPartner.coordinates?.lat ?? '')); setLng(String(selectedPartner.coordinates?.lng ?? ''))
+                setWorksiteChoice('partner'); setLat(String(registeredPoint(selectedPartner)?.lat ?? '')); setLng(String(registeredPoint(selectedPartner)?.lng ?? '')); setMeta(locationMeta(registeredPoint(selectedPartner)))
                 form.setValue('worksiteMode', selectedPartner.operatingModel || 'FixedSite'); form.setValue('worksiteLocation', selectedPartner.location || '')
               }} className={`rounded-xl border p-4 text-left ${worksiteChoice === 'partner' ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100' : 'border-gray-200'}`}><span className="block font-bold">Yes, use this workplace</span><span className="text-xs text-gray-600">Use the partner registry details shown above.</span></button>
               <button type="button" onClick={() => {
-                setWorksiteChoice('different'); setLat(''); setLng(''); form.setValue('worksiteLocation', ''); form.setValue('approveLocationException', false)
+                setWorksiteChoice('different'); setLat(''); setLng(''); setMeta({ precision: 'Actual' }); form.setValue('worksiteLocation', ''); form.setValue('approveLocationException', false)
               }} className={`rounded-xl border p-4 text-left ${worksiteChoice === 'different' ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100' : 'border-gray-200'}`}><span className="block font-bold">No, use a different workplace</span><span className="text-xs text-gray-600">Enter the actual branch, workshop or project site.</span></button>
             </div>
           </section>
@@ -650,8 +651,8 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                 <FormField control={form.control} name="locationVerificationNotes" render={({ field }) => <FormItem><FormLabel>Alternative Location Evidence *</FormLabel><FormControl><Input className="bg-white" placeholder="Landmarks, supervisor confirmation, job card or visit arrangement" {...field} /></FormControl><FormMessage /></FormItem>} />
               </div>
             </> : <>
-              <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b); form.setValue('approveLocationException', false) }} disabled={loading} />
-              <div className={`rounded-xl border p-4 text-sm ${hasGps ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>{hasGps ? <><strong>GPS coordinates available.</strong> Confirm they represent the learner’s actual workplace.</> : <><strong>GPS coordinates are missing.</strong> Capture them while at the workplace. A registered-partner request can still be submitted for management follow-up.</>}</div>
+              <WorkplaceCoordinates lat={lat} lng={lng} locationMeta={meta} onChange={(a, b, next) => { setLat(a); setLng(b); if (next) setMeta(next); form.setValue('approveLocationException', false) }} disabled={loading} />
+              <div className={`rounded-xl border p-4 text-sm ${hasGps ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>{hasGps ? <><strong>Selected location available.</strong> Monitoring will use the selected actual workplace or approximate town location.</> : <><strong>GPS coordinates are missing.</strong> Capture them while at the workplace. A registered-partner request can still be submitted for management follow-up.</>}</div>
             </>}
             {placementType === 'registered' && <div className="grid gap-4 md:grid-cols-2"><FormField control={form.control} name="supervisorName" render={({ field }) => <FormItem><FormLabel>Workplace Supervisor {flexibleWorksite ? '*' : ''}</FormLabel><FormControl><Input className="bg-white" placeholder="Full name" {...field} /></FormControl>{selectedPartner?.contactPerson && <p className="text-xs font-semibold text-indigo-600">Prefilled from partner contact</p>}<FormMessage /></FormItem>} /><FormField control={form.control} name="supervisorPhone" render={({ field }) => <FormItem><FormLabel>Supervisor Phone {flexibleWorksite ? '*' : ''}</FormLabel><FormControl><Input className="bg-white" placeholder="+233..." {...field} /></FormControl>{selectedPartner?.contactPhone && <p className="text-xs font-semibold text-indigo-600">Prefilled from partner contact</p>}<FormMessage /></FormItem>} /></div>}
             {user?.role === 'Admin' && !hasGps && placementType === 'custom' && <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><Checkbox checked={approveLocationException} onCheckedChange={(checked) => form.setValue('approveLocationException', checked === true)} className="mt-0.5" /><span><span className="block font-bold">Approve {flexibleWorksite ? 'alternative location evidence' : 'provisional activation'}</span><span className="block text-xs">{flexibleWorksite ? 'This decision is recorded in the audit log.' : 'GPS must be captured within 14 days.'}</span></span></label>}

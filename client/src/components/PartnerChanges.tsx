@@ -1,3 +1,5 @@
+import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
+import { readCoordinates, locationMeta, type LocationMeta, type WorkplacePoint } from '@/lib/workplaceCoordinates'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
@@ -27,9 +29,10 @@ export function PartnerChangeForm({ partner, request, onDone }: { partner: Value
   const client = useQueryClient()
   const initial = { ...partner, ...request?.proposed }
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(fields.map(([key]) => [key, key === 'programs' ? (initial[key] as string[] || []).join(', ') : String(initial[key] ?? '')])))
-  const coords = initial.coordinates as { lat?: number; lng?: number } | undefined
+  const coords = initial.coordinates as WorkplacePoint | undefined
   const [lat, setLat] = useState(String(coords?.lat ?? ''))
   const [lng, setLng] = useState(String(coords?.lng ?? ''))
+  const [meta, setMeta] = useState<LocationMeta>(locationMeta(coords))
   const [reason, setReason] = useState(request?.reason || '')
   const [attachments, setAttachments] = useState<Attachment[]>(request?.attachments || [])
   const [mou, setMou] = useState(String(initial.mouDocumentUrl || ''))
@@ -55,9 +58,9 @@ export function PartnerChangeForm({ partner, request, onDone }: { partner: Value
         const baseline = partner[field] ?? (field === 'totalSlots' ? 0 : field === 'programs' ? [] : '')
         if (JSON.stringify(value) !== JSON.stringify(baseline)) proposed[field] = value
       }
-      if (lat || lng) {
+      if (lat || lng || meta.precision === 'Town') {
         if (!lat || !lng) throw new Error('Provide both latitude and longitude.')
-        const coordinates = { lat: Number(lat), lng: Number(lng) }
+        const coordinates = readCoordinates(lat, lng, false, meta)
         if (JSON.stringify(coordinates) !== JSON.stringify(partner.coordinates)) proposed.coordinates = coordinates
       }
       if (mou !== String(partner.mouDocumentUrl || '')) proposed.mouDocumentUrl = mou
@@ -74,9 +77,9 @@ export function PartnerChangeForm({ partner, request, onDone }: { partner: Value
     <p className="text-sm text-gray-600">Approved details remain available until HQ approves your request. Explain changes to capacity and programme eligibility and attach supporting evidence where available.</p>
     <fieldset disabled={busy} className="grid gap-4 sm:grid-cols-2">
       {fields.map(([key, label]) => <label key={key} className="text-sm font-medium">{label}{fieldOptions[key] ? <select className="mt-1 h-10 w-full rounded-md border bg-white px-3" value={values[key]} onChange={e => setValues({ ...values, [key]: e.target.value })}>{fieldOptions[key].map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <Input className="mt-1" type={key === 'totalSlots' ? 'number' : key === 'contactEmail' ? 'email' : key === 'website' ? 'url' : 'text'} min={key === 'totalSlots' ? 0 : undefined} step={key === 'totalSlots' ? 1 : undefined} required={['name', 'sector', 'region', 'totalSlots'].includes(key)} maxLength={2000} value={values[key]} onChange={e => setValues({ ...values, [key]: e.target.value })} />}</label>)}
-      <label className="text-sm font-medium">Latitude<Input type="number" step="any" min={-90} max={90} value={lat} onChange={e => setLat(e.target.value)} /></label>
-      <label className="text-sm font-medium">Longitude<Input type="number" step="any" min={-180} max={180} value={lng} onChange={e => setLng(e.target.value)} /></label>
+
     </fieldset>
+    <WorkplaceCoordinates lat={lat} lng={lng} locationMeta={meta} onChange={(a, b, next) => { setLat(a); setLng(b); if (next) setMeta(next) }} disabled={busy} />
     <label className="block text-sm font-medium">Reason for changes<Textarea required minLength={5} maxLength={3000} disabled={busy} value={reason} onChange={e => setReason(e.target.value)} /></label>
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Supporting document<Input type="file" disabled={busy || attachments.length >= 5} onChange={e => { const file = e.target.files?.[0]; if (file) void upload(file, false); e.target.value = '' }} /></label>

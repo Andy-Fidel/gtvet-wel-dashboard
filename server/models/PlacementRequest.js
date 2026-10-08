@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { workplaceCoordinateSchema } from './WorkplaceLocation.js';
 
 const placementRequestSchema = new mongoose.Schema({
   institution: { type: String, required: true },
@@ -9,9 +10,9 @@ const placementRequestSchema = new mongoose.Schema({
   program: { type: String, required: true },
   requestedSlots: { type: Number, required: true, min: 1, validate: Number.isInteger },
   placementRegion: { type: String, trim: true },
-  coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
+  coordinates: { type: workplaceCoordinateSchema, default: undefined },
   worksiteMode: { type: String, enum: ['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'], default: 'FixedSite' },
-  locationVerificationStatus: { type: String, enum: ['PendingGPS', 'GPSVerified', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'], default: 'PendingGPS' },
+  locationVerificationStatus: { type: String, enum: ['PendingGPS', 'GPSVerified', 'TownSelected', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'], default: 'PendingGPS' },
   locationVerificationNotes: { type: String, default: '', maxlength: 3000 },
   expectedOperatingArea: { type: String, default: '', maxlength: 1000 },
   worksiteLocation: { type: String, default: '', maxlength: 1000 },

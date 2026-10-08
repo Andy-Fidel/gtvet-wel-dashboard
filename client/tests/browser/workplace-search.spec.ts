@@ -24,10 +24,11 @@ async function setup(page: Page) {
   return { searches, writes }
 }
 
-test('explicit Ghana search works without submitting or overwriting workplace coordinates', async ({ page }) => {
+test('town selection fills coordinates and actual mode can be used instead', async ({ page }) => {
   const { searches, writes } = await setup(page)
   await page.getByLabel('Latitude', { exact: true }).fill('5.6')
   await page.getByLabel('Longitude', { exact: true }).fill('-0.2')
+  await page.getByRole('radio', { name: 'Use town location', exact: true }).check()
   const input = page.getByLabel('Search an area or town in Ghana')
   await input.fill('Kumasi')
   expect(searches).toEqual([])
@@ -35,20 +36,23 @@ test('explicit Ghana search works without submitting or overwriting workplace co
   await expect(page.getByText('Kumasi, Ghana', { exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: 'View town on map' })).toHaveAttribute('href', /openstreetmap.org/)
   await page.getByRole('button', { name: 'Use this town' }).click()
-  await expect(page.getByText('Used for general location only; not for visit verification.', { exact: false })).toBeVisible()
+  await expect(page.getByText('Monitoring compares the visitor’s GPS within 5 km', { exact: false })).toBeVisible()
   await expect(page.getByLabel('Town', { exact: true })).toHaveValue('Kumasi')
-  await expect(page.getByLabel('Latitude', { exact: true })).toHaveValue('5.6')
-  await expect(page.getByLabel('Longitude', { exact: true })).toHaveValue('-0.2')
+  await expect(page.getByLabel('Latitude', { exact: true })).toHaveValue('6.68')
+  await expect(page.getByLabel('Longitude', { exact: true })).toHaveValue('-1.62')
   expect(searches).toEqual(['Kumasi']); expect(writes).toEqual([])
-  await input.fill('Adenta')
-  await page.getByRole('button', { name: 'Remove town location' }).click()
-  await expect(page.getByText('Kumasi, Ghana', { exact: true })).toHaveCount(0)
+  await page.getByRole('radio', { name: 'Use actual workplace location', exact: true }).check()
+  await expect(input).toHaveCount(0)
+  await page.getByLabel('Latitude', { exact: true }).fill('5.6')
+  await page.getByLabel('Longitude', { exact: true }).fill('-0.2')
+  await expect(page.getByLabel('Latitude', { exact: true })).toHaveValue('5.6')
 })
 
 test('missing service and no matches have usable fallback on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   await setup(page)
   await page.route('**/api/workplace-location-search?*', route => route.fulfill({ status: 503, json: { message: 'Location lookup is not configured yet.' } }))
+  await page.getByRole('radio', { name: 'Use town location', exact: true }).check()
   await page.getByLabel('Search an area or town in Ghana').fill('Adenta')
   await page.getByRole('button', { name: 'Search Ghana' }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'not configured' })).toBeVisible()

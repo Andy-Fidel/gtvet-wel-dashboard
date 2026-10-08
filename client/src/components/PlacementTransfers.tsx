@@ -1,3 +1,4 @@
+import { readCoordinates, locationMeta, registeredPoint, type LocationMeta, type WorkplacePoint, type TownLocation } from '@/lib/workplaceCoordinates'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
@@ -14,7 +15,7 @@ type Transfer = {
   destination: { companyName: string; location: string; endDate: string; supervisorName: string; supervisorPhone: string }
   reviewNote?: string
 }
-type Options = { partners: { _id: string; name: string; region: string; coordinates?: { lat?: number; lng?: number } }[]; requests: { _id: string; selfSourcedHost: { companyName: string }; placementRegion?: string; coordinates?: { lat?: number; lng?: number } }[] }
+type Options = { partners: { _id: string; name: string; region: string; approximateLocation?: TownLocation | null; coordinates?: WorkplacePoint }[]; requests: { _id: string; selfSourcedHost: { companyName: string }; placementRegion?: string; coordinates?: WorkplacePoint }[] }
 
 export function PlacementTransferQueue({ onChange }: { onChange: () => void }) {
   const { authFetch, user } = useAuth()
@@ -73,6 +74,7 @@ export function PlacementTransferDialog({ placement, onClose, onChange, historyO
   const [busy, setBusy] = useState(false)
   const [review, setReview] = useState(false)
   const [destination, setDestination] = useState('')
+  const [meta, setMeta] = useState<LocationMeta>({ precision: 'Actual' })
   const [fields, setFields] = useState({ reason: '', effectiveDate: new Date().toISOString().slice(0, 10), endDate: placement.endDate?.slice(0, 10) || '', supervisorName: '', supervisorPhone: '', supervisorEmail: '', placementRegion: '', lat: '', lng: '' })
   const [host, setHost] = useState({ companyName: '', sector: '', location: '' })
   const options = useQuery<Options>({ queryKey: ['transfer-options', placement._id, user?._id], enabled: !historyOnly, queryFn: async () => {
@@ -85,13 +87,13 @@ export function PlacementTransferDialog({ placement, onClose, onChange, historyO
     if (!response.ok) throw new Error('Unable to load placement history')
     return response.json()
   } })
-  const choices = [...(options.data?.partners || []).map(p => ({ value: `partner:${p._id}`, name: p.name, region: p.region, coordinates: p.coordinates })), ...(options.data?.requests || []).map(r => ({ value: `request:${r._id}`, name: `${r.selfSourcedHost.companyName} (verified learner-sourced)`, region: r.placementRegion || '', coordinates: r.coordinates }))]
+  const choices = [...(options.data?.partners || []).map(p => ({ value: `partner:${p._id}`, name: p.name, region: p.region, coordinates: registeredPoint(p) })), ...(options.data?.requests || []).map(r => ({ value: `request:${r._id}`, name: `${r.selfSourcedHost.companyName} (verified learner-sourced)`, region: r.placementRegion || '', coordinates: r.coordinates }))]
   const pending = history.data?.transfers.some(t => ['Pending', 'Scheduled'].includes(t.status))
   const submit = async () => {
     setBusy(true)
     try {
       const [type, id] = destination.split(':')
-      const response = await authFetch(`/api/placements/${placement._id}/${destination === 'new' ? 'transfer-lead' : 'transfers'}`, { method: 'POST', body: JSON.stringify({ ...fields, ...(destination === 'new' ? host : {}), sourceVersion: placement.workflowVersion || 0, ...(type === 'partner' ? { partner: id } : { sourceRequest: id }), coordinates: { lat: Number(fields.lat), lng: Number(fields.lng) } }) })
+      const response = await authFetch(`/api/placements/${placement._id}/${destination === 'new' ? 'transfer-lead' : 'transfers'}`, { method: 'POST', body: JSON.stringify({ ...fields, ...(destination === 'new' ? host : {}), sourceVersion: placement.workflowVersion || 0, ...(type === 'partner' ? { partner: id } : { sourceRequest: id }), coordinates: readCoordinates(fields.lat, fields.lng, true, meta) }) })
       const data = await response.json()
       if (!response.ok) throw new Error(data.message)
       await client.invalidateQueries({ queryKey: ['placement-transfers'] })
@@ -108,11 +110,12 @@ export function PlacementTransferDialog({ placement, onClose, onChange, historyO
     {pending && !historyOnly && <p>A workplace change is already awaiting action. Institution management can review or cancel it in Workplace changes.</p>}
     {!historyOnly && !pending && <form className="space-y-3" onSubmit={event => { event.preventDefault(); if (!review) setReview(true); else void submit() }}>
       {options.isError ? <p role="alert">Destinations could not be loaded. <Button type="button" onClick={() => void options.refetch()}>Retry</Button></p> : <>
-        <label className="block">New workplace<select required disabled={review} value={destination} onChange={event => { setDestination(event.target.value); const choice = choices.find(c => c.value === event.target.value); setFields(previous => ({ ...previous, placementRegion: choice?.region || '', lat: String(choice?.coordinates?.lat ?? ''), lng: String(choice?.coordinates?.lng ?? '') })) }} className="w-full rounded border p-2"><option value="">Select an approved destination</option><option value="new">New learner-sourced host (requires verification)</option>{choices.map(c => <option key={c.value} value={c.value}>{c.name}</option>)}</select></label>
+        <label className="block">New workplace<select required disabled={review} value={destination} onChange={event => { setDestination(event.target.value); const choice = choices.find(c => c.value === event.target.value); setMeta(locationMeta(choice?.coordinates)); setFields(previous => ({ ...previous, placementRegion: choice?.region || '', lat: String(choice?.coordinates?.lat ?? ''), lng: String(choice?.coordinates?.lng ?? '') })) }} className="w-full rounded border p-2"><option value="">Select an approved destination</option><option value="new">New learner-sourced host (requires verification)</option>{choices.map(c => <option key={c.value} value={c.value}>{c.name}</option>)}</select></label>
         <Button type="button" variant="outline" disabled={review} onClick={() => setDestination('new')}>Submit a new learner-sourced host</Button>
         {destination === 'new' && <fieldset className="space-y-2"><legend>New host for verification</legend>{(['companyName', 'sector', 'location'] as const).map(key => <label key={key} className="block">{key === 'companyName' ? 'Company name' : key === 'sector' ? 'Sector' : 'Location'}<Input required readOnly={review} value={host[key]} onChange={event => setHost(previous => ({ ...previous, [key]: event.target.value }))} /></label>)}</fieldset>}
         <p className="text-xs text-muted-foreground">New hosts must be verified in Placement Requests. After approval, select the verified host here to submit the transfer.</p>
-        {(Object.keys(fields) as (keyof typeof fields)[]).map(key => <label className="block text-sm" key={key}>{({ reason: 'Reason for change', effectiveDate: 'Effective date', endDate: 'New end date', supervisorName: 'Supervisor name', supervisorPhone: 'Supervisor phone', supervisorEmail: 'Supervisor email (optional)', placementRegion: 'Placement region', lat: 'Latitude', lng: 'Longitude' })[key]}<Input required={key !== 'supervisorEmail'} readOnly={review} type={key === 'effectiveDate' || key === 'endDate' ? 'date' : key === 'supervisorEmail' ? 'email' : key === 'lat' || key === 'lng' ? 'number' : 'text'} step={key === 'lat' || key === 'lng' ? 'any' : undefined} min={key === 'effectiveDate' ? new Date().toISOString().slice(0, 10) : undefined} value={fields[key]} onChange={event => setFields(previous => ({ ...previous, [key]: event.target.value }))} /></label>)}
+        {meta.precision === 'Town' && <p className="text-sm rounded-lg bg-blue-50 p-3">Selected town: {meta.townName} · Monitoring uses an approximate 5 km radius. Editing these coordinates switches to an actual workplace point.</p>}
+        {(Object.keys(fields) as (keyof typeof fields)[]).map(key => <label className="block text-sm" key={key}>{({ reason: 'Reason for change', effectiveDate: 'Effective date', endDate: 'New end date', supervisorName: 'Supervisor name', supervisorPhone: 'Supervisor phone', supervisorEmail: 'Supervisor email (optional)', placementRegion: 'Placement region', lat: 'Latitude', lng: 'Longitude' })[key]}<Input required={key !== 'supervisorEmail'} readOnly={review} type={key === 'effectiveDate' || key === 'endDate' ? 'date' : key === 'supervisorEmail' ? 'email' : key === 'lat' || key === 'lng' ? 'number' : 'text'} step={key === 'lat' || key === 'lng' ? 'any' : undefined} min={key === 'effectiveDate' ? new Date().toISOString().slice(0, 10) : undefined} value={fields[key]} onChange={event => { if (key === 'lat' || key === 'lng') setMeta({ precision: 'Actual' }); setFields(previous => ({ ...previous, [key]: event.target.value })) }} /></label>)}
         {review && <p className="rounded bg-amber-50 p-3 text-sm">{placement.companyName} → {destination === 'new' ? host.companyName : choices.find(c => c.value === destination)?.name}. The current placement stays active until management approves and the effective date arrives. Previous records remain with the old employer.</p>}
         <div className="flex gap-2">{review && <Button type="button" variant="outline" disabled={busy} onClick={() => setReview(false)}>Back</Button>}<Button disabled={busy || options.isPending || !history.data}>{busy ? 'Submitting…' : review ? 'Submit for approval' : 'Review change'}</Button></div>
       </>}

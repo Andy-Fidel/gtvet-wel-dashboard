@@ -6,7 +6,7 @@ import { User } from '../models/User.js';
 import { Learner } from '../models/Learner.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { placementError, placementErrorStatus, placementInput, runPlacementOperation, placementOperationKey, validatePlacementDates } from './placementWorkflow.js';
-import { isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates } from './workplaceCoordinates.js';
+import { isFlexibleWorksite, normalizeCoordinates, registeredCoordinates, coordinateStatus, worksiteRequiresCoordinates } from './workplaceCoordinates.js';
 import { notifyUsers } from './notifications.js';
 import { notifyGuardianUpdates } from './guardianNotifications.js';
 import { logAuditEvent } from './audit.js';
@@ -55,16 +55,19 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
     if (input.sourceRequest) {
       const request = await PlacementRequest.findOne({ _id: input.sourceRequest, institution: req.user.institution, sourceType: 'LearnerFound', status: 'Approved', archivedAt: null, learners: learner });
       if (!request) throw placementError('Select an approved learner-sourced request for this learner.', 400);
+      if (!data.coordinates) data.coordinates = request.coordinates;
       Object.assign(data, { partner: undefined, companyName: request.selfSourcedHost.companyName, sector: request.selfSourcedHost.sector, location: request.selfSourcedHost.location });
     } else {
       if (!mongoose.isValidObjectId(data.partner)) throw placementError('Select an approved partner or verified learner-sourced request.', 400);
       const partner = await IndustryPartner.findOne({ $and: [{ _id: data.partner, status: 'Active', approvalStatus: 'Approved' }, await partnerVisibility(req.user)] });
       if (!partner) throw placementError('Partner is not approved or is outside your access.', 400);
+      if (!data.coordinates) data.coordinates = registeredCoordinates(partner);
       Object.assign(data, { companyName: partner.name, sector: partner.sector, location: partner.location || partner.region });
     }
     const adminLocationApproval = req.user.role === 'Admin' && input.approveLocationException === true;
     data.worksiteMode = data.worksiteMode || 'FixedSite';
     data.coordinates = normalizeCoordinates(data.coordinates, !adminLocationApproval && worksiteRequiresCoordinates({ status: 'Active', ...data }));
+    if (data.coordinates) data.locationVerificationStatus = coordinateStatus(data.coordinates);
     if (!data.coordinates && adminLocationApproval) {
       data.locationVerificationStatus = isFlexibleWorksite(data.worksiteMode) ? 'NotApplicableMobile' : 'Provisional';
       data.locationVerificationDueDate = isFlexibleWorksite(data.worksiteMode) ? undefined : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
@@ -100,7 +103,7 @@ export function registerPlacementTransfers(router, { prepareActivation, getScope
       requireOperator(req);
       const source = await scopedPlacement(req, req.params.id);
       if (source.institution !== req.user.institution) throw placementError('Only the owning institution may transfer this learner.', 403);
-      const partners = await IndustryPartner.find({ $and: [{ status: 'Active', approvalStatus: 'Approved' }, await partnerVisibility(req.user)] }).select('name region location coordinates operatingModel locationVerificationStatus').sort({ name: 1 }).lean();
+      const partners = await IndustryPartner.find({ $and: [{ status: 'Active', approvalStatus: 'Approved' }, await partnerVisibility(req.user)] }).select('name region location coordinates approximateLocation operatingModel locationVerificationStatus').sort({ name: 1 }).lean();
       const requests = await PlacementRequest.find({ institution: req.user.institution, learners: source.learner, sourceType: 'LearnerFound', status: 'Approved', archivedAt: null }).select('selfSourcedHost coordinates placementRegion worksiteMode locationVerificationStatus locationVerificationNotes expectedOperatingArea').lean();
       res.json({ partners, requests });
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }

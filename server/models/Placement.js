@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { workplaceCoordinateSchema } from './WorkplaceLocation.js';
 import { isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates } from '../utils/workplaceCoordinates.js';
 
 const placementSchema = new mongoose.Schema({
@@ -31,10 +32,7 @@ const placementSchema = new mongoose.Schema({
   replacementPlacement: { type: mongoose.Schema.Types.ObjectId, ref: 'Placement' },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   institution: { type: String, required: true },
-  coordinates: {
-    lat: { type: Number, min: -90, max: 90 },
-    lng: { type: Number, min: -180, max: 180 },
-  },
+  coordinates: { type: workplaceCoordinateSchema, default: undefined },
   worksiteMode: {
     type: String,
     enum: ['FixedSite', 'HomeBased', 'MobileField', 'MultipleSites', 'TemporarySite', 'NoFixedPremises'],
@@ -42,7 +40,7 @@ const placementSchema = new mongoose.Schema({
   },
   locationVerificationStatus: {
     type: String,
-    enum: ['PendingGPS', 'GPSVerified', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'],
+    enum: ['PendingGPS', 'GPSVerified', 'TownSelected', 'Provisional', 'NotApplicableMobile', 'ExceptionApproved'],
     default: 'PendingGPS',
   },
   locationVerificationNotes: { type: String, default: '', maxlength: 3000 },
