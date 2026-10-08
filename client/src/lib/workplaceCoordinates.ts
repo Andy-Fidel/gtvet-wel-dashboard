@@ -1,3 +1,5 @@
+export type TownLocation = { name: string; lat: number; lng: number; source: 'OpenStreetMap'; precision: 'Town'; osmType: 'node' | 'way' | 'relation'; osmId: string }
+
 export function readCoordinates(lat: string, lng: string, required = false) {
   if (!lat.trim() && !lng.trim()) {
     if (required) throw new Error('Workplace latitude and longitude are required before activation.')

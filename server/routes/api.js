@@ -65,6 +65,9 @@ import { canAccessSupportTicket, isSupportResponder } from '../utils/supportAcce
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
 import { systemHealthHandler } from '../utils/systemHealth.js';
+import rateLimit from 'express-rate-limit';
+import { workplaceSearchHandler } from '../utils/workplaceSearch.js';
+import { normalizeApproximateLocation } from '../utils/townLocation.js';
 
 const router = express.Router();
 const ADMIN_ROLES = ['Admin', 'RegionalAdmin', 'SuperAdmin'];
@@ -83,6 +86,12 @@ router.use((req, res, next) => {
 
 const DASHBOARD_CACHE_TTL_MS = Number(process.env.DASHBOARD_CACHE_TTL_MS || 60 * 1000);
 router.get('/system-health', requireRole('SuperAdmin', 'HQManager', 'HQStaff'), systemHealthHandler);
+router.get('/workplace-location-search',
+  requireRole('SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin', 'Admin', 'Manager', 'Staff', 'IndustryPartner'),
+  rateLimit({ windowMs: 60000, limit: 10, keyGenerator: req => String(req.user._id),
+    standardHeaders: 'draft-7', legacyHeaders: false,
+    message: { message: 'Too many location searches. Please wait a minute and try again.' } }),
+  workplaceSearchHandler);
 const dashboardCache = new LRUCache({ max: 500, ttl: DASHBOARD_CACHE_TTL_MS });
 
 const getScopedCacheKey = (prefix, user, extras = '') => [
@@ -13733,8 +13742,8 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
         if (req.user.role === 'RegionalAdmin' && !partnerRegionMatch(req.user.region).test(region)) {
             return res.status(403).json({ message: 'Regional administrators can register partners only in their assigned region.' });
         }
-        let coordinates;
-        try { coordinates = normalizeCoordinates(req.body.coordinates); }
+        let coordinates, approximateLocation;
+        try { coordinates = normalizeCoordinates(req.body.coordinates); approximateLocation = normalizeApproximateLocation(req.body.approximateLocation); }
         catch (error) { return res.status(400).json({ message: error.message }); }
         const partnerType = req.body.partnerType || 'RegisteredCompany';
         const operatingModel = req.body.operatingModel || 'FixedSite';
@@ -13753,6 +13762,7 @@ router.post('/industry-partners', requireRole('SuperAdmin', 'RegionalAdmin', 'Ad
             tradeArea,
             district: String(req.body.district || '').trim(),
             town: String(req.body.town || '').trim(),
+            approximateLocation,
             location: String(req.body.location || '').trim(),
             coordinates,
             partnerType,
@@ -13866,11 +13876,15 @@ const updateIndustryPartner = (resubmit = false) => async (req, res) => {
             req.body.sector = String(req.body.sector || '').trim();
             if (req.body.sector !== existingPartner.sector && !isPartnerSector(req.body.sector)) return res.status(400).json({ message: 'Select a valid sector from the available options.' });
         }
-        const allowedFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'status', 'programs', 'mouDocumentUrl', 'coordinates', 'partnerType', 'operatingModel', 'locationVerificationNotes', 'ghanaPostGps'];
+        const allowedFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'status', 'programs', 'mouDocumentUrl', 'coordinates', 'approximateLocation', 'partnerType', 'operatingModel', 'locationVerificationNotes', 'ghanaPostGps'];
         const update = Object.fromEntries(allowedFields.filter(field => Object.hasOwn(req.body, field)).map(field => [field, req.body[field]]));
         for (const field of ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'mouDocumentUrl', 'locationVerificationNotes', 'ghanaPostGps']) {
             if (Object.hasOwn(update, field)) update[field] = String(update[field] || '').trim();
         }
+        try {
+            if (Object.hasOwn(update, 'approximateLocation')) update.approximateLocation = normalizeApproximateLocation(update.approximateLocation);
+            else if (Object.hasOwn(update, 'town') && update.town !== existingPartner.town) update.approximateLocation = null;
+        } catch (error) { return res.status(400).json({ message: error.message }); }
         if (Object.hasOwn(update, 'contactEmail')) update.contactEmail = update.contactEmail.toLowerCase();
         for (const field of ['name', 'sector', 'region']) {
             if (Object.hasOwn(update, field) && !update[field]) return res.status(400).json({ message: 'Company name, sector and region cannot be empty.' });

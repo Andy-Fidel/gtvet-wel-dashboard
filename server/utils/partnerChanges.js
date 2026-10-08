@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { normalizeApproximateLocation } from './townLocation.js';
 import { IndustryPartner } from '../models/IndustryPartner.js';
 import { Document } from '../models/Document.js';
 import { User } from '../models/User.js';
@@ -8,7 +9,7 @@ import { logAuditEvent } from './audit.js';
 import { runPlacementOperation } from './placementWorkflow.js';
 import { hasCoordinates, isFlexibleWorksite } from './workplaceCoordinates.js';
 
-export const partnerChangeFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'coordinates', 'partnerType', 'operatingModel', 'locationVerificationNotes', 'ghanaPostGps', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'programs', 'mouDocumentUrl'];
+export const partnerChangeFields = ['name', 'sector', 'region', 'district', 'tradeArea', 'town', 'location', 'coordinates', 'approximateLocation', 'partnerType', 'operatingModel', 'locationVerificationNotes', 'ghanaPostGps', 'contactPerson', 'contactPhone', 'contactEmail', 'website', 'totalSlots', 'programs', 'mouDocumentUrl'];
 const institutionRoles = ['Admin', 'Manager', 'Staff'];
 const pending = ['InstitutionReview', 'HQReview', 'Returned'];
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
@@ -37,6 +38,8 @@ export function normalizePartnerChanges(input) {
     } else if (key === 'programs') {
       if (!Array.isArray(value) || value.length > 100 || value.some(v => typeof v !== 'string' || !v.trim() || v.length > 200)) fail('Provide valid programme names.');
       result[key] = [...new Set(value.map(v => v.trim()))];
+    } else if (key === 'approximateLocation') {
+      result[key] = normalizeApproximateLocation(value);
     } else if (key === 'coordinates') {
       if (!value || typeof value.lat !== 'number' || typeof value.lng !== 'number' || !Number.isFinite(value.lat) || !Number.isFinite(value.lng) || Math.abs(value.lat) > 90 || Math.abs(value.lng) > 180) fail('Provide valid latitude and longitude.');
       result[key] = { lat: value.lat, lng: value.lng };
@@ -93,6 +96,7 @@ function text(value, label) {
 }
 async function proposal(req, partner) {
   const values = normalizePartnerChanges(req.body.proposed);
+  if (Object.hasOwn(values, 'town') && values.town !== partner.town && !Object.hasOwn(values, 'approximateLocation')) values.approximateLocation = null;
   const proposed = {}, original = {};
   for (const [field, value] of Object.entries(values)) {
     if (!same(value, partner[field])) { proposed[field] = value; original[field] = partner[field] ?? null; }

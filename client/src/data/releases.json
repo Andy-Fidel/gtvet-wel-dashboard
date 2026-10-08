@@ -1,5 +1,18 @@
 [
   {
+    "id": "2026-10-08-workplace-area-search",
+    "date": "2026-10-08",
+    "title": "Find workplace areas more easily",
+    "summary": "Search and save an approximate Ghana town location without needing a paid maps service.",
+    "changes": [{
+      "kind": "New",
+      "title": "Search an area or town in Ghana",
+      "body": "Search a public town or area name using OpenStreetMap, then choose Use this town when registering or correcting an industry partner. Town locations are labelled approximate and saved separately from workplace GPS. Exact coordinates can be captured later at the site; monitoring visits continue to use exact GPS or the existing review process.",
+      "audience": "Teams recording workplace locations",
+      "roles": ["SuperAdmin", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner"]
+    }]
+  },
+  {
     "id": "2026-10-07-hq-system-health",
     "date": "2026-10-07",
     "title": "System health at a glance",

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { approximateLocationSchema } from './TownLookup.js';
 
 const partnerChangeSchema = new mongoose.Schema({
   institution: { type: String, required() { return this.submissionScope !== 'Region'; } },
@@ -26,6 +27,7 @@ const industryPartnerSchema = new mongoose.Schema({
   district: { type: String },
   tradeArea: { type: String },
   town: { type: String },
+  approximateLocation: { type: approximateLocationSchema, default: null },
   location: { type: String },
   coordinates: { lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },
   partnerType: {

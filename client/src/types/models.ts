@@ -53,6 +53,7 @@ export interface Learner {
 /** Industry Partner entity */
 export interface IndustryPartner {
   coordinates?: { lat?: number; lng?: number };
+  approximateLocation?: import('@/lib/workplaceCoordinates').TownLocation | null;
   _id: string;
   name: string;
   sector: string;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
-import { readCoordinates } from '@/lib/workplaceCoordinates'
+import { readCoordinates, type TownLocation } from '@/lib/workplaceCoordinates'
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -50,7 +50,7 @@ type IndustryPartnerFormValues = z.infer<typeof formSchema>
 
 interface IndustryPartnerFormProps {
   onSuccess: () => void;
-  initialData?: Partial<IndustryPartnerFormValues> & { _id?: string; usedSlots?: number; mouDocumentUrl?: string; coordinates?: { lat?: number; lng?: number } };
+  initialData?: Partial<IndustryPartnerFormValues> & { _id?: string; usedSlots?: number; mouDocumentUrl?: string; coordinates?: { lat?: number; lng?: number }; approximateLocation?: TownLocation | null };
   resubmit?: boolean;
   approvalVersion?: number;
 }
@@ -68,6 +68,7 @@ export function IndustryPartnerForm({ onSuccess, initialData, resubmit = false, 
   const [loading, setLoading] = useState(false)
   const [lat, setLat] = useState(String(initialData?.coordinates?.lat ?? ''))
   const [lng, setLng] = useState(String(initialData?.coordinates?.lng ?? ''))
+  const [townLocation, setTownLocation] = useState<TownLocation | null>(initialData?.approximateLocation ?? null)
   const [mouFile, setMouFile] = useState<File | null>(null)
   const [tradeAreas, setTradeAreas] = useState<string[]>(initialData?.tradeArea ? [initialData.tradeArea] : [])
   const [loadingTradeAreas, setLoadingTradeAreas] = useState(true)
@@ -114,7 +115,7 @@ export function IndustryPartnerForm({ onSuccess, initialData, resubmit = false, 
   async function onSubmit(data: IndustryPartnerFormValues) {
     setLoading(true)
     try {
-      const finalData = { ...data, coordinates: readCoordinates(lat, lng) };
+      const finalData = { ...data, coordinates: readCoordinates(lat, lng), approximateLocation: townLocation };
 
       if (mouFile) {
         toast.info("Uploading MoU document...");
@@ -234,7 +235,7 @@ export function IndustryPartnerForm({ onSuccess, initialData, resubmit = false, 
             <FormField control={form.control} name="town" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-700">Town</FormLabel>
-                  <FormControl><Input placeholder="e.g. Kumasi" {...field} /></FormControl>
+                  <FormControl><Input placeholder="e.g. Kumasi" {...field} onChange={event => { field.onChange(event); setTownLocation(null) }} /></FormControl>
                   <FormMessage />
                 </FormItem>
             )} />
@@ -246,7 +247,7 @@ export function IndustryPartnerForm({ onSuccess, initialData, resubmit = false, 
             )} />
         </div>
 
-        <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} disabled={loading} />
+        <WorkplaceCoordinates lat={lat} lng={lng} onChange={(a, b) => { setLat(a); setLng(b) }} townLocation={townLocation} onTownChange={value => { setTownLocation(value); if (value) form.setValue('town', value.name.split(',')[0], { shouldDirty: true }) }} disabled={loading} />
         <p className="text-xs text-muted-foreground">Coordinates are optional during registration. Capture them later for fixed, home-based, multi-site and temporary workplaces.</p>
         <FormField control={form.control} name="locationVerificationNotes" render={({ field }) => (
           <FormItem><FormLabel>{['MobileField', 'NoFixedPremises'].includes(operatingModel) ? 'Operating Area and Location Evidence *' : 'Location Verification Notes'}</FormLabel><FormControl><Textarea rows={3} placeholder={['MobileField', 'NoFixedPremises'].includes(operatingModel) ? 'Describe usual communities, project sites, landmarks and how visits will be arranged.' : 'Add directions, landmark or GPS follow-up notes.'} {...field} /></FormControl><FormMessage /></FormItem>
