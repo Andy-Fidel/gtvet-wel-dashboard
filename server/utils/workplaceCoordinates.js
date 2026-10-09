@@ -61,8 +61,18 @@ export function monitoringLocationCheck(location, placement) {
   const site = placement?.coordinates;
   const flexible = isFlexibleWorksite(placement?.worksiteMode) && !hasCoordinates(site);
   const result = flexible && hasCoordinates(location)
-    ? { locationVerified: 'Verified', gpsReviewStatus: 'Verified', distanceFromSite: null }
+    ? { locationVerified: 'GPS captured', gpsReviewStatus: 'PendingReview', distanceFromSite: null }
     : locationCheck(location, site);
+  if (result.locationVerified === 'Verified') {
+    const radius = site.precision === 'Town' ? TOWN_LOCATION_RADIUS_METRES : ACTUAL_LOCATION_RADIUS_METRES;
+    if (!Number.isFinite(location.accuracy) || location.accuracy < 0 || result.distanceFromSite + location.accuracy > radius) {
+      result.locationVerified = 'Low accuracy'; result.gpsReviewStatus = 'PendingReview';
+    }
+    const capturedAt = new Date(location.capturedAt).getTime();
+    if (result.locationVerified === 'Verified' && (!Number.isFinite(capturedAt) || capturedAt > Date.now() + 60000 || Date.now() - capturedAt > 5 * 60 * 1000)) {
+      result.locationVerified = 'Stale GPS'; result.gpsReviewStatus = 'PendingReview';
+    }
+  }
   return { ...result,
     verificationLocationType: hasCoordinates(site) ? site.precision === 'Town' ? 'Town' : 'Actual' : flexible ? 'OperatingArea' : 'Missing',
     verificationRadiusMetres: hasCoordinates(site) ? site.precision === 'Town' ? TOWN_LOCATION_RADIUS_METRES : ACTUAL_LOCATION_RADIUS_METRES : null,

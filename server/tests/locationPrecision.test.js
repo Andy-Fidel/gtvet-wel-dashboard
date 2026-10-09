@@ -44,3 +44,17 @@ test('legacy town selections can be resolved without replacing explicit workplac
   const actual = { lat: 5.6, lng: -0.2 };
   assert.deepEqual(registeredCoordinates({ approximateLocation, coordinates: actual }), actual);
 });
+
+test('automatic monitoring verification requires an accurate fresh capture', () => {
+  const point = { lat: town.lat, lng: town.lng, accuracy: 10, capturedAt: new Date().toISOString() };
+  const placement = { coordinates: town };
+  assert.equal(monitoringLocationCheck(point, placement).locationVerified, 'Verified');
+  for (const accuracy of [50000, undefined, -1]) {
+    assert.equal(monitoringLocationCheck({ ...point, accuracy }, placement).locationVerified, 'Low accuracy');
+  }
+  for (const capturedAt of [undefined, 'invalid', new Date(Date.now() - 3600000), new Date(Date.now() + 3600000)]) {
+    assert.equal(monitoringLocationCheck({ ...point, capturedAt }, placement).locationVerified, 'Stale GPS');
+  }
+  const mobile = monitoringLocationCheck(point, { worksiteMode: 'MobileField' });
+  assert.equal(mobile.locationVerified, 'GPS captured'); assert.equal(mobile.gpsReviewStatus, 'PendingReview');
+});

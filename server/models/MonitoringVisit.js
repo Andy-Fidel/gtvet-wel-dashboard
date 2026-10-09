@@ -18,11 +18,12 @@ const monitoringVisitSchema = new mongoose.Schema({
   submittedLocation: {
     lat: Number,
     lng: Number,
+    capturedAt: Date,
     accuracy: Number,  // metres from browser API
   },
   locationVerified: {
     type: String,
-    enum: ['Verified', 'Unverified', 'No GPS', 'No Placement', 'Site coordinates missing'],
+    enum: ['Verified', 'Unverified', 'No GPS', 'No Placement', 'Site coordinates missing', 'Low accuracy', 'Stale GPS', 'GPS captured'],
     default: 'No GPS',
   },
   gpsCapturedAt: Date,

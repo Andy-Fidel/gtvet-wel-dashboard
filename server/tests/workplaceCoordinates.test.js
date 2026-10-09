@@ -73,7 +73,7 @@ test('pending rechecks use captured location, guard completed decisions and audi
   const changes = [], audits = [];
   t.mock.method(MonitoringVisit, 'find', async value => {
     filter = value;
-    return [{ _id: 'visit', submittedLocation: { lat: 5, lng: 0 }, gpsReviewStatus: 'PendingReview', locationVerified: 'No Placement' }];
+    return [{ _id: 'visit', submittedLocation: { lat: 5, lng: 0, accuracy: 10, capturedAt: new Date() }, gpsReviewStatus: 'PendingReview', locationVerified: 'No Placement' }];
   });
   t.mock.method(MonitoringVisit, 'findOneAndUpdate', async (query, update) => { changes.push({ query, update }); return {}; });
   t.mock.method(AuditLog, 'create', async value => { audits.push(value); });
@@ -93,8 +93,8 @@ test('mobile worksite rechecks capture the visit location without a fixed-radius
   t.mock.method(MonitoringVisit, 'findOneAndUpdate', async (_query, value) => { update = value; return {}; });
   t.mock.method(AuditLog, 'create', async () => ({}));
   await recheckPendingPlacementVisits({ _id: 'site', learner: 'learner', institution: 'Institute', status: 'Active', worksiteMode: 'MobileField' }, { user: { role: 'Admin', name: 'Admin' } });
-  assert.equal(update.$set.locationVerified, 'Verified');
-  assert.equal(update.$set.gpsReviewStatus, 'Verified');
+  assert.equal(update.$set.locationVerified, 'GPS captured');
+  assert.equal(update.$set.gpsReviewStatus, 'PendingReview');
   assert.equal(update.$set.distanceFromSite, null);
 });
 

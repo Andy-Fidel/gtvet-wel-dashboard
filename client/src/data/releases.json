@@ -1,5 +1,28 @@
 [
   {
+    "id": "2026-10-09-monitoring-gps-evidence",
+    "date": "2026-10-09",
+    "title": "More reliable monitoring location checks",
+    "summary": "Clearer GPS results and protected visit location evidence.",
+    "changes": [
+      {
+        "kind": "Fixed",
+        "title": "Know when a location needs review",
+        "body": "Monitoring checks now account for GPS accuracy. Poor accuracy, old readings and mobile workplaces without a fixed location are saved for review. Retry is available after a capture. Editing a report preserves its original GPS evidence and review decision. Offline visits keep the device capture time when they sync.",
+        "audience": "Institution monitoring teams",
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Monitoring Visits",
+          "path": "/monitoring-visits"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-10-09-monitoring-location-and-attendance",
     "date": "2026-10-09",
     "title": "Clearer monitoring visits",

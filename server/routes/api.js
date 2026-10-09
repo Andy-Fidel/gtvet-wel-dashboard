@@ -4576,6 +4576,7 @@ const canMutateMonitoringVisit = (user, visit, action = 'update') => {
 const determineMonitoringVisitVerification = async ({ learnerId, placementId, delegateId, submittedLocation, gpsExceptionReason = '', requireExplanation = true, allowHistorical = false }) => {
     if (typeof gpsExceptionReason !== 'string' || gpsExceptionReason.length > 3000) return { error: 'Provide a location explanation of up to 3000 characters.' };
     if (submittedLocation != null && (!hasCoordinates(submittedLocation) || (submittedLocation.accuracy != null && (!Number.isFinite(submittedLocation.accuracy) || submittedLocation.accuracy < 0)))) return { error: 'Provide a valid captured GPS location.' };
+    if (submittedLocation?.capturedAt != null && !Number.isFinite(new Date(submittedLocation.capturedAt).getTime())) return { error: 'Provide a valid GPS capture time.' };
     if (placementId && !mongoose.isObjectIdOrHexString(placementId)) return { error: 'Select a valid placement.' };
     const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : {}), ...(!allowHistorical || !placementId ? { status: 'Active', archivedAt: null } : {}), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates worksiteMode locationVerificationStatus partner').populate('partner', 'coordinates approximateLocation');
     if (!placement && !allowHistorical) return { error: 'This learner does not have an active placement available for monitoring.' };
@@ -4585,7 +4586,7 @@ const determineMonitoringVisitVerification = async ({ learnerId, placementId, de
     if (!placement && hasCoordinates(submittedLocation)) result.locationVerified = 'No Placement';
     if (requireExplanation && !hasCoordinates(submittedLocation) && !gpsExceptionReason?.trim()) return { error: 'A GPS exception reason is required when GPS is unavailable.' };
     if (requireExplanation && ['Unverified', 'Site coordinates missing', 'No Placement'].includes(result.locationVerified) && !gpsExceptionReason?.trim()) return { error: 'Explain why the visit is outside the selected location or why no location reference is available. It can then be saved for review.' };
-    return { ...result, placement: placement?._id, gpsCapturedAt: hasCoordinates(submittedLocation) ? new Date() : undefined };
+    return { ...result, placement: placement?._id, gpsCapturedAt: hasCoordinates(submittedLocation) && Number.isFinite(new Date(submittedLocation.capturedAt).getTime()) ? new Date(submittedLocation.capturedAt) : undefined };
 };
 
 router.post('/monitoring-visits/location-check', async (req, res) => {
@@ -4647,7 +4648,7 @@ router.post('/monitoring-visits', userAssignmentMutation(async (req, res) => {
         }
 
         const newVisit = new MonitoringVisit({
-          ...visitData,
+          ...Object.fromEntries(['learner', 'visitDate', 'visitorPosition', 'visitType', 'attendanceStatus', 'performanceRating', 'keyObservations', 'issuesIdentified', 'actionRequired', 'gpsExceptionReason'].filter(key => Object.hasOwn(visitData, key)).map(key => [key, visitData[key]])),
           submittedLocation: submittedLocation || undefined,
           verificationLocationType: verification.verificationLocationType,
           verificationRadiusMetres: verification.verificationRadiusMetres,
@@ -4836,41 +4837,14 @@ router.put('/monitoring-visits/:id', async (req, res) => {
         }
         const before = existingVisit.toObject();
 
-        const nextPayload = {
-            ...existingVisit.toObject(),
-            ...requestBody,
-            learner: existingVisit.learner,
-        };
-        const verification = await determineMonitoringVisitVerification({
-            learnerId: nextPayload.learner,
-            allowHistorical: true,
-            placementId: existingVisit.placement,
-            delegateId: req.user.institution !== existingVisit.institution ? req.user._id : undefined,
-            submittedLocation: nextPayload.submittedLocation,
-            gpsExceptionReason: nextPayload.gpsExceptionReason,
-        });
-        if (verification.error) {
-            return res.status(400).json({ message: verification.error });
+        // Visit edits change report content only. GPS evidence and review decisions are immutable here.
+        const nextPayload = { ...existingVisit.toObject(), ...requestBody };
+        if (typeof (nextPayload.gpsExceptionReason ?? '') !== 'string' || (nextPayload.gpsExceptionReason || '').length > 3000) return res.status(400).json({ message: 'Provide a location explanation of up to 3000 characters.' });
+        if (['No GPS', 'Unverified', 'Site coordinates missing', 'No Placement'].includes(existingVisit.locationVerified) && !nextPayload.gpsExceptionReason?.trim()) return res.status(400).json({ message: 'Keep an explanation for this visit’s location exception.' });
+        if (Object.hasOwn(requestBody, 'submittedLocation')) return res.status(400).json({ message: 'The GPS evidence captured with a visit cannot be replaced by editing the report.' });
+        for (const key of ['visitDate', 'visitorPosition', 'visitType', 'attendanceStatus', 'performanceRating', 'keyObservations', 'issuesIdentified', 'actionRequired', 'gpsExceptionReason']) {
+            existingVisit[key] = nextPayload[key];
         }
-
-        existingVisit.visitDate = nextPayload.visitDate;
-        existingVisit.visitorPosition = nextPayload.visitorPosition;
-        existingVisit.visitType = nextPayload.visitType;
-        existingVisit.attendanceStatus = nextPayload.attendanceStatus;
-        existingVisit.performanceRating = nextPayload.performanceRating;
-        existingVisit.keyObservations = nextPayload.keyObservations;
-        existingVisit.issuesIdentified = nextPayload.issuesIdentified;
-        existingVisit.actionRequired = nextPayload.actionRequired;
-        existingVisit.gpsExceptionReason = nextPayload.gpsExceptionReason;
-        existingVisit.submittedLocation = nextPayload.submittedLocation;
-        for (const key of ['verificationLocationType', 'verificationRadiusMetres', 'verificationTownName', 'referenceCoordinates']) existingVisit[key] = verification[key];
-        existingVisit.locationVerified = verification.locationVerified;
-        existingVisit.distanceFromSite = verification.distanceFromSite;
-        existingVisit.gpsReviewStatus = verification.gpsReviewStatus;
-        existingVisit.gpsCapturedAt = verification.gpsCapturedAt || existingVisit.gpsCapturedAt;
-        existingVisit.gpsReviewComment = undefined;
-        existingVisit.gpsReviewedAt = undefined;
-        existingVisit.gpsReviewedBy = undefined;
 
         await existingVisit.save();
 

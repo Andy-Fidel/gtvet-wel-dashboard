@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Loader2, CalendarDays, MapPin, MapPinOff, Handshake } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -76,12 +76,15 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
 
   // GPS capture state
   const [gpsStatus, setGpsStatus] = useState<'acquiring' | 'captured' | 'denied' | 'unavailable'>('acquiring')
-  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy: number; capturedAt: string } | null>(null)
   const presetLearner = typeof initialData?.learner === 'object' ? initialData.learner._id : initialData?.learner || ''
   const draftKey = `draft:monitoring-visit:${user?._id}:${initialData?._id || `new:${presetLearner || 'unselected'}`}`
   const [restoredDraft] = useState(() => initialData?._id ? null : loadDraft<Record<string, string | number | null>>(draftKey))
 
+  const captureSequence = useRef(0)
+  useEffect(() => () => { captureSequence.current += 1 }, [])
   const captureLocation = useCallback(() => {
+    const sequence = ++captureSequence.current
     setGpsCoords(null); setGpsStatus('acquiring')
     if (!navigator.geolocation) {
       setGpsStatus('unavailable');
@@ -89,10 +92,11 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+        if (sequence !== captureSequence.current) return
+        setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy, capturedAt: new Date(pos.timestamp).toISOString() });
         setGpsStatus('captured');
       },
-      () => setGpsStatus('denied'),
+      () => { if (sequence === captureSequence.current) setGpsStatus('denied') },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   }, []);
@@ -184,6 +188,9 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
   async function onSubmit(values: MonitoringVisitFormValues) {
     setLoading(true)
     try {
+        if (!initialData?._id && gpsCoords && Date.now() - new Date(gpsCoords.capturedAt).getTime() > 5 * 60 * 1000) {
+            captureLocation(); toast.info('Refreshing your GPS location. Save again after the location check completes.'); return
+        }
         const url = initialData?._id ? `/api/monitoring-visits/${initialData._id}` : '/api/monitoring-visits';
         if (!initialData?._id && !selectedLearner?.monitoringLocation) { form.setError('learner', { message: 'Select a learner with an active placement.' }); return }
         if (!initialData?._id && ['Unverified', 'No GPS', 'Site coordinates missing'].includes(locationCheck?.locationVerified || '') && !values.gpsExceptionReason?.trim()) { form.setError('gpsExceptionReason', { message: 'Explain this location exception before saving for review.' }); return }
@@ -277,7 +284,7 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
           {!initialData?._id && selectedLearner?.monitoringLocation?.coordinates && <p>{selectedLearner.monitoringLocation.coordinates.precision === 'Town' ? `Selected town: ${selectedLearner.monitoringLocation.coordinates.townName} · approximate 5 km radius` : `Actual workplace: ${selectedLearner.monitoringLocation.companyName || 'Registered location'} · 500 m radius`}</p>}
           <p>Your GPS is compared with the location selected during partner registration: 500 m for an actual workplace or an approximate 5 km radius for a town. Visits outside the area remain available for review.</p>
           <div role="status" aria-live="polite" className="mt-2 font-semibold">
-            {initialData?._id ? 'Editing keeps the GPS location saved with this visit.' : !selectedLearnerId ? 'Select a placed learner to check the visit location.' : gpsStatus === 'acquiring' ? 'Waiting for your GPS location…' : checkingLocation ? 'Checking against the selected learner’s placement…' : locationCheck?.message || (locationCheck?.locationVerified === 'Verified' ? locationCheck.verificationLocationType === 'Town' ? 'Within the approximate town radius.' : locationCheck.verificationLocationType === 'OperatingArea' ? 'GPS captured for this operating-area visit; no fixed-radius check applies.' : 'Within the actual workplace radius.' : locationCheck?.locationVerified === 'Unverified' ? 'Outside the selected location radius. Explain why to save for review.' : locationCheck?.locationVerified === 'No GPS' ? 'GPS unavailable. An explanation is required.' : locationCheck?.locationVerified === 'Site coordinates missing' ? 'Placement reference coordinates are missing. An explanation is required.' : 'Location check will run when saving.')}
+            {initialData?._id ? 'Editing keeps the GPS location saved with this visit.' : !selectedLearnerId ? 'Select a placed learner to check the visit location.' : gpsStatus === 'acquiring' ? 'Waiting for your GPS location…' : checkingLocation ? 'Checking against the selected learner’s placement…' : locationCheck?.message || (locationCheck?.locationVerified === 'Low accuracy' ? 'GPS accuracy is insufficient to confirm this area. Retry or save for review.' : locationCheck?.locationVerified === 'Stale GPS' ? 'GPS capture time cannot confirm a fresh reading. Save for review.' : locationCheck?.locationVerified === 'GPS captured' ? 'GPS captured for this operating-area visit. Pending review; no fixed location comparison applies.' : locationCheck?.locationVerified === 'Verified' ? locationCheck.verificationLocationType === 'Town' ? 'Within the approximate town radius.' : locationCheck.verificationLocationType === 'OperatingArea' ? 'GPS captured for this operating-area visit; no fixed-radius check applies.' : 'Within the actual workplace radius.' : locationCheck?.locationVerified === 'Unverified' ? 'Outside the selected location radius. Explain why to save for review.' : locationCheck?.locationVerified === 'No GPS' ? 'GPS unavailable. An explanation is required.' : locationCheck?.locationVerified === 'Site coordinates missing' ? 'Placement reference coordinates are missing. An explanation is required.' : 'Location check will run when saving.')}
             {locationCheck?.distanceFromSite != null && <p className="text-xs font-normal">{Math.round(locationCheck.distanceFromSite)} m from the saved reference point · allowed radius {locationCheck.verificationRadiusMetres} m.</p>}
           </div>
         </div>
@@ -292,7 +299,7 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
             {gpsStatus === 'acquiring' && <><MapPin className="h-3.5 w-3.5 animate-pulse" /> Acquiring location...</>}
             {gpsStatus === 'denied' && <><MapPinOff className="h-3.5 w-3.5" /> Location denied — visit will be flagged</>}
             {gpsStatus === 'unavailable' && <><MapPinOff className="h-3.5 w-3.5" /> GPS unavailable</>}
-            {(gpsStatus === 'denied' || gpsStatus === 'unavailable') && (
+            {gpsStatus !== 'acquiring' && (
               <button type="button" onClick={captureLocation} className="ml-auto underline text-xs">Retry</button>
             )}
           </div>

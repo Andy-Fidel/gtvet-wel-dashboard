@@ -206,6 +206,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
           {dist && <div className="text-[10px] text-red-500 font-bold">{(dist / 1000).toFixed(1)}km away</div>}
         </div>
       );
+      if (['Low accuracy', 'Stale GPS', 'GPS captured'].includes(status)) return <Badge className="bg-amber-100 text-amber-700">{status} · Pending review</Badge>;
       if (status === 'Site coordinates missing') return <Badge>Site coordinates missing</Badge>;
       if (status === 'No Placement') return (
         <Badge className="bg-gray-100 text-gray-500 border-0 rounded-lg font-bold gap-1"><ShieldQuestion className="h-3 w-3" /> No Site</Badge>

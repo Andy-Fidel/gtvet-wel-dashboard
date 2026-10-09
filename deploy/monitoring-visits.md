@@ -9,3 +9,11 @@ Actual workplace checks retain the 500 m radius; town checks retain the approxim
 Attendance has two form choices with a required, mutually exclusive follow-up. Present/On-time stores Present, Present/Late stores Late, Absent/Excused Yes stores Excused, and Absent/Excused No stores Absent. This preserves existing model validation, statistics, exports and historical records without migration. Drafts retain the new answer and older four-value drafts map to the matching form choices. The review table and detail screen display both attendance and its follow-up answer.
 
 No new service or data migration is required. Verify active own/delegated options, exclusion of unplaced/closed learners, precheck authorization, Actual/Town radii, no precheck writes, save-time placement closure, and Present/Absent follow-up validation and persistence.
+
+## GPS evidence integrity
+
+Automatic verification requires the reading's distance plus its reported accuracy to fit inside the saved radius (500 m actual workplace, 5 km town). Missing/poor accuracy stays PendingReview as Low accuracy. Capture timestamps come from the device, are preserved through offline replay, and are never replaced by sync or edit time. Readings older than five minutes, missing timestamps, or timestamps over one minute in the future stay PendingReview as Stale GPS; offline reports can still be saved. The form asks for a fresh capture before saving an old reading.
+
+Operating areas without a fixed reference are GPS captured / PendingReview. An institution administrator can approve an exception using the existing explanation and evidence process. Capturing GPS alone does not establish proximity to a workplace.
+
+Report edits preserve coordinates, capture time, saved reference point, distance, verification result and administrator review. The edit API rejects replacement GPS coordinates. Automatic rechecks remain limited to pending visits after an explicit placement location correction, and audit the result. Historical results are not rewritten by this release. Device GPS and timestamps remain client evidence, not cryptographic proof of presence.

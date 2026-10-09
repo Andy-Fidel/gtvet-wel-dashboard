@@ -1,11 +1,14 @@
 import { test, expect, type Page } from '@playwright/test'
 
-async function setup(page: Page) {
+type GPSCallbacks = { gpsCallbacks: ((position: unknown) => void)[] }
+
+async function setup(page: Page, deferredGPS = false) {
   const checks: string[] = [], writes: Record<string, unknown>[] = [];
-  await page.addInitScript(() => {
+  await page.addInitScript((deferred) => {
     localStorage.setItem('gtvets-help-auto-started:v1:qa', 'seen');
-    Object.defineProperty(navigator, 'geolocation', { value: { getCurrentPosition(success: (position: unknown) => void) { success({ coords: { latitude: 6.68, longitude: -1.62, accuracy: 10 } }) } } });
-  });
+    (window as unknown as GPSCallbacks).gpsCallbacks = [];
+    Object.defineProperty(navigator, 'geolocation', { value: { getCurrentPosition(success: (position: unknown) => void) { if (deferred) { (window as unknown as GPSCallbacks).gpsCallbacks.push(success); return } success({ timestamp: Date.now(), coords: { latitude: 6.68, longitude: -1.62, accuracy: 10 } }) } } });
+  }, deferredGPS);
   const own = '507f1f77bcf86cd799439011', away = '507f1f77bcf86cd799439012';
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -78,4 +81,25 @@ test('draft recovery retains conditional attendance and switching status clears 
   await dialog.getByRole('combobox', { name: 'Attendance Status' }).click(); await page.getByRole('option', { name: 'Present', exact: true }).click();
   await expect(dialog.getByRole('checkbox', { name: 'Late', exact: true })).not.toBeChecked();
   await expect(dialog.getByRole('checkbox', { name: 'On-time', exact: true })).not.toBeChecked();
+});
+
+test('older GPS callbacks cannot overwrite the capture for the latest selected learner', async ({ page }) => {
+  const { checks } = await setup(page, true);
+  const dialog = page.getByRole('dialog', { name: 'Log Visit' });
+  await dialog.getByRole('combobox', { name: 'Learner / Trainee' }).click();
+  await page.getByRole('option', { name: 'Placed learner', exact: true }).click();
+  await dialog.getByRole('combobox', { name: 'Learner / Trainee' }).click();
+  await page.getByRole('option', { name: 'Outside learner', exact: true }).click();
+  await page.evaluate(() => {
+    const callbacks = (window as unknown as GPSCallbacks).gpsCallbacks;
+    callbacks.at(-1)!({ timestamp: Date.now(), coords: { latitude: 6.70, longitude: -1.62, accuracy: 10 } });
+  });
+  await expect(dialog.getByText('Location captured (10m accuracy)')).toBeVisible();
+  await expect(dialog.getByText('Outside the selected location radius. Explain why to save for review.')).toBeVisible();
+  await page.evaluate(() => {
+    const callbacks = (window as unknown as GPSCallbacks).gpsCallbacks;
+    for (const callback of callbacks.slice(0, -1)) callback({ timestamp: Date.now(), coords: { latitude: 0, longitude: 0, accuracy: 50000 } });
+  });
+  await expect(dialog.getByText('Location captured (10m accuracy)')).toBeVisible();
+  expect(checks).toEqual(['507f1f77bcf86cd799439012']);
 });
