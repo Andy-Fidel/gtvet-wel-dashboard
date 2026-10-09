@@ -94,12 +94,12 @@ test('older GPS callbacks cannot overwrite the capture for the latest selected l
     const callbacks = (window as unknown as GPSCallbacks).gpsCallbacks;
     callbacks.at(-1)!({ timestamp: Date.now(), coords: { latitude: 6.70, longitude: -1.62, accuracy: 10 } });
   });
-  await expect(dialog.getByText('Location captured (10m accuracy)')).toBeVisible();
+  await expect(dialog.getByText('Your device location captured · Estimated accuracy: ±10 m')).toBeVisible();
   await expect(dialog.getByText('Outside the selected location radius. Explain why to save for review.')).toBeVisible();
   await page.evaluate(() => {
     const callbacks = (window as unknown as GPSCallbacks).gpsCallbacks;
     for (const callback of callbacks.slice(0, -1)) callback({ timestamp: Date.now(), coords: { latitude: 0, longitude: 0, accuracy: 50000 } });
   });
-  await expect(dialog.getByText('Location captured (10m accuracy)')).toBeVisible();
+  await expect(dialog.getByText('Your device location captured · Estimated accuracy: ±10 m')).toBeVisible();
   expect(checks).toEqual(['507f1f77bcf86cd799439012']);
 });

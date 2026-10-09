@@ -183,6 +183,8 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
       .finally(() => { if (!controller.signal.aborted) setCheckingLocation(false) })
     return () => controller.abort()
   }, [authFetch, selectedLearnerId, selectedLearner?.monitoringLocation?.placementId, gpsCoords, gpsStatus, initialData?._id, initialData?.placement])
+  const currentLocationResult = !initialData?._id && selectedLearnerId && locationCheck?.learner === selectedLearnerId && gpsStatus !== 'acquiring' && !checkingLocation && !locationCheck?.message ? locationCheck?.locationVerified : undefined
+  const locationTextColor = currentLocationResult === 'Verified' ? 'text-emerald-700' : currentLocationResult === 'Unverified' ? 'text-red-700' : 'text-amber-700'
   const normalizeSliderValue = (value: number) => (Number.isFinite(value) ? value : 1)
 
   async function onSubmit(values: MonitoringVisitFormValues) {
@@ -283,7 +285,7 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
           <strong>One location check for every visit</strong>
           {!initialData?._id && selectedLearner?.monitoringLocation?.coordinates && <p>{selectedLearner.monitoringLocation.coordinates.precision === 'Town' ? `Selected town: ${selectedLearner.monitoringLocation.coordinates.townName} · approximate 5 km radius` : `Actual workplace: ${selectedLearner.monitoringLocation.companyName || 'Registered location'} · 500 m radius`}</p>}
           <p>Your GPS is compared with the location selected during partner registration: 500 m for an actual workplace or an approximate 5 km radius for a town. Visits outside the area remain available for review.</p>
-          <div role="status" aria-live="polite" className="mt-2 font-semibold">
+          <div role="status" aria-live="polite" className={cn("mt-2 font-semibold", locationTextColor)}>
             {initialData?._id ? 'Editing keeps the GPS location saved with this visit.' : !selectedLearnerId ? 'Select a placed learner to check the visit location.' : gpsStatus === 'acquiring' ? 'Waiting for your GPS location…' : checkingLocation ? 'Checking against the selected learner’s placement…' : locationCheck?.message || (locationCheck?.locationVerified === 'Low accuracy' ? 'GPS accuracy is insufficient to confirm this area. Retry or save for review.' : locationCheck?.locationVerified === 'Stale GPS' ? 'GPS capture time cannot confirm a fresh reading. Save for review.' : locationCheck?.locationVerified === 'GPS captured' ? 'GPS captured for this operating-area visit. Pending review; no fixed location comparison applies.' : locationCheck?.locationVerified === 'Verified' ? locationCheck.verificationLocationType === 'Town' ? 'Within the approximate town radius.' : locationCheck.verificationLocationType === 'OperatingArea' ? 'GPS captured for this operating-area visit; no fixed-radius check applies.' : 'Within the actual workplace radius.' : locationCheck?.locationVerified === 'Unverified' ? 'Outside the selected location radius. Explain why to save for review.' : locationCheck?.locationVerified === 'No GPS' ? 'GPS unavailable. An explanation is required.' : locationCheck?.locationVerified === 'Site coordinates missing' ? 'Placement reference coordinates are missing. An explanation is required.' : 'Location check will run when saving.')}
             {locationCheck?.distanceFromSite != null && <p className="text-xs font-normal">{Math.round(locationCheck.distanceFromSite)} m from the saved reference point · allowed radius {locationCheck.verificationRadiusMetres} m.</p>}
           </div>
@@ -291,11 +293,11 @@ function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormPr
         {/* GPS Status Indicator */}
         {!initialData?._id && (
           <div className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold ${
-            gpsStatus === 'captured' ? 'bg-emerald-50 text-emerald-700' :
+            gpsStatus === 'captured' ? `bg-slate-50 ${locationTextColor}` :
             gpsStatus === 'acquiring' ? 'bg-blue-50 text-blue-700' :
             'bg-amber-50 text-amber-700'
           }`}>
-            {gpsStatus === 'captured' && <><MapPin className="h-3.5 w-3.5" /> Location captured ({gpsCoords?.accuracy?.toFixed(0)}m accuracy)</>}
+            {gpsStatus === 'captured' && <><MapPin className="h-3.5 w-3.5" /> Your device location captured · Estimated accuracy: ±{gpsCoords?.accuracy?.toFixed(0)} m</>}
             {gpsStatus === 'acquiring' && <><MapPin className="h-3.5 w-3.5 animate-pulse" /> Acquiring location...</>}
             {gpsStatus === 'denied' && <><MapPinOff className="h-3.5 w-3.5" /> Location denied — visit will be flagged</>}
             {gpsStatus === 'unavailable' && <><MapPinOff className="h-3.5 w-3.5" /> GPS unavailable</>}
