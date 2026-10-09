@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { WorkplaceCoordinates } from '@/components/WorkplaceCoordinates'
 import { readCoordinates, locationMeta, registeredPoint, type LocationMeta } from '@/lib/workplaceCoordinates'
 import { useForm } from "react-hook-form"
@@ -20,13 +20,17 @@ import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
 import { Loader2, Search, Building2, Terminal, ShieldAlert, CheckCircle2, AlertCircle, Circle } from "lucide-react"
 import type { IndustryPartner, Learner } from '@/types/models'
-import { INDUSTRY_SECTORS } from "@/lib/constants"
+import { INDUSTRY_SECTORS, GHANA_REGIONS } from "@/lib/constants"
 
-const GHANA_REGIONS = [
-  "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern",
-  "Greater Accra", "North East", "Northern", "Oti", "Savannah",
-  "Upper East", "Upper West", "Volta", "Western", "Western North"
-].sort()
+export type EditablePlacementRequest = {
+  _id: string; workflowVersion?: number; sourceType?: string; program: string;
+  partner?: { _id?: string }; learners: { _id: string }[];
+  placementRegion?: string; startDate?: string; endDate?: string;
+  coordinates?: import('@/lib/workplaceCoordinates').WorkplacePoint;
+  worksiteMode?: FormValues['worksiteMode']; expectedOperatingArea?: string; locationVerificationNotes?: string; worksiteLocation?: string;
+  supervisorName?: string; supervisorPhone?: string; supervisorEmail?: string;
+  selfSourcedHost?: { companyName?: string; sector?: string; location?: string; tradeArea?: string; town?: string; contactPerson?: string; contactPhone?: string; contactEmail?: string; notes?: string };
+}
 
 const formSchema = z.object({
   placementType: z.enum(["registered", "custom", "learner_sourced"]),
@@ -86,14 +90,15 @@ type FormValues = z.infer<typeof formSchema>
 
 interface UnifiedPlacementFormProps {
   onSuccess: () => void;
-  initialData?: { learner?: string };
+  initialData?: { learner?: string; partner?: string };
+  editRequest?: EditablePlacementRequest;
 }
 
-export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacementFormProps) {
+export function UnifiedPlacementForm({ onSuccess, initialData, editRequest }: UnifiedPlacementFormProps) {
   const [loading, setLoading] = useState(false)
-  const [lat, setLat] = useState('')
-  const [lng, setLng] = useState('')
-  const [meta, setMeta] = useState<LocationMeta>({ precision: 'Actual' })
+  const [lat, setLat] = useState(String(editRequest?.coordinates?.lat ?? ''))
+  const [lng, setLng] = useState(String(editRequest?.coordinates?.lng ?? ''))
+  const [meta, setMeta] = useState<LocationMeta>(locationMeta(editRequest?.coordinates))
   const [partners, setPartners] = useState<IndustryPartner[]>([])
   const [partnerSearch, setPartnerSearch] = useState('')
   const matchingPartners = partners.filter(partner =>
@@ -102,7 +107,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const [learners, setLearners] = useState<Learner[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [overrideWelWindow, setOverrideWelWindow] = useState(false)
-  const [worksiteChoice, setWorksiteChoice] = useState<'partner' | 'different'>('partner')
+  const [worksiteChoice, setWorksiteChoice] = useState<'partner' | 'different'>(editRequest?.partner ? 'different' : 'partner')
   const { authFetch, user } = useAuth()
 
   const preSelectedLearnerId = initialData?.learner;
@@ -110,23 +115,23 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: { 
-        placementType: "registered",
-        partner: "", 
-        placementRegion: "",
-        learners: preSelectedLearnerId ? [preSelectedLearnerId] : [], 
-        startDate: "", 
-        endDate: "",
-        companyName: "",
-        sector: "",
-        location: "",
-        supervisorName: "",
-        supervisorPhone: "",
-        supervisorEmail: "",
-        tradeArea: "",
-        town: "",
-        contactPerson: "",
-        sourceNotes: ""
-        ,worksiteMode: 'FixedSite', expectedOperatingArea: '', locationVerificationNotes: '', worksiteLocation: '', approveLocationException: false
+        placementType: editRequest ? editRequest.partner ? 'registered' : editRequest.sourceType === 'LearnerFound' ? 'learner_sourced' : 'custom' : 'registered',
+        partner: editRequest?.partner?._id || initialData?.partner || '',
+        placementRegion: editRequest?.placementRegion || '',
+        learners: editRequest?.learners.map(learner => learner._id) || (preSelectedLearnerId ? [preSelectedLearnerId] : []),
+        startDate: editRequest?.startDate?.slice(0, 10) || '',
+        endDate: editRequest?.endDate?.slice(0, 10) || '',
+        companyName: editRequest?.selfSourcedHost?.companyName || '',
+        sector: editRequest?.selfSourcedHost?.sector || '',
+        location: editRequest?.selfSourcedHost?.location || '',
+        supervisorName: editRequest?.supervisorName || editRequest?.selfSourcedHost?.contactPerson || '',
+        supervisorPhone: editRequest?.supervisorPhone || editRequest?.selfSourcedHost?.contactPhone || '',
+        supervisorEmail: editRequest?.supervisorEmail || editRequest?.selfSourcedHost?.contactEmail || '',
+        tradeArea: editRequest?.selfSourcedHost?.tradeArea || '',
+        town: editRequest?.selfSourcedHost?.town || '',
+        contactPerson: editRequest?.selfSourcedHost?.contactPerson || '',
+        sourceNotes: editRequest?.selfSourcedHost?.notes || '',
+        worksiteMode: editRequest?.worksiteMode || 'FixedSite', expectedOperatingArea: editRequest?.expectedOperatingArea || '', locationVerificationNotes: editRequest?.locationVerificationNotes || '', worksiteLocation: editRequest?.worksiteLocation || '', approveLocationException: false
     },
   })
 
@@ -136,12 +141,19 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
   const approveLocationException = form.watch('approveLocationException')
   const flexibleWorksite = ['MobileField', 'NoFixedPremises'].includes(worksiteMode)
   const selectedPartner = useMemo(() => placementType === 'registered' ? partners.find(item => item._id === selectedPartnerId) : undefined, [placementType, partners, selectedPartnerId])
+  const prefilledPartner = useRef<string | undefined>(editRequest?.partner?._id)
   const showWorksiteSection = placementType !== 'registered' || Boolean(selectedPartner)
   useEffect(() => {
+    if (editRequest && !selectedPartner) return
+    // Refreshing capacity must not overwrite the user's worksite or supervisor edits.
+    if (selectedPartner && prefilledPartner.current === selectedPartner._id) return
+    prefilledPartner.current = selectedPartner?._id
     const site = registeredPoint(selectedPartner)
     setLat(String(site?.lat ?? '')); setLng(String(site?.lng ?? '')); setMeta(locationMeta(site))
     setWorksiteChoice('partner')
     if (selectedPartner) {
+      const region = GHANA_REGIONS.find(name => name.toLowerCase() === selectedPartner.region.trim().replace(/\s+region$/i, '').toLowerCase()) || (/^g\.?\s*accra$/i.test(selectedPartner.region) ? 'Greater Accra' : '')
+      form.setValue('placementRegion', region)
       form.setValue('worksiteMode', selectedPartner.operatingModel || 'FixedSite')
       form.setValue('worksiteLocation', selectedPartner.location || '')
       form.setValue('locationVerificationNotes', selectedPartner.locationVerificationNotes || '')
@@ -150,7 +162,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
       form.setValue('supervisorPhone', selectedPartner.contactPhone || '')
       form.setValue('supervisorEmail', selectedPartner.contactEmail || '')
     }
-  }, [selectedPartner, form])
+  }, [selectedPartner, form, editRequest])
 
   useEffect(() => {
     const fetchData = async () => {
@@ -269,7 +281,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
     }
 
     // Capacity checking for registered partners
-    if (data.placementType === 'registered') {
+    if (data.placementType === 'registered' && !editRequest) {
         const partnerDoc = partners.find(p => p._id === data.partner);
         if (!partnerDoc) return;
         const availableSlots = partnerDoc.institutionCapacity?.availableSlots ?? (partnerDoc.totalSlots - partnerDoc.usedSlots)
@@ -294,6 +306,23 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
           supervisorPhone: data.supervisorPhone,
           supervisorEmail: data.supervisorEmail,
           approveLocationException: data.approveLocationException,
+      }
+      if (editRequest) {
+          const response = await authFetch(`/api/placement-requests/${editRequest._id}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+              sourceVersion: editRequest.workflowVersion || 0, partner: data.placementType === 'registered' ? data.partner : undefined,
+              learners: data.learners, program: selectedLearnerInfo?.program || editRequest.program,
+              placementRegion: data.placementRegion, startDate: data.startDate, endDate: data.endDate,
+              coordinates: coordinates || null, ...locationFields,
+              selfSourcedHost: data.placementType === 'registered' ? undefined : { companyName: data.companyName, sector: data.sector, location: data.location, tradeArea: data.tradeArea, town: data.town, contactPerson: data.contactPerson, contactPhone: data.supervisorPhone, contactEmail: data.supervisorEmail, notes: data.sourceNotes },
+              overrideWelWindow,
+            }),
+          })
+          const payload = await response.json()
+          if (!response.ok) throw new Error(payload.message || 'Unable to save request changes')
+          toast.success('Changes saved. The request has not been activated.')
+          onSuccess()
+          return
       }
       if (data.placementType === 'registered') {
           // Send to placement-requests endpoint
@@ -399,9 +428,9 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         <section className="space-y-3" aria-label="Placement source">
           <div><p className="text-xs font-bold uppercase tracking-wider text-gray-500">Step 1</p><h3 className="text-lg font-black text-gray-900">How was the placement found?</h3></div>
           <div className="flex w-full max-w-2xl bg-gray-100 p-1 rounded-2xl">
-            <button type="button" aria-pressed={placementType === 'registered'} onClick={() => form.setValue('placementType', 'registered')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'registered' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Building2 className="h-4 w-4" /> Registered Partner</button>
-            <button type="button" aria-pressed={placementType === 'custom'} onClick={() => form.setValue('placementType', 'custom')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'custom' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Terminal className="h-4 w-4" /> Custom Org</button>
-            <button type="button" aria-pressed={placementType === 'learner_sourced'} onClick={() => form.setValue('placementType', 'learner_sourced')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'learner_sourced' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Search className="h-4 w-4" /> Learner Found</button>
+            <button type="button" disabled={Boolean(editRequest)} aria-pressed={placementType === 'registered'} onClick={() => form.setValue('placementType', 'registered')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'registered' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Building2 className="h-4 w-4" /> Registered Partner</button>
+            <button type="button" disabled={Boolean(editRequest)} aria-pressed={placementType === 'custom'} onClick={() => form.setValue('placementType', 'custom')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'custom' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Terminal className="h-4 w-4" /> Custom Org</button>
+            <button type="button" disabled={Boolean(editRequest)} aria-pressed={placementType === 'learner_sourced'} onClick={() => form.setValue('placementType', 'learner_sourced')} className={`flex-1 flex justify-center items-center gap-2 py-2.5 px-3 rounded-xl text-sm font-bold transition-all ${placementType === 'learner_sourced' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}><Search className="h-4 w-4" /> Learner Found</button>
           </div>
         </section>
         {selectedLearnerIds.length > 0 && (() => {
@@ -487,10 +516,6 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
                     <Select
                       onValueChange={(value) => {
                         field.onChange(value)
-                        const selectedPartner = partners.find((partner) => partner._id === value)
-                        if (selectedPartner?.region) {
-                          form.setValue("placementRegion", selectedPartner.region, { shouldValidate: true })
-                        }
                       }}
                       value={field.value}
                     >
@@ -655,7 +680,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
               <div className={`rounded-xl border p-4 text-sm ${hasGps ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>{hasGps ? <><strong>Selected location available.</strong> Monitoring will use the selected actual workplace or approximate town location.</> : <><strong>GPS coordinates are missing.</strong> Capture them while at the workplace. A registered-partner request can still be submitted for management follow-up.</>}</div>
             </>}
             {placementType === 'registered' && <div className="grid gap-4 md:grid-cols-2"><FormField control={form.control} name="supervisorName" render={({ field }) => <FormItem><FormLabel>Workplace Supervisor {flexibleWorksite ? '*' : ''}</FormLabel><FormControl><Input className="bg-white" placeholder="Full name" {...field} /></FormControl>{selectedPartner?.contactPerson && <p className="text-xs font-semibold text-indigo-600">Prefilled from partner contact</p>}<FormMessage /></FormItem>} /><FormField control={form.control} name="supervisorPhone" render={({ field }) => <FormItem><FormLabel>Supervisor Phone {flexibleWorksite ? '*' : ''}</FormLabel><FormControl><Input className="bg-white" placeholder="+233..." {...field} /></FormControl>{selectedPartner?.contactPhone && <p className="text-xs font-semibold text-indigo-600">Prefilled from partner contact</p>}<FormMessage /></FormItem>} /></div>}
-            {user?.role === 'Admin' && !hasGps && placementType === 'custom' && <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><Checkbox checked={approveLocationException} onCheckedChange={(checked) => form.setValue('approveLocationException', checked === true)} className="mt-0.5" /><span><span className="block font-bold">Approve {flexibleWorksite ? 'alternative location evidence' : 'provisional activation'}</span><span className="block text-xs">{flexibleWorksite ? 'This decision is recorded in the audit log.' : 'GPS must be captured within 14 days.'}</span></span></label>}
+            {!editRequest && user?.role === 'Admin' && !hasGps && placementType === 'custom' && <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><Checkbox checked={approveLocationException} onCheckedChange={(checked) => form.setValue('approveLocationException', checked === true)} className="mt-0.5" /><span><span className="block font-bold">Approve {flexibleWorksite ? 'alternative location evidence' : 'provisional activation'}</span><span className="block text-xs">{flexibleWorksite ? 'This decision is recorded in the audit log.' : 'GPS must be captured within 14 days.'}</span></span></label>}
           </section>
         )}
 
@@ -786,7 +811,7 @@ export function UnifiedPlacementForm({ onSuccess, initialData }: UnifiedPlacemen
         </section>
 
         <Button type="submit" disabled={loading} className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm mt-2">
-          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : placementType === 'learner_sourced' ? 'Submit for Verification' : placementType === 'registered' ? 'Submit for Activation' : user?.role === 'Admin' && approveLocationException ? flexibleWorksite ? 'Activate with Approved Evidence' : 'Activate Provisionally' : 'Confirm Placement'}
+          {loading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : editRequest ? 'Save changes' : placementType === 'learner_sourced' ? 'Submit for Verification' : placementType === 'registered' ? 'Submit for Activation' : user?.role === 'Admin' && approveLocationException ? flexibleWorksite ? 'Activate with Approved Evidence' : 'Activate Provisionally' : 'Confirm Placement'}
         </Button>
       </form>
     </Form>

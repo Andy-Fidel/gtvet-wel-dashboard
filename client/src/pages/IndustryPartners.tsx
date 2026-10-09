@@ -1,4 +1,8 @@
 import { useState, useEffect } from "react"
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { GHANA_REGIONS, INDUSTRY_SECTORS } from '@/lib/constants'
+import { UnifiedPlacementForm } from './UnifiedPlacementForm'
 import { useAuth } from "@/context/AuthContext"
 import { Plus, Building2, MapPin, Phone, Mail, Link as LinkIcon, BarChart2, UserPlus, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -16,6 +20,11 @@ export type IndustryPartner = SharedIndustryPartner & {
 }
 
 export default function IndustryPartners() {
+  const { user } = useAuth()
+  return <IndustryPartnerDirectory key={`${user?._id}:${user?.institution}:${user?.role}`} />
+}
+
+function IndustryPartnerDirectory() {
   const [partners, setPartners] = useState<IndustryPartner[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
@@ -31,6 +40,22 @@ export default function IndustryPartners() {
   const [totalPages, setTotalPages] = useState(0)
   const [loadError, setLoadError] = useState(false)
   const { authFetch, user } = useAuth()
+  const institutionDirectory = ['Admin', 'Manager', 'Staff'].includes(user?.role || '')
+  const [tab, setTab] = useState('browse')
+  const [region, setRegion] = useState<string | null>(null)
+  const [institutionRegion, setInstitutionRegion] = useState(user?.region || '')
+  const [search, setSearch] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [sector, setSector] = useState('')
+  const [directorySectors, setDirectorySectors] = useState<string[]>([...INDUSTRY_SECTORS])
+  const [availableOnly, setAvailableOnly] = useState(false)
+  const [detailsPartner, setDetailsPartner] = useState<IndustryPartner | null>(null)
+  const [placementPartner, setPlacementPartner] = useState<IndustryPartner | null>(null)
+  const selectedRegion = region ?? institutionRegion
+  useEffect(() => {
+    const timer = setTimeout(() => { setSearchQuery(search.trim()); setPage(1) }, 300)
+    return () => clearTimeout(timer)
+  }, [search])
   const isApprovedPartner = (partner: IndustryPartner) => !partner.approvalStatus || partner.approvalStatus === 'Approved'
 
   useEffect(() => {
@@ -39,9 +64,19 @@ export default function IndustryPartners() {
       setLoading(true)
       setLoadError(false)
       try {
-        const includeAll = ['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'].includes(user?.role || '')
+        const includeAll = !institutionDirectory && ['SuperAdmin', 'RegionalAdmin'].includes(user?.role || '')
         const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
         if (includeAll) params.set('includeAll', '1')
+        if (institutionDirectory) {
+          params.set('directory', '1')
+          params.set('view', tab === 'submissions' ? 'submissions' : 'browse')
+          if (tab === 'browse') {
+            if (region !== null) params.set('region', region)
+            if (sector) params.set('sector', sector)
+            if (availableOnly) params.set('availableOnly', '1')
+            if (searchQuery) params.set('q', searchQuery)
+          }
+        }
         const res = await authFetch(`/api/industry-partners?${params}`)
         if (!res.ok) throw new Error("Failed to fetch")
         const data = await res.json()
@@ -54,6 +89,8 @@ export default function IndustryPartners() {
         setPartners(data.items)
         setTotal(data.total)
         setTotalPages(data.totalPages)
+        if (typeof data.institutionRegion === 'string') setInstitutionRegion(data.institutionRegion)
+        if (Array.isArray(data.sectors)) setDirectorySectors(data.sectors.filter((value: unknown): value is string => typeof value === 'string'))
       } catch (err) {
         if (cancelled) return
         setLoadError(true)
@@ -66,7 +103,7 @@ export default function IndustryPartners() {
     }
     fetchPartners()
     return () => { cancelled = true }
-  }, [refreshKey, authFetch, user?.role, user?.institution, user?.region, page, pageSize])
+  }, [refreshKey, authFetch, user?.role, user?.institution, user?.region, page, pageSize, institutionDirectory, tab, region, sector, availableOnly, searchQuery])
 
   const handleSuccess = () => {
     setOpen(false)
@@ -113,14 +150,14 @@ export default function IndustryPartners() {
   }
 
   return (
-    <div className="flex-1 space-y-8 p-8 flex flex-col items-center max-w-7xl mx-auto w-full">
-      <div className="flex items-center justify-between w-full">
+    <Tabs value={tab} onValueChange={value => { setTab(value); setPage(1) }} className="flex-1 space-y-8 p-4 sm:p-8 flex flex-col items-center max-w-7xl mx-auto w-full">
+      <div className="flex flex-wrap items-center justify-between gap-4 w-full">
         <div>
           <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
             <Building2 className="h-6 w-6 md:h-8 md:w-8 text-[#FFB800]" />
             Industry Partners
           </h2>
-          <p className="text-muted-foreground mt-1 font-medium">Manage companies providing placement opportunities.</p>
+          <p className="text-muted-foreground mt-1 font-medium">{institutionDirectory ? 'Find approved partners for your learners anywhere in Ghana.' : 'Manage companies providing placement opportunities.'}</p>
         </div>
         {['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'].includes(user?.role || '') && (
           <div className="flex flex-col sm:flex-row items-start sm:items-center w-full md:w-auto mt-4 md:mt-0 space-y-2 sm:space-y-0 sm:space-x-2">
@@ -131,7 +168,33 @@ export default function IndustryPartners() {
         )}
       </div>
 
-      {['Admin', 'Manager', 'Staff', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && <PartnerChangeQueue onChange={() => setRefreshKey(key => key + 1)} />}
+      {institutionDirectory && <TabsList className="max-w-full"><TabsTrigger value="browse">Browse partners</TabsTrigger><TabsTrigger value="submissions">My submissions &amp; changes</TabsTrigger></TabsList>}
+      <TabsContent value={tab} className="w-full space-y-6">
+      {institutionDirectory && tab === 'browse' && <section aria-label="Partner directory filters" className="w-full rounded-2xl border border-gray-200 bg-white p-5 space-y-4">
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="min-w-64 flex-1 text-sm font-bold">Browse by region<select className="mt-2 block w-full rounded-lg border border-gray-300 bg-white p-3 font-medium" value={selectedRegion || 'all'} onChange={event => { setRegion(event.target.value); setPage(1) }}>
+            <option value="all">All regions</option>{GHANA_REGIONS.map(name => <option key={name}>{name}</option>)}
+          </select></label>
+          <div className="flex-1 min-w-64 text-sm text-gray-600">{institutionRegion && <span className="inline-block mb-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">{selectedRegion === institutionRegion ? 'Your institution’s region' : `Your institution: ${institutionRegion}`}</span>}<p>{institutionRegion ? `${institutionRegion} is selected by default. Switch regions to explore other partners.` : 'Select a region to explore approved partners across Ghana.'}</p></div>
+        </div>
+        <div className="flex flex-wrap gap-2" aria-label="Quick region selection">{[...new Set([institutionRegion, 'Greater Accra', 'Central', 'Eastern', 'Western'])].filter(Boolean).map(name => <Button key={name} variant="outline" aria-pressed={selectedRegion === name} className={selectedRegion === name ? 'bg-amber-50 border-amber-400' : ''} onClick={() => { setRegion(name); setPage(1) }}>{name}</Button>)}<Button variant="outline" aria-pressed={selectedRegion === 'all'} onClick={() => { setRegion('all'); setPage(1) }}>All regions</Button></div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Input className="min-w-56 flex-1" aria-label="Search partner name or town" placeholder="Search partner name or town" value={search} maxLength={160} onChange={event => setSearch(event.target.value)} />
+          <label className="sr-only" htmlFor="partner-sector">Sector</label><select id="partner-sector" className="max-w-full rounded-lg border border-gray-300 bg-white p-2 text-sm" value={sector} onChange={event => { setSector(event.target.value); setPage(1) }}><option value="">All sectors</option>{[...new Set([...directorySectors, ...(sector ? [sector] : [])])].map(name => <option key={name}>{name}</option>)}</select>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={availableOnly} onChange={event => { setAvailableOnly(event.target.checked); setPage(1) }} />With available slots</label>
+        </div>
+        <p className="text-xs text-gray-500">Availability is for today. Capacity and permissions are checked again for the placement dates you choose.</p>
+      </section>}
+      {(!institutionDirectory || tab === 'submissions') && ['Admin', 'Manager', 'Staff', 'SuperAdmin', 'RegionalAdmin'].includes(user?.role || '') && <PartnerChangeQueue onChange={() => setRefreshKey(key => key + 1)} />}
+      {institutionDirectory && <h3 className="w-full text-lg font-bold">{tab === 'submissions' ? 'Your institution’s submissions' : selectedRegion && selectedRegion !== 'all' ? `Partners in ${selectedRegion}` : 'Partners across Ghana'}{!loading && !loadError && <span className="ml-3 text-sm font-normal text-gray-500">{total} {tab === 'browse' ? 'approved ' : ''}partner{total === 1 ? '' : 's'}</span>}</h3>}
+      <Dialog open={!!placementPartner} onOpenChange={value => { if (!value) setPlacementPartner(null) }}><DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Placement with {placementPartner?.name}</DialogTitle><DialogDescription>Select learners and placement dates. Existing approval and capacity checks apply.</DialogDescription></DialogHeader>{placementPartner && <UnifiedPlacementForm initialData={{ partner: placementPartner._id }} onSuccess={() => { setPlacementPartner(null); setRefreshKey(key => key + 1) }} />}</DialogContent></Dialog>
+      <Dialog open={!!detailsPartner} onOpenChange={value => { if (!value) setDetailsPartner(null) }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{detailsPartner?.name}</DialogTitle><DialogDescription>Partner contact and workplace information</DialogDescription></DialogHeader>{detailsPartner && <div className="space-y-4 text-sm">
+        <p>{detailsPartner.sector} · {detailsPartner.town || detailsPartner.location || detailsPartner.region} · {detailsPartner.region}</p>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt>Contact person</dt><dd>{detailsPartner.contactPerson || 'Not recorded'}</dd><dt>Phone</dt><dd>{detailsPartner.contactPhone || 'Not recorded'}</dd><dt>Email</dt><dd>{detailsPartner.contactEmail || 'Not recorded'}</dd><dt>Location type</dt><dd>{detailsPartner.locationVerificationStatus === 'TownSelected' ? 'Town location · approximate 5 km radius' : detailsPartner.locationVerificationStatus === 'GPSVerified' ? 'Actual workplace · 500 m radius' : 'Location verification pending'}</dd></dl>
+        {detailsPartner.website && <a className="block text-blue-700 underline" target="_blank" rel="noreferrer" href={detailsPartner.website}>Website</a>}
+        {detailsPartner.mouDocumentUrl && <a className="block text-blue-700 underline" target="_blank" rel="noreferrer" href={detailsPartner.mouDocumentUrl}>View MoU</a>}
+        <div className="flex flex-wrap gap-2">{detailsPartner.canRequestChanges && <Button variant="outline" onClick={() => { setChangePartner(detailsPartner); setDetailsPartner(null) }}>Request changes</Button>}<Button variant="outline" onClick={() => { setRelationshipPartner(detailsPartner); setDetailsPartner(null) }}>Institution details</Button><Button variant="outline" onClick={() => { setAllocationPartner(detailsPartner); setDetailsPartner(null) }}>Reserved slots</Button></div>
+      </div>}</DialogContent></Dialog>
       <Dialog open={!!changePartner} onOpenChange={open => { if (!open) setChangePartner(null) }}><DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Request changes: {changePartner?.name}</DialogTitle><DialogDescription>Submit corrections for institution and HQ review.</DialogDescription></DialogHeader>{changePartner && <PartnerChangeForm partner={{ ...changePartner }} onDone={() => setChangePartner(null)} />}</DialogContent></Dialog>
       <Dialog open={!!relationshipPartner} onOpenChange={open => { if (!open) setRelationshipPartner(null) }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{relationshipPartner?.name}: institution details</DialogTitle><DialogDescription>Contacts and notes for your institution.</DialogDescription></DialogHeader>{relationshipPartner && <PartnerRelationship partner={relationshipPartner} onDone={() => setRelationshipPartner(null)} />}</DialogContent></Dialog>
       {allocationPartner && <PartnerSlotAllocations partner={allocationPartner} open={Boolean(allocationPartner)} onOpenChange={value => { if (!value) setAllocationPartner(null) }} onChanged={() => setRefreshKey(key => key + 1)} />}
@@ -173,7 +236,7 @@ export default function IndustryPartners() {
         <div className="w-full text-center p-16 bg-white/50 border border-dashed border-gray-300 rounded-[2.5rem]">
           <Building2 className="h-16 w-16 text-gray-300 mx-auto mb-4" />
           <h3 className="text-xl font-black text-gray-500 tracking-tight">No partners found</h3>
-          <p className="text-gray-400 mt-2 font-medium">Add some industry partners to get started.</p>
+          <p className="text-gray-400 mt-2 font-medium">{institutionDirectory ? tab === 'browse' ? 'Try another region or clear your search and filters.' : 'Your institution’s partner submissions will appear here.' : 'Add some industry partners to get started.'}</p>
         </div>
       ) : (
         <div data-help-id="industry-partners-grid" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
@@ -193,6 +256,7 @@ export default function IndustryPartners() {
                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 mt-2 ml-2 ${partner.locationVerificationStatus === 'GPSVerified' ? 'bg-emerald-100 text-emerald-700' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
                        {partner.locationVerificationStatus === 'TownSelected' ? 'Town location selected' : partner.locationVerificationStatus === 'GPSVerified' ? 'Workplace location recorded' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'Mobile evidence' : 'GPS pending'}
                      </span>
+                     {institutionDirectory && tab === 'browse' && <span className="inline-flex mt-2 ml-2 rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">Approved</span>}
                      {partner.approvalStatus && partner.approvalStatus !== 'Approved' && (
                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 mt-2 ml-2 uppercase tracking-wide ${
                          partner.approvalStatus === 'PendingHQApproval'
@@ -214,7 +278,7 @@ export default function IndustryPartners() {
                 <div className="grid grid-cols-2 gap-4 text-sm font-medium text-gray-500">
                     <div className="flex items-center gap-2">
                         <MapPin className="h-4 w-4 text-gray-400" />
-                        <span className="truncate" title={partner.region}>{partner.region}</span>
+                        <span className="truncate" title={partner.region}>{partner.town || partner.location ? `${partner.town || partner.location}, ${partner.region}` : partner.region}</span>
                     </div>
                     {partner.contactPhone && (
                         <div className="flex items-center gap-2">
@@ -222,13 +286,13 @@ export default function IndustryPartners() {
                             <span className="truncate">{partner.contactPhone}</span>
                         </div>
                     )}
-                    {partner.contactEmail && (
+                    {partner.contactEmail && (!institutionDirectory || tab === 'submissions') && (
                         <div className="flex items-center gap-2">
                             <Mail className="h-4 w-4 text-gray-400" />
                             <span className="truncate" title={partner.contactEmail}>{partner.contactEmail}</span>
                         </div>
                     )}
-                    {partner.website && (
+                    {partner.website && (!institutionDirectory || tab === 'submissions') && (
                        <div className="flex items-center gap-2">
                            <LinkIcon className="h-4 w-4 text-gray-400" />
                            <a href={partner.website} target="_blank" rel="noreferrer" className="truncate text-blue-500 hover:underline">Website</a>
@@ -244,21 +308,22 @@ export default function IndustryPartners() {
 
                 <div className="bg-gray-50/50 rounded-2xl p-4 border border-gray-100/50 mt-4">
                     <div className="flex items-center justify-between mb-2">
-                         <span className="text-xs font-black text-gray-500 uppercase tracking-wider flex items-center gap-1.5"><BarChart2 className="h-4 w-4 text-[#FFB800]"/> Capacity</span>
-                         <span className="text-sm font-black text-gray-900">{partner.usedSlots} / {partner.totalSlots}</span>
+                         <span className="text-xs font-bold text-gray-500 flex items-center gap-1.5"><BarChart2 className="h-4 w-4 text-[#FFB800]"/> {partner.institutionCapacity ? 'Available to your institution' : 'Capacity'}</span>
+                         <span className="text-xl font-black text-gray-900">{partner.institutionCapacity?.availableSlots ?? `${partner.usedSlots} / ${partner.totalSlots}`}</span>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                    {!partner.institutionCapacity && <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
                         <div 
                          className={`h-1.5 rounded-full transition-all duration-500 ${partner.usedSlots >= partner.totalSlots ? 'bg-red-500' : 'bg-[#10b981]'}`}
                          style={{ width: `${partner.totalSlots > 0 ? Math.min((partner.usedSlots / partner.totalSlots) * 100, 100) : 0}%` }}
                         ></div>
-                    </div>
+                    </div>}
                     {partner.institutionCapacity && <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 text-xs"><span><strong className="block text-gray-900">{partner.institutionCapacity.reservedAvailable}</strong> reserved available</span><span><strong className="block text-gray-900">{partner.institutionCapacity.sharedAvailable}</strong> shared available</span></div>}
                 </div>
 
                 {partner.approvalStatus === 'Rejected' && partner.approvalComment && <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800"><strong>HQ rejection reason:</strong> {partner.approvalComment}</p>}
                 {partner.canResubmit && <Button variant="outline" size="sm" onClick={() => { setEditingPartner(partner); setOpen(true) }}>Correct and resubmit</Button>}
-                {['Admin', 'Manager', 'Staff', 'RegionalAdmin'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3">{partner.canRequestChanges && <Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button>}{user?.role !== 'RegionalAdmin' && <><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></>}</div>}
+                {institutionDirectory && tab === 'browse' && <div className="flex gap-2 border-t pt-3"><Button variant="outline" className="flex-1" onClick={() => setDetailsPartner(partner)}>View details</Button><Button className="flex-1 bg-[#FFB800] text-gray-900 hover:bg-amber-400" disabled={partner.status !== 'Active' || !isApprovedPartner(partner) || partner.institutionCapacity?.availableSlots === 0} onClick={() => setPlacementPartner(partner)}>Use for placement</Button></div>}
+                {(!institutionDirectory || tab === 'submissions') && ['Admin', 'Manager', 'Staff', 'RegionalAdmin'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3">{partner.canRequestChanges && <Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button>}{user?.role !== 'RegionalAdmin' && <><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></>}</div>}
                 {(user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') && (
                     <div className="flex gap-2 pt-2 border-t border-gray-100 mt-4">
                          <Button
@@ -299,6 +364,7 @@ export default function IndustryPartners() {
           <Button variant="outline" disabled={loading || loadError || page >= totalPages} onClick={() => setPage(value => value + 1)}>Next</Button>
         </div>
       </nav>
-    </div>
+      </TabsContent>
+    </Tabs>
   )
 }

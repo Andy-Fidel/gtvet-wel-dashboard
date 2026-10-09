@@ -13,7 +13,10 @@ try {
     { institution: 1, status: 1, endDate: 1 },
     { name: 'institution_slot_status' },
   );
-  console.log('Partner slot allocation indexes installed. No operational records changed.');
+  await mongoose.connection.collection('placements').createIndex(
+    { partner: 1, status: 1, institution: 1 }, { name: 'partner_active_institution' },
+  );
+  console.log('Partner capacity indexes installed. No operational records changed.');
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

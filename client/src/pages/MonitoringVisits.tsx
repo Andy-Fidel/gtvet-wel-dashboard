@@ -26,6 +26,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { MonitoringVisitForm } from "./MonitoringVisitForm"
+import { attendanceLabel } from '@/lib/monitoringAttendance'
 import { DataTable } from "@/components/ui/data-table"
 import { useAuth } from "@/context/AuthContext"
 import { toast } from "@/lib/toast"
@@ -173,8 +174,8 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
     header: "Attendance",
     cell: ({ row }) => {
         const status = row.getValue("attendanceStatus") as string
-        const color = status === 'Present' ? 'bg-green-500' : 'bg-red-500';
-        return <Badge className={`${color} text-white`}>{status}</Badge>
+        const color = ['Present', 'Late'].includes(status) ? 'bg-green-500' : 'bg-red-500';
+        return <Badge className={`${color} text-white`}>{attendanceLabel(status)}</Badge>
     }
   },
   {
@@ -924,10 +925,10 @@ export default function MonitoringVisits() {
                     <SelectTrigger className="w-[160px] rounded-xl bg-white border-gray-200 h-10"><SelectValue placeholder="Attendance" /></SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">All Attendance</SelectItem>
-                        <SelectItem value="Present">Present</SelectItem>
-                        <SelectItem value="Absent">Absent</SelectItem>
-                        <SelectItem value="Excused">Excused</SelectItem>
-                        <SelectItem value="Late">Late</SelectItem>
+                        <SelectItem value="Present">Present · On-time</SelectItem>
+                        <SelectItem value="Absent">Absent · Not excused</SelectItem>
+                        <SelectItem value="Excused">Absent · Excused</SelectItem>
+                        <SelectItem value="Late">Present · Late</SelectItem>
                     </SelectContent>
                 </Select>
                 <Select value={filterGpsReview} onValueChange={(v) => setFilter('gpsReviewStatus', v === 'all' ? '' : v)}>
@@ -1182,7 +1183,7 @@ export default function MonitoringVisits() {
                                         ['Program', viewingVisit.learner.program || 'N/A'],
                                         ['Visit date', format(new Date(viewingVisit.visitDate), 'PPP')],
                                         ['Visit type', viewingVisit.visitType],
-                                        ['Attendance', viewingVisit.attendanceStatus],
+                                        ['Attendance', attendanceLabel(viewingVisit.attendanceStatus)],
                                         ['Performance', `${viewingVisit.performanceRating}/5`],
                                     ].map(([label, value]) => (
                                         <div key={label} className="rounded-2xl bg-gray-50 p-4">

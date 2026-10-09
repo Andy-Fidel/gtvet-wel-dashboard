@@ -1,5 +1,47 @@
 [
   {
+    "id": "2026-10-09-monitoring-location-and-attendance",
+    "date": "2026-10-09",
+    "title": "Clearer monitoring visits",
+    "summary": "Choose placed learners, check the visit location and record attendance more clearly.",
+    "changes": [{
+      "kind": "Improved",
+      "title": "Check the right learner and workplace",
+      "body": "The learner list now includes only active placements, including your active delegations. Selecting a learner captures your GPS and checks it against that learner’s saved workplace or approximate town location. Outside-area visits need an explanation for review. Attendance is now Present or Absent: Present asks Late or On-time, and Absent asks whether the absence was excused. Saving checks the placement and location again.",
+      "audience": "Institution monitoring teams",
+      "roles": ["Admin", "Manager", "Staff"],
+      "action": { "label": "Open Monitoring Visits", "path": "/monitoring-visits" }
+    }]
+  },
+  {
+    "id": "2026-10-09-edit-pending-placement-requests",
+    "date": "2026-10-09",
+    "title": "Correct a placement request before activation",
+    "summary": "Save request corrections separately from activating placements.",
+    "changes": [{
+      "kind": "Improved",
+      "title": "Edit a pending placement request",
+      "body": "Open Placement Batches / History and choose Edit request to correct the partner, learners, dates, region, workplace or supervisor details. Admins and Managers can edit their institution’s pending requests; Staff can edit their own submitted requests. Save changes keeps the request pending. Changes to learner-found leads require verification again. Management activates placements separately. If another person has changed the request, reload before saving or activating.",
+      "audience": "Institution placement teams",
+      "roles": ["Admin", "Manager", "Staff"],
+      "action": { "label": "Open Placements", "path": "/placements" }
+    }]
+  },
+  {
+    "id": "2026-10-09-national-partner-directory",
+    "date": "2026-10-09",
+    "title": "Find placement partners across Ghana",
+    "summary": "Browse approved industry partners in any region from your institution portal.",
+    "changes": [{
+      "kind": "Improved",
+      "title": "Switch regions and start a placement",
+      "body": "Industry Partners opens in your institution’s region. Switch to any of Ghana’s 16 regions or browse all regions, search by partner name or town, and filter by sector or available slots. Cards show the slots available to your institution. Use for placement opens the placement form with the partner and region selected. Staff submit requests; management approval and capacity checks still apply. Your submissions and change requests are available in their own tab.",
+      "audience": "Institution teams",
+      "roles": ["Admin", "Manager", "Staff"],
+      "action": { "label": "Browse Industry Partners", "path": "/industry-partners" }
+    }]
+  },
+  {
     "id": "2026-10-08-flexible-location-monitoring",
     "date": "2026-10-08",
     "title": "One location flow for registration and visits",

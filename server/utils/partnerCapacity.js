@@ -6,6 +6,34 @@ const asDate = value => {
   return Number.isFinite(date.getTime()) ? date : new Date();
 };
 
+// Filter before pagination using the same reserved/shared pool rules as activation.
+// Only grouped counts are read; learner records and other institutions' details are not returned.
+export function availablePartnerPipeline(institution, date = new Date()) {
+  const point = asDate(date);
+  const ownCount = field => ({ $sum: { $map: { input: { $filter: { input: `$${field}`, as: 'entry', cond: { $eq: ['$$entry._id', institution] } } }, as: 'entry', in: '$$entry.count' } } });
+  return [
+    { $lookup: { from: PartnerSlotAllocation.collection.name, localField: '_id', foreignField: 'partner', pipeline: [
+      { $match: { status: 'Approved', startDate: { $lte: point }, endDate: { $gte: point } } },
+      { $group: { _id: '$institution', count: { $sum: '$slots' } } },
+    ], as: '_directoryReserved' } },
+    { $lookup: { from: Placement.collection.name, localField: '_id', foreignField: 'partner', pipeline: [
+      { $match: { status: 'Active' } }, { $group: { _id: '$institution', count: { $sum: 1 } } },
+    ], as: '_directoryActive' } },
+    { $set: {
+      _directoryOwnReserved: ownCount('_directoryReserved'),
+      _directoryOwnActive: ownCount('_directoryActive'),
+      _directoryReservedTotal: { $sum: '$_directoryReserved.count' },
+      _directorySharedUsed: { $sum: { $map: { input: '$_directoryActive', as: 'active', in: {
+        $max: [0, { $subtract: ['$$active.count', { $sum: { $map: { input: { $filter: { input: '$_directoryReserved', as: 'reserved', cond: { $eq: ['$$reserved._id', '$$active._id'] } } }, as: 'reserved', in: '$$reserved.count' } } }] }],
+      } } } },
+    } },
+    { $match: { $expr: { $gt: [{ $add: [
+      { $max: [0, { $subtract: ['$_directoryOwnReserved', '$_directoryOwnActive'] }] },
+      { $max: [0, { $subtract: [{ $max: [0, { $subtract: [{ $ifNull: ['$totalSlots', 0] }, '$_directoryReservedTotal'] }] }, '$_directorySharedUsed'] }] },
+    ] }, 0] } } },
+  ];
+}
+
 export async function partnerCapacityAt({ partner, institution, date, excludePlacementId = null }) {
   const point = asDate(date);
   const [allocations, activeCounts] = await Promise.all([

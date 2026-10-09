@@ -29,24 +29,29 @@ import { Calendar } from "@/components/ui/Calendar"
 import { safeDateString } from "@/lib/dateUtils"
 import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
 import { toast } from "@/lib/toast"
+import { attendanceFormState, storedAttendance, type VisitAttendance } from '@/lib/monitoringAttendance'
 
 const formSchema = z.object({
   learner: z.string().min(1, "Learner is required"),
   visitDate: z.date(),
   visitType: z.enum(["Routine", "Urgent", "Emergency", "Follow-up"]),
-  attendanceStatus: z.enum(["Present", "Absent", "Excused", "Late"]),
+  attendanceStatus: z.enum(["Present", "Absent"]),
+  attendanceDetail: z.string(),
   performanceRating: z.number().min(1).max(5).int(),
   keyObservations: z.string().optional(),
   issuesIdentified: z.string().optional(),
   actionRequired: z.string().optional(),
   gpsExceptionReason: z.string().optional(),
+}).superRefine((values, ctx) => {
+  if (!(values.attendanceStatus === 'Present' ? ['OnTime', 'Late'] : ['Yes', 'No']).includes(values.attendanceDetail)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['attendanceDetail'], message: values.attendanceStatus === 'Present' ? 'Choose late or on-time.' : 'Choose whether the absence was excused.' })
 })
 
 type MonitoringVisitFormValues = z.infer<typeof formSchema>
 
 interface MonitoringVisitFormProps {
     onSuccess: (data?: { offlineQueued?: boolean }) => void;
-    initialData?: Omit<Partial<MonitoringVisitFormValues>, 'learner'> & {
+    initialData?: Omit<Partial<MonitoringVisitFormValues>, 'learner' | 'attendanceStatus'> & {
+        attendanceStatus?: VisitAttendance;
         _id?: string;
         updatedAt?: string;
         placement?: string;
@@ -54,9 +59,19 @@ interface MonitoringVisitFormProps {
     };
 }
 
-export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitFormProps) {
+export function MonitoringVisitForm(props: MonitoringVisitFormProps) {
+  const { user } = useAuth()
+  const learner = typeof props.initialData?.learner === 'object' ? props.initialData.learner._id : props.initialData?.learner || 'unselected'
+  return <MonitoringVisitFields key={`${user?._id}:${props.initialData?._id || learner}`} {...props} />
+}
+
+function MonitoringVisitFields({ onSuccess, initialData }: MonitoringVisitFormProps) {
   const [loading, setLoading] = useState(false)
   const [learners, setLearners] = useState<Learner[]>([])
+  const [learnersLoading, setLearnersLoading] = useState(true)
+  const [learnersError, setLearnersError] = useState('')
+  const [locationCheck, setLocationCheck] = useState<{ learner: string; locationVerified?: string; distanceFromSite?: number | null; verificationRadiusMetres?: number | null; verificationLocationType?: string; message?: string } | null>(null)
+  const [checkingLocation, setCheckingLocation] = useState(false)
   const { authFetch, user } = useAuth()
 
   // GPS capture state
@@ -64,8 +79,10 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
   const presetLearner = typeof initialData?.learner === 'object' ? initialData.learner._id : initialData?.learner || ''
   const draftKey = `draft:monitoring-visit:${user?._id}:${initialData?._id || `new:${presetLearner || 'unselected'}`}`
+  const [restoredDraft] = useState(() => initialData?._id ? null : loadDraft<Record<string, string | number | null>>(draftKey))
 
   const captureLocation = useCallback(() => {
+    setGpsCoords(null); setGpsStatus('acquiring')
     if (!navigator.geolocation) {
       setGpsStatus('unavailable');
       return;
@@ -76,34 +93,48 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         setGpsStatus('captured');
       },
       () => setGpsStatus('denied'),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   }, []);
 
-  useEffect(() => { captureLocation(); }, [captureLocation]);
+  useEffect(() => { if (!initialData?._id) captureLocation(); }, [captureLocation, initialData?._id]);
 
   useEffect(() => {
+    let current = true
+    setLearnersLoading(true); setLearnersError('')
     authFetch('/api/learners/options?purpose=monitoring')
         .then(async res => {
           const data = await res.json()
           if (!res.ok || !Array.isArray(data)) throw new Error(data?.message || 'Unable to load learners')
           return data
         })
-        .then(data => setLearners(data))
-        .catch(err => toast.error(err.message || 'Unable to load learners'))
+        .then(data => { if (current) setLearners(data.filter((learner: Learner) => Boolean(learner.monitoringLocation))) })
+        .catch(err => { if (current) setLearnersError(err.message || 'Unable to load learners') })
+        .finally(() => { if (current) setLearnersLoading(false) })
+    return () => { current = false }
   }, [authFetch])
 
   const form = useForm<MonitoringVisitFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: initialData ? {
+    defaultValues: restoredDraft ? {
+      learner: presetLearner || (typeof restoredDraft.learner === 'string' ? restoredDraft.learner : ''),
+      visitType: restoredDraft.visitType === 'Urgent' || restoredDraft.visitType === 'Emergency' || restoredDraft.visitType === 'Follow-up' ? restoredDraft.visitType : 'Routine',
+      visitDate: safeDateString(restoredDraft.visitDate ? String(restoredDraft.visitDate) : undefined),
+      ...attendanceFormState(typeof restoredDraft.attendanceStatus === 'string' ? restoredDraft.attendanceStatus : 'Present', typeof restoredDraft.attendanceDetail === 'string' ? restoredDraft.attendanceDetail : undefined),
+      performanceRating: typeof restoredDraft.performanceRating === 'number' ? restoredDraft.performanceRating : 3,
+      keyObservations: typeof restoredDraft.keyObservations === 'string' ? restoredDraft.keyObservations : '',
+      issuesIdentified: typeof restoredDraft.issuesIdentified === 'string' ? restoredDraft.issuesIdentified : '',
+      actionRequired: typeof restoredDraft.actionRequired === 'string' ? restoredDraft.actionRequired : '',
+      gpsExceptionReason: typeof restoredDraft.gpsExceptionReason === 'string' ? restoredDraft.gpsExceptionReason : '',
+    } : initialData ? {
         visitType: 'Routine',
-        attendanceStatus: 'Present',
         performanceRating: 3,
         keyObservations: '',
         issuesIdentified: '',
         actionRequired: '',
         gpsExceptionReason: '',
         ...initialData,
+        ...attendanceFormState(initialData.attendanceStatus, initialData._id ? initialData.attendanceDetail : initialData.attendanceDetail ?? ''),
         visitDate: safeDateString(initialData.visitDate),
         learner: (typeof initialData.learner === 'object' && initialData.learner)
             ? (initialData.learner as { _id: string })._id
@@ -113,6 +144,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
       visitType: 'Routine',
       visitDate: new Date(),
       attendanceStatus: 'Present',
+      attendanceDetail: '',
       performanceRating: 3,
       keyObservations: "",
       issuesIdentified: "",
@@ -120,24 +152,6 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
       gpsExceptionReason: "",
     },
   })
-
-  useEffect(() => {
-    if (initialData?._id) return
-    const draft = loadDraft<Record<string, string | number | null>>(draftKey)
-    if (!draft) return
-
-    form.reset({
-      learner: presetLearner || (typeof draft.learner === "string" ? draft.learner : ""),
-      visitType: draft.visitType === "Urgent" || draft.visitType === "Emergency" || draft.visitType === "Follow-up" ? draft.visitType : "Routine",
-      visitDate: draft.visitDate ? new Date(String(draft.visitDate)) : new Date(),
-      attendanceStatus: draft.attendanceStatus === "Absent" || draft.attendanceStatus === "Excused" || draft.attendanceStatus === "Late" ? draft.attendanceStatus : "Present",
-      performanceRating: typeof draft.performanceRating === "number" ? draft.performanceRating : 3,
-      keyObservations: typeof draft.keyObservations === "string" ? draft.keyObservations : "",
-      issuesIdentified: typeof draft.issuesIdentified === "string" ? draft.issuesIdentified : "",
-      actionRequired: typeof draft.actionRequired === "string" ? draft.actionRequired : "",
-      gpsExceptionReason: typeof draft.gpsExceptionReason === "string" ? draft.gpsExceptionReason : "",
-    })
-  }, [draftKey, form, initialData?._id, presetLearner])
 
   useEffect(() => {
     if (initialData?._id) return
@@ -152,20 +166,37 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
 
   const selectedLearnerId = form.watch("learner")
   const selectedLearner = learners.find(l => l._id === selectedLearnerId)
+  const attendanceStatus = form.watch('attendanceStatus')
+  useEffect(() => {
+    setLocationCheck(null)
+    if (!selectedLearnerId || initialData?._id || gpsStatus === 'acquiring') { setCheckingLocation(false); return }
+    const controller = new AbortController()
+    setCheckingLocation(true)
+    authFetch('/api/monitoring-visits/location-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]), body: JSON.stringify({ learner: selectedLearnerId, placement: initialData?.placement || selectedLearner?.monitoringLocation?.placementId, submittedLocation: gpsCoords || undefined }) })
+      .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Unable to check location'); return data })
+      .then(data => { if (!controller.signal.aborted) setLocationCheck({ ...data, learner: selectedLearnerId }) })
+      .catch(error => { if (!controller.signal.aborted) setLocationCheck({ learner: selectedLearnerId, message: error.message || 'Location check unavailable. The server will check when saving.' }) })
+      .finally(() => { if (!controller.signal.aborted) setCheckingLocation(false) })
+    return () => controller.abort()
+  }, [authFetch, selectedLearnerId, selectedLearner?.monitoringLocation?.placementId, gpsCoords, gpsStatus, initialData?._id, initialData?.placement])
   const normalizeSliderValue = (value: number) => (Number.isFinite(value) ? value : 1)
 
   async function onSubmit(values: MonitoringVisitFormValues) {
     setLoading(true)
     try {
         const url = initialData?._id ? `/api/monitoring-visits/${initialData._id}` : '/api/monitoring-visits';
+        if (!initialData?._id && !selectedLearner?.monitoringLocation) { form.setError('learner', { message: 'Select a learner with an active placement.' }); return }
+        if (!initialData?._id && ['Unverified', 'No GPS', 'Site coordinates missing'].includes(locationCheck?.locationVerified || '') && !values.gpsExceptionReason?.trim()) { form.setError('gpsExceptionReason', { message: 'Explain this location exception before saving for review.' }); return }
         if (!initialData?._id && gpsStatus !== 'captured' && !values.gpsExceptionReason?.trim()) {
             form.setError("gpsExceptionReason", { type: "manual", message: "Explain why GPS verification failed before saving this visit." })
             setLoading(false)
             return
         }
+        const { attendanceDetail, ...visitValues } = values
         const payload = {
-            ...values,
-            ...(initialData?.placement ? { placement: initialData.placement } : {}),
+            ...visitValues,
+            attendanceStatus: storedAttendance(values.attendanceStatus, attendanceDetail),
+            ...(initialData?.placement || selectedLearner?.monitoringLocation?.placementId ? { placement: initialData?.placement || selectedLearner?.monitoringLocation?.placementId } : {}),
             ...(initialData?._id && initialData.updatedAt ? { clientUpdatedAt: initialData.updatedAt } : {}),
             ...(gpsCoords && !initialData?._id ? { submittedLocation: gpsCoords } : {}),
         };
@@ -197,15 +228,17 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
         <FormField control={form.control} name="learner" render={({ field }) => (
             <FormItem>
               <FormLabel className="text-sm font-semibold text-gray-900">Learner / Trainee</FormLabel>
-              <Select onValueChange={field.onChange} value={field.value} disabled={!!initialData?.learner}>
+              <Select onValueChange={value => { field.onChange(value); captureLocation() }} value={field.value} disabled={!!initialData?.learner}>
                 <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select a learner" /></SelectTrigger></FormControl>
                 <SelectContent>
+                    {initialData?.learner && !selectedLearner && <SelectItem value={presetLearner}>{typeof initialData.learner === 'object' ? initialData.learner.name : 'Recorded learner (historical visit)'}</SelectItem>}
                     {learners.map((learner) => (
                         <SelectItem key={learner._id} value={learner._id}>{learner.name}</SelectItem>
                     ))}
                 </SelectContent>
               </Select>
               <FormMessage />
+              <p className="text-xs text-gray-500">{learnersLoading ? 'Loading active placements…' : learnersError || (learners.length ? 'Only learners with active placements, including your active delegations, are available.' : 'No learners with active placements are available for monitoring.')}</p>
             </FormItem>
         )} />
         
@@ -241,8 +274,12 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
 
         <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
           <strong>One location check for every visit</strong>
-          {selectedLearner?.monitoringLocation?.coordinates && <p>{selectedLearner.monitoringLocation.coordinates.precision === 'Town' ? `Selected town: ${selectedLearner.monitoringLocation.coordinates.townName} · approximate 5 km radius` : `Actual workplace: ${selectedLearner.monitoringLocation.companyName || 'Registered location'} · 500 m radius`}</p>}
+          {!initialData?._id && selectedLearner?.monitoringLocation?.coordinates && <p>{selectedLearner.monitoringLocation.coordinates.precision === 'Town' ? `Selected town: ${selectedLearner.monitoringLocation.coordinates.townName} · approximate 5 km radius` : `Actual workplace: ${selectedLearner.monitoringLocation.companyName || 'Registered location'} · 500 m radius`}</p>}
           <p>Your GPS is compared with the location selected during partner registration: 500 m for an actual workplace or an approximate 5 km radius for a town. Visits outside the area remain available for review.</p>
+          <div role="status" aria-live="polite" className="mt-2 font-semibold">
+            {initialData?._id ? 'Editing keeps the GPS location saved with this visit.' : !selectedLearnerId ? 'Select a placed learner to check the visit location.' : gpsStatus === 'acquiring' ? 'Waiting for your GPS location…' : checkingLocation ? 'Checking against the selected learner’s placement…' : locationCheck?.message || (locationCheck?.locationVerified === 'Verified' ? locationCheck.verificationLocationType === 'Town' ? 'Within the approximate town radius.' : locationCheck.verificationLocationType === 'OperatingArea' ? 'GPS captured for this operating-area visit; no fixed-radius check applies.' : 'Within the actual workplace radius.' : locationCheck?.locationVerified === 'Unverified' ? 'Outside the selected location radius. Explain why to save for review.' : locationCheck?.locationVerified === 'No GPS' ? 'GPS unavailable. An explanation is required.' : locationCheck?.locationVerified === 'Site coordinates missing' ? 'Placement reference coordinates are missing. An explanation is required.' : 'Location check will run when saving.')}
+            {locationCheck?.distanceFromSite != null && <p className="text-xs font-normal">{Math.round(locationCheck.distanceFromSite)} m from the saved reference point · allowed radius {locationCheck.verificationRadiusMetres} m.</p>}
+          </div>
         </div>
         {/* GPS Status Indicator */}
         {!initialData?._id && (
@@ -304,13 +341,11 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
              <FormField control={form.control} name="attendanceStatus" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Attendance Status</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
+                  <Select onValueChange={value => { field.onChange(value); form.setValue('attendanceDetail', '') }} value={field.value}>
                     <FormControl><SelectTrigger className="bg-[#F5F5FA] text-gray-900"><SelectValue placeholder="Select status" /></SelectTrigger></FormControl>
                     <SelectContent>
                         <SelectItem value="Present">Present</SelectItem>
                         <SelectItem value="Absent">Absent</SelectItem>
-                        <SelectItem value="Excused">Excused</SelectItem>
-                        <SelectItem value="Late">Late</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -328,6 +363,8 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
                 </FormItem>
             )} />
         </div>
+
+        <FormField control={form.control} name="attendanceDetail" render={({ field }) => <FormItem><fieldset className="rounded-xl border p-4"><legend className="px-1 text-sm font-semibold">{attendanceStatus === 'Present' ? 'Was the learner late or on-time?' : 'Was the absence excused?'}</legend><div className="flex gap-6">{(attendanceStatus === 'Present' ? [['Late', 'Late'], ['OnTime', 'On-time']] : [['Yes', 'Yes'], ['No', 'No']]).map(([value, label]) => <label key={value} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={field.value === value} onChange={event => field.onChange(event.target.checked ? value : '')} onBlur={field.onBlur} />{label}</label>)}</div></fieldset><FormMessage /></FormItem>} />
 
         {/* Textareas */}
         <FormField control={form.control} name="keyObservations" render={({ field }) => (
@@ -363,7 +400,7 @@ export function MonitoringVisitForm({ onSuccess, initialData }: MonitoringVisitF
             )} />
         </div>
 
-        <Button type="submit" className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm" disabled={loading}>
+        <Button type="submit" className="w-full bg-[#FFB800] hover:bg-[#e5a600] text-gray-900 font-bold h-12 rounded-xl shadow-sm text-sm" disabled={loading || (!initialData?._id && (checkingLocation || learnersLoading))}>
           {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {initialData?._id ? "Update Visit Record" : "Save Visit Record"}
         </Button>

@@ -81,6 +81,7 @@ placementSchema.index({ institution: 1 });
 placementSchema.index({ owner: 1 });
 placementSchema.index({ partnerSupervisor: 1 });
 placementSchema.index({ status: 1 });
+placementSchema.index({ partner: 1, status: 1, institution: 1 }, { name: 'partner_active_institution' });
 placementSchema.index({ endDate: 1, status: 1 });
 placementSchema.index({ trackingId: 1 }, { unique: true, sparse: true });
 placementSchema.index({ createdAt: 1 });

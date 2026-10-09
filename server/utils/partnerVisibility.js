@@ -12,6 +12,15 @@ export function partnerRegionMatch(region) {
 
 export async function partnerVisibilityFilter(user) {
   if (user.role === 'SuperAdmin') return {};
+  if (['Admin', 'Manager', 'Staff'].includes(user.role)) {
+    if (!user.institution) return { _id: { $in: [] } };
+    // The approved registry is national; existing linked submissions stay visible.
+    return { $or: [
+      { linkedInstitutions: user.institution },
+      { approvalStatus: 'Approved' },
+      { approvalStatus: { $exists: false } },
+    ] };
+  }
   if (['HQManager', 'HQStaff'].includes(user.role)) {
     if (!user.hqScopeType || user.hqScopeType === 'National') return {};
     if (user.hqScopeType === 'Region') return { region: partnerRegionMatch(user.region) };

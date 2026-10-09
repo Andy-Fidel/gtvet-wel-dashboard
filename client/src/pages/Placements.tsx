@@ -45,6 +45,8 @@ type DelegateUser = {
 };
 
 export type PlacementRequestData = {
+  workflowVersion?: number;
+  canEdit?: boolean;
   coordinates?: WorkplacePoint;
   worksiteMode?: 'FixedSite' | 'HomeBased' | 'MobileField' | 'MultipleSites' | 'TemporarySite' | 'NoFixedPremises';
   locationVerificationStatus?: string;
@@ -66,7 +68,7 @@ export type PlacementRequestData = {
   placementRegion?: string;
   createdAt: string;
   submittedBy: { name: string };
-  partner?: { name: string; sector: string; region: string; totalSlots: number; usedSlots: number; operatingModel?: PlacementRequestData['worksiteMode']; coordinates?: WorkplacePoint; approximateLocation?: import('@/lib/workplaceCoordinates').TownLocation | null };
+  partner?: { _id?: string; name: string; sector: string; region: string; totalSlots: number; usedSlots: number; operatingModel?: PlacementRequestData['worksiteMode']; coordinates?: WorkplacePoint; approximateLocation?: import('@/lib/workplaceCoordinates').TownLocation | null };
   learners: { _id: string; firstName: string; lastName: string; trackingId: string }[];
   selfSourcedHost?: {
     companyName?: string;
@@ -110,6 +112,7 @@ export default function Placements() {
     const [data, setData] = useState<Placement[]>([])
     const [delegatedData, setDelegatedData] = useState<Placement[]>([])
     const [requests, setRequests] = useState<PlacementRequestData[]>([])
+    const [editingRequest, setEditingRequest] = useState<PlacementRequestData | null>(null)
     const [loading, setLoading] = useState(true)
     const [delegatedLoading, setDelegatedLoading] = useState(true)
     const [placementsPage, setPlacementsPage] = useState(1)
@@ -615,6 +618,7 @@ export default function Placements() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     coordinates: readCoordinates(convertLat, convertLng, !(user?.role === 'Admin' && convertLocationApproval), convertMeta),
+                    sourceVersion: convertRequest.workflowVersion || 0,
                     worksiteMode: convertWorksiteMode,
                     expectedOperatingArea: convertOperatingArea,
                     locationVerificationNotes: convertLocationNotes,
@@ -1075,8 +1079,9 @@ export default function Placements() {
                                     <Button type="button" variant="outline" className="w-full rounded-xl border-slate-200 font-bold" onClick={() => openBatchDetails(req)}>
                                         <Eye className="mr-2 h-4 w-4" /> View Learner Placement Details
                                     </Button>
+                                    {req.canEdit && <Button variant="outline" onClick={() => setEditingRequest(req)}>Edit request</Button>}
 
-                                    {req.sourceType !== 'LearnerFound' && req.status === 'Submitted' && ['Admin', 'Manager'].includes(user?.role || '') && <Button onClick={() => handleConvertSelfSourcedPlacement(req)}>Add GPS and Activate</Button>}
+                                    {req.sourceType !== 'LearnerFound' && req.status === 'Submitted' && ['Admin', 'Manager'].includes(user?.role || '') && <Button onClick={() => handleConvertSelfSourcedPlacement(req)}>Review and activate</Button>}
                                     {req.sourceType === 'LearnerFound' && ['Admin', 'Manager'].includes(user?.role || '') && (
                                         <div className="flex flex-wrap gap-2">
                                             {req.status === 'SelfSourced_Submitted' ? (
@@ -1297,6 +1302,7 @@ export default function Placements() {
             />
 
             {/* Convert Self-Sourced to Placement Confirmation */}
+            <Dialog open={!!editingRequest} onOpenChange={value => { if (!value) setEditingRequest(null) }}><DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Edit placement request</DialogTitle><DialogDescription>Save corrections without activating learners. Changes to a learner-found lead require verification again.</DialogDescription></DialogHeader>{editingRequest && <UnifiedPlacementForm key={editingRequest._id} editRequest={editingRequest} onSuccess={() => { setEditingRequest(null); setRefreshKey(value => value + 1) }} />}</DialogContent></Dialog>
             <Dialog open={convertConfirmOpen} onOpenChange={setConvertConfirmOpen}>
                 <DialogContent className="bg-white">
                     <DialogHeader><DialogTitle>Activate Placement Request</DialogTitle><DialogDescription>Confirm the worksite and location evidence before creating active placements for {convertRequest?.requestedSlots} learners.</DialogDescription></DialogHeader>

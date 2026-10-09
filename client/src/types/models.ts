@@ -25,7 +25,7 @@ export interface Learner {
   lastIdmsSyncAt?: string;
   idmsSyncStatus?: 'Linked' | 'Conflict' | 'Error';
   region?: string;
-  monitoringLocation?: { coordinates?: import('@/lib/workplaceCoordinates').WorkplacePoint; worksiteMode?: string; companyName?: string; location?: string } | null;
+  monitoringLocation?: { placementId?: string; coordinates?: import('@/lib/workplaceCoordinates').WorkplacePoint; worksiteMode?: string; companyName?: string; location?: string } | null;
   hasActivePlacement?: boolean;
   readiness?: {
     isReadyForPlacement: boolean;
@@ -60,6 +60,7 @@ export interface IndustryPartner {
   sector: string;
   region: string;
   location?: string;
+  town?: string;
   partnerType?: 'RegisteredCompany' | 'MasterCraftPerson' | 'Government' | 'NGO' | 'Other';
   operatingModel?: 'FixedSite' | 'HomeBased' | 'MobileField' | 'MultipleSites' | 'TemporarySite' | 'NoFixedPremises';
   locationVerificationStatus?: 'PendingGPS' | 'GPSVerified' | 'TownSelected' | 'NotApplicableMobile' | 'ExceptionApproved';

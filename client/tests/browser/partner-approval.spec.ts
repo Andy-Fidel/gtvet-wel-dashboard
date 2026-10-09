@@ -52,6 +52,7 @@ test('HQ rejection requires a reason and sends the reviewed version', async ({ p
 test('submitting management sees the reason and corrects a rejected registration', async ({ page }) => {
   const writes = await setup(page, 'Manager', 'Rejected')
   await page.goto('/industry-partners')
+  await page.getByRole('tab', { name: 'My submissions & changes' }).click()
   await expect(page.getByText('HQ rejection reason:')).toBeVisible()
   await page.getByRole('button', { name: 'Correct and resubmit' }).click()
   const dialog = page.getByRole('dialog', { name: 'Correct and resubmit partner' })

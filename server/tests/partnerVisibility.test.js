@@ -15,12 +15,12 @@ test('Greater Accra aliases match both directions without including other region
   assert.deepEqual(partnerRegionMatch(''), { $in: [] });
 });
 
-test('institution region is authoritative for every institutional role, with linked partners retained', async t => {
+test('institution HQ scope keeps its regional visibility, with linked partners retained', async t => {
   t.mock.method(Institution, 'findOne', filter => {
     assert.deepEqual(filter, { name: 'Accra Institute' });
     return { select() { return this; }, lean: async () => ({ region: 'G. Accra' }) };
   });
-  for (const role of ['Admin', 'Manager', 'Staff', 'HQManager', 'HQStaff']) {
+  for (const role of ['HQManager', 'HQStaff']) {
     const filter = await partnerVisibilityFilter({ role, institution: 'Accra Institute', region: 'Ashanti', hqScopeType: 'Institution' });
     assert.deepEqual(filter.$or[0], { linkedInstitutions: 'Accra Institute' });
     assert.ok(filter.$or[1].region.test('Greater Accra'));
@@ -38,7 +38,7 @@ test('regional scopes match aliases, missing scope and unsupported roles fail cl
   assert.deepEqual(await partnerVisibilityFilter({ role: 'SuperAdmin' }), {});
 });
 
-test('list and search use the same institution regional visibility', async t => {
+test('list and search use the same national approved partner visibility', async t => {
   t.mock.method(Institution, 'findOne', () => ({ select() { return this; }, lean: async () => ({ region: 'G. Accra' }) }));
   const observed = [];
   t.mock.method(IndustryPartner, 'find', filter => {
@@ -52,4 +52,12 @@ test('list and search use the same institution regional visibility', async t => 
   }
   assert.deepEqual(observed[0].$and[0], observed[1].$and[0]);
   assert.equal(observed[0].status, 'Active');
+});
+
+test('institution users may access nationally approved partners while unrelated submissions stay hidden', async () => {
+  for (const role of ['Admin', 'Manager', 'Staff']) {
+    assert.deepEqual(await partnerVisibilityFilter({ role, institution: 'Accra Institute' }), { $or: [
+      { linkedInstitutions: 'Accra Institute' }, { approvalStatus: 'Approved' }, { approvalStatus: { $exists: false } },
+    ] });
+  }
 });

@@ -29,3 +29,5 @@ export const INDUSTRY_SECTORS = [
 ] as const;
 
 export type IndustrySector = (typeof INDUSTRY_SECTORS)[number];
+
+export const GHANA_REGIONS = ['Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern', 'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah', 'Upper East', 'Upper West', 'Volta', 'Western', 'Western North'] as const;

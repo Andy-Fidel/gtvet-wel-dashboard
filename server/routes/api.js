@@ -48,7 +48,9 @@ import { academicError, academicErrorStatus, pickFields, termFields, calendarFie
 import { PartnerImport } from '../models/PartnerImport.js';
 import { PartnerSlotAllocation } from '../models/PartnerSlotAllocation.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
-import { decoratePartnerCapacities, partnerCapacityAt } from '../utils/partnerCapacity.js';
+import { decoratePartnerCapacities, partnerCapacityAt, availablePartnerPipeline } from '../utils/partnerCapacity.js';
+import { partnerDirectoryFilters } from '../utils/partnerDirectory.js';
+import { canEditPlacementRequest, placementRequestEditValues } from '../utils/placementRequestEdits.js';
 import { isPartnerSector } from '../utils/partnerTaxonomy.js';
 import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates, coordinateStatus, registeredCoordinates, monitoringLocationCheck } from '../utils/workplaceCoordinates.js';
 import { getPartnerDependencySummary, getPartnerDeletionBlockers } from '../utils/partnerRegistry.js';
@@ -4571,18 +4573,35 @@ const canMutateMonitoringVisit = (user, visit, action = 'update') => {
     return true;
 };
 
-const determineMonitoringVisitVerification = async ({ learnerId, placementId, delegateId, submittedLocation, gpsExceptionReason = '' }) => {
+const determineMonitoringVisitVerification = async ({ learnerId, placementId, delegateId, submittedLocation, gpsExceptionReason = '', requireExplanation = true, allowHistorical = false }) => {
     if (typeof gpsExceptionReason !== 'string' || gpsExceptionReason.length > 3000) return { error: 'Provide a location explanation of up to 3000 characters.' };
     if (submittedLocation != null && (!hasCoordinates(submittedLocation) || (submittedLocation.accuracy != null && (!Number.isFinite(submittedLocation.accuracy) || submittedLocation.accuracy < 0)))) return { error: 'Provide a valid captured GPS location.' };
-    const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : { status: 'Active' }), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates worksiteMode locationVerificationStatus partner').populate('partner', 'coordinates approximateLocation');
+    if (placementId && !mongoose.isObjectIdOrHexString(placementId)) return { error: 'Select a valid placement.' };
+    const placement = await Placement.findOne({ learner: learnerId, ...(placementId ? { _id: placementId } : {}), ...(!allowHistorical || !placementId ? { status: 'Active', archivedAt: null } : {}), ...(delegateId ? { delegate: delegateId, status: 'Active' } : {}) }).select('coordinates worksiteMode locationVerificationStatus partner').populate('partner', 'coordinates approximateLocation');
+    if (!placement && !allowHistorical) return { error: 'This learner does not have an active placement available for monitoring.' };
     if (placement && !hasCoordinates(placement.coordinates)) placement.coordinates = registeredCoordinates(placement.partner);
     if (delegateId && !placement) return { error: 'No active delegated placement is available for this learner.' };
     const result = monitoringLocationCheck(submittedLocation, placement);
     if (!placement && hasCoordinates(submittedLocation)) result.locationVerified = 'No Placement';
-    if (!hasCoordinates(submittedLocation) && !gpsExceptionReason?.trim()) return { error: 'A GPS exception reason is required when GPS is unavailable.' };
-    if (['Unverified', 'Site coordinates missing', 'No Placement'].includes(result.locationVerified) && !gpsExceptionReason?.trim()) return { error: 'Explain why the visit is outside the selected location or why no location reference is available. It can then be saved for review.' };
+    if (requireExplanation && !hasCoordinates(submittedLocation) && !gpsExceptionReason?.trim()) return { error: 'A GPS exception reason is required when GPS is unavailable.' };
+    if (requireExplanation && ['Unverified', 'Site coordinates missing', 'No Placement'].includes(result.locationVerified) && !gpsExceptionReason?.trim()) return { error: 'Explain why the visit is outside the selected location or why no location reference is available. It can then be saved for review.' };
     return { ...result, placement: placement?._id, gpsCapturedAt: hasCoordinates(submittedLocation) ? new Date() : undefined };
 };
+
+router.post('/monitoring-visits/location-check', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+        if (!canLogMonitoringVisit(req.user)) return res.status(403).json({ message: 'Only institution monitoring teams can check a visit location.' });
+        if (!mongoose.isObjectIdOrHexString(req.body.learner)) return res.status(400).json({ message: 'Select a valid learner.' });
+        const learner = await Learner.findOne({ $and: [{ _id: req.body.learner }, await getMonitoringFilter(req.user, true)] }).select('institution');
+        if (!learner) return res.status(404).json({ message: 'Learner not found or outside your active monitoring scope.' });
+        const result = await determineMonitoringVisitVerification({ learnerId: req.body.learner, placementId: req.body.placement,
+            delegateId: req.user.institution !== learner.institution ? req.user._id : undefined,
+            submittedLocation: req.body.submittedLocation, requireExplanation: false });
+        if (result.error) return res.status(400).json({ message: result.error });
+        res.json(result);
+    } catch { res.status(500).json({ message: 'Unable to check the visit location. Try again.' }); }
+});
 
 router.post('/monitoring-visits', userAssignmentMutation(async (req, res) => {
     try {
@@ -4824,6 +4843,7 @@ router.put('/monitoring-visits/:id', async (req, res) => {
         };
         const verification = await determineMonitoringVisitVerification({
             learnerId: nextPayload.learner,
+            allowHistorical: true,
             placementId: existingVisit.placement,
             delegateId: req.user.institution !== existingVisit.institution ? req.user._id : undefined,
             submittedLocation: nextPayload.submittedLocation,
@@ -7612,6 +7632,10 @@ router.get('/learners/options', async (req, res) => {
         : await getFilter(req.user);
     }
     const query = { $and: [filter] };
+    if (req.query.purpose === 'monitoring') {
+      const activePlacementScope = { $and: [await getPlacementScope(req.user), { status: 'Active', archivedAt: null }] };
+      query.$and.push({ _id: { $in: await Placement.find(activePlacementScope).distinct('learner') } });
+    }
     const { status, academicStatus, year, program, search, institution, limit: requestedLimit } = req.query;
 
     if (status) query.status = status;
@@ -7649,10 +7673,11 @@ router.get('/learners/options', async (req, res) => {
       .lean();
 
     const monitoringPlacements = req.query.purpose === 'monitoring' && learners.length
-      ? await Placement.find({ learner: { $in: learners.map(learner => learner._id) }, status: 'Active' })
+      ? await Placement.find({ $and: [await getPlacementScope(req.user), { learner: { $in: learners.map(learner => learner._id) }, status: 'Active', archivedAt: null }] })
         .select('learner coordinates worksiteMode companyName location partner').populate('partner', 'coordinates approximateLocation').lean()
       : [];
     const monitoringLocations = new Map(monitoringPlacements.map(placement => [String(placement.learner), {
+      placementId: placement._id,
       coordinates: hasCoordinates(placement.coordinates) ? placement.coordinates : registeredCoordinates(placement.partner),
       worksiteMode: placement.worksiteMode, companyName: placement.companyName, location: placement.location,
     }]));
@@ -13358,7 +13383,8 @@ router.put('/vacancies/:id', requireRole('IndustryPartner'), async (req, res) =>
 
 router.get('/industry-partners', async (req, res) => {
     try {
-        const includeAll = req.query.includeAll === '1' || req.query.includeAll === 'true';
+        const directory = await partnerDirectoryFilters(req.user, req.query);
+        const includeAll = directory.directory ? directory.submissions : req.query.includeAll === '1' || req.query.includeAll === 'true';
         const searchQuery = typeof req.query.q === 'string' ? req.query.q.trim() : '';
         const approvalStatus = typeof req.query.approvalStatus === 'string' ? req.query.approvalStatus.trim() : '';
         const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
@@ -13368,7 +13394,7 @@ router.get('/industry-partners', async (req, res) => {
         const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0
             ? Math.min(parsedPageSize, 100)
             : 24;
-        const scopeClauses = [await partnerVisibilityFilter(req.user)];
+        const scopeClauses = [await partnerVisibilityFilter(req.user), ...directory.clauses];
 
         const filter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
         const summaryFilter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
@@ -13413,6 +13439,7 @@ router.get('/industry-partners', async (req, res) => {
                         { sector: searchRegex },
                         { region: searchRegex },
                         { location: searchRegex },
+                        { town: searchRegex },
                         { contactPerson: searchRegex },
                         { contactEmail: searchRegex },
                     ],
@@ -13420,18 +13447,27 @@ router.get('/industry-partners', async (req, res) => {
             ];
         }
 
-        const partnersQuery = IndustryPartner.find(filter)
+        const capacityDate = validAllocationDate(req.query.capacityDate) ? new Date(req.query.capacityDate) : new Date();
+        let availablePage;
+        if (req.query.availableOnly === '1') {
+            if (!req.user.institution || !['Admin', 'Manager', 'Staff'].includes(req.user.role)) return res.status(400).json({ message: 'Institution capacity filtering requires an institution account.' });
+            [availablePage] = await IndustryPartner.aggregate([
+                { $match: filter }, ...availablePartnerPipeline(req.user.institution, capacityDate),
+                { $facet: { items: [{ $sort: { createdAt: -1, name: 1, _id: 1 } }, ...(usePagination ? [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }] : []), { $project: { _id: 1 } }], total: [{ $count: 'count' }] } },
+            ]);
+        }
+        const partnersQuery = IndustryPartner.find(availablePage ? { $and: [filter, { _id: { $in: availablePage.items.map(item => item._id) } }] } : filter)
             .populate('addedBy', 'name role institution region')
             .populate('approvalReviewedBy', 'name role')
-            .sort({ createdAt: -1, name: 1 });
+            .sort({ createdAt: -1, name: 1, _id: 1 });
 
-        if (usePagination) {
+        if (usePagination && !availablePage) {
             partnersQuery.skip((page - 1) * pageSize).limit(pageSize);
         }
 
-        const [partners, total, summaryCounts] = await Promise.all([
+        const [partners, total, summaryCounts, directorySectors] = await Promise.all([
             partnersQuery.lean(),
-            usePagination ? IndustryPartner.countDocuments(filter) : Promise.resolve(null),
+            availablePage ? Promise.resolve(availablePage.total[0]?.count || 0) : usePagination ? IndustryPartner.countDocuments(filter) : Promise.resolve(null),
             usePagination && includeAll
                 ? IndustryPartner.aggregate([
                     { $match: summaryFilter },
@@ -13467,8 +13503,10 @@ router.get('/industry-partners', async (req, res) => {
                     },
                 ])
                 : Promise.resolve(null),
+            directory.directory && !directory.submissions
+                ? IndustryPartner.distinct('sector', { status: 'Active', $and: [scopeClauses[0], ...directory.clauses.filter(clause => !Object.hasOwn(clause, 'sector')), { $or: [{ approvalStatus: 'Approved' }, { approvalStatus: { $exists: false } }] }] })
+                : Promise.resolve(null),
         ]);
-        const capacityDate = validAllocationDate(req.query.capacityDate) ? new Date(req.query.capacityDate) : new Date();
         const capacityAwarePartners = req.user.institution && ['Admin', 'Manager', 'Staff'].includes(req.user.role)
             ? await decoratePartnerCapacities(partners, req.user.institution, capacityDate)
             : partners;
@@ -13488,12 +13526,13 @@ router.get('/industry-partners', async (req, res) => {
                 pageSize,
                 totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
                 summary,
+                ...(directory.directory ? { institutionRegion: directory.institutionRegion, selectedRegion: directory.selectedRegion, sectors: directorySectors?.filter(value => typeof value === 'string' && value).sort() || [] } : {}),
             });
         }
 
         res.json(partnersWithPermissions);
     } catch (error) {
-        res.status(500).json({ message: 'Server Error' });
+        res.status(error.status || 500).json({ message: error.status ? error.message : 'Server Error' });
     }
 });
 
@@ -14881,7 +14920,7 @@ router.get('/placement-requests', async (req, res) => {
             .populate('submittedBy', 'name')
             .populate('reviewedByInstitution', 'name')
             .sort({ createdAt: -1 });
-        res.json(requests);
+        res.json(requests.map(request => ({ ...request.toObject(), canEdit: canEditPlacementRequest(req.user, request) })));
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
@@ -15056,6 +15095,37 @@ router.post('/placement-requests', userAssignmentMutation(async (req, res) => {
     } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
 }));
 
+router.put('/placement-requests/:id', userAssignmentMutation(async (req, res) => {
+    try {
+        if (!['Admin', 'Manager', 'Staff'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Only institution teams may edit pending requests.' });
+        if (!mongoose.isObjectIdOrHexString(req.params.id)) return res.status(400).json({ message: 'Invalid placement request ID.' });
+        const key = placementOperationKey(req.user, 'edit-request', { id: req.params.id, input: req.body });
+        const plan = await runPlacementOperation(key, async () => {
+            const request = await PlacementRequest.findOne({ _id: req.params.id, institution: req.user.institution }).lean();
+            if (!request) throw placementError('Placement request not found.', 404);
+            if (!canEditPlacementRequest(req.user, request)) throw placementError('This request cannot be edited by your account or at its current stage.', 403);
+            const values = placementRequestEditValues(request, req.body);
+            const readiness = await assertLearnersReadyForPlacement(values.learners, req.user.institution);
+            if (!readiness.ok) throw placementError(`Learner readiness check failed: ${readiness.message}`, 400);
+            if (await Placement.exists({ learner: { $in: values.learners }, status: 'Active' })) throw placementError('A selected learner already has an active placement.');
+            if (values.partner) {
+                if (!mongoose.isObjectIdOrHexString(values.partner)) throw placementError('Select a valid partner.', 400);
+                const partner = await IndustryPartner.findOne({ $and: [{ _id: values.partner, status: 'Active', approvalStatus: 'Approved' }, await partnerVisibilityFilter(req.user)] });
+                if (!partner) throw placementError('Select an approved, active partner visible to your institution.', 400);
+            }
+            const windows = await getInstitutionWELWindows({ institutionName: req.user.institution, academicYear: request.academicYear || await resolveCurrentAcademicYear() });
+            for (const learner of readiness.learners) {
+                const eligibility = buildPlacementEligibility({ learner, welWindows: windows });
+                if (!eligibility.isEligible && !(req.user.role === 'Admin' && req.body.overrideWelWindow === true && eligibility.windowOverrideAllowed)) throw placementError(eligibility.reason, 400);
+            }
+            return { placements: [], learnerIds: [], partnerIds: [], request: { id: request._id, values }, before: request };
+        });
+        const updated = await PlacementRequest.findById(plan.request.id).populate('partner', 'name sector region coordinates').populate('learners', 'firstName lastName trackingId').populate('submittedBy', 'name');
+        await logAuditEvent({ req, action: 'UPDATE', entityType: 'PlacementRequest', entityId: updated._id, summary: 'Edited pending placement request without activation', before: plan.before, after: updated, metadata: { operationKey: key, replayed: !!plan.replayed } });
+        res.json({ ...updated.toObject(), canEdit: canEditPlacementRequest(req.user, updated) });
+    } catch (error) { res.status(placementErrorStatus(error)).json({ message: error.message }); }
+}));
+
 router.put('/placement-requests/:id/self-source-status', async (req, res) => {
     try {
         if (!['Admin', 'Manager'].includes(req.user.role) || !req.user.institution) return res.status(403).json({ message: 'Only institution management may review placement leads.' });
@@ -15102,6 +15172,9 @@ router.post('/placement-requests/:id/convert', userAssignmentMutation(async (req
         const plan = await runPlacementOperation(key, async () => {
             const fresh = await PlacementRequest.findOne(filter).lean();
             if (!fresh || isArchivedRecord(fresh) || !(fresh.sourceType === 'LearnerFound' ? fresh.status === 'Approved' : fresh.status === 'Submitted')) throw placementError('This request is not ready for activation.');
+            if (req.body.sourceVersion !== undefined && req.body.sourceVersion !== (fresh.workflowVersion || 0)) throw placementError('This request changed. Reload it before activating.');
+            coordinates = normalizeCoordinates(req.body.coordinates ?? fresh.coordinates ?? registeredCoordinates(fresh.partner ? await IndustryPartner.findById(fresh.partner) : null),
+                !(req.user.role === 'Admin' && req.body.approveLocationException === true) && worksiteRequiresCoordinates({ status: 'Active', worksiteMode: req.body.worksiteMode || fresh.worksiteMode || 'FixedSite', locationVerificationStatus: fresh.locationVerificationStatus }));
             const ids = placementLearnerIds(fresh.learners.map(String));
             const input = {
                 partner: fresh.partner,
