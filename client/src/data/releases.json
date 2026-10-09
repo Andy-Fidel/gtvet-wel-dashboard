@@ -1,5 +1,28 @@
 [
   {
+    "id": "2026-10-09-institution-partner-design",
+    "date": "2026-10-09",
+    "title": "A clearer industry partner directory",
+    "summary": "A refreshed layout makes partner information and placement availability easier to scan.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Browse partners with clearer cards and summaries",
+        "body": "The institution partner directory now follows the portal\u2019s System Health design, with a compact header, a region summary, clear approval badges and two-column partner cards. Counts distinguish all search results from availability on the current page. Region switching, search, submissions, corrections and placement actions remain available.",
+        "audience": "Institution placement teams",
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Browse industry partners",
+          "path": "/industry-partners"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-10-09-monitoring-gps-evidence",
     "date": "2026-10-09",
     "title": "More reliable monitoring location checks",

@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react"
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { GHANA_REGIONS, INDUSTRY_SECTORS } from '@/lib/constants'
 import { UnifiedPlacementForm } from './UnifiedPlacementForm'
 import { useAuth } from "@/context/AuthContext"
-import { Plus, Building2, MapPin, Phone, Mail, Link as LinkIcon, BarChart2, UserPlus, FileText } from "lucide-react"
+import { RefreshCw, Plus, Building2, MapPin, Phone, Mail, Link as LinkIcon, BarChart2, UserPlus, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "@/lib/toast"
 import { IndustryPartnerForm } from "./IndustryPartnerForm"
@@ -138,7 +140,7 @@ function IndustryPartnerDirectory() {
       const res = await authFetch(`/api/industry-partners/${id}/create-account`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message || "Failed to create account")
-      
+
       toast.success("Account created", {
         description: "A secure setup link has been issued to the partner email address.",
         duration: 10000,
@@ -150,37 +152,55 @@ function IndustryPartnerDirectory() {
   }
 
   return (
-    <Tabs value={tab} onValueChange={value => { setTab(value); setPage(1) }} className="flex-1 space-y-8 p-4 sm:p-8 flex flex-col items-center max-w-7xl mx-auto w-full">
-      <div className="flex flex-wrap items-center justify-between gap-4 w-full">
+    <Tabs value={tab} onValueChange={value => { setTab(value); setPage(1) }} className={institutionDirectory ? 'mx-auto w-full max-w-6xl space-y-6 pb-10' : 'flex-1 space-y-8 p-4 sm:p-8 flex flex-col items-center max-w-7xl mx-auto w-full'}>
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
-            <Building2 className="h-6 w-6 md:h-8 md:w-8 text-[#FFB800]" />
-            Industry Partners
-          </h2>
-          <p className="text-muted-foreground mt-1 font-medium">{institutionDirectory ? 'Find approved partners for your learners anywhere in Ghana.' : 'Manage companies providing placement opportunities.'}</p>
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-blue-700"><Building2 aria-hidden="true" className="h-5 w-5" /> {institutionDirectory ? 'Institution placement partners' : 'Placement partners'}</div>
+          <h1 className="text-3xl font-black tracking-tight text-slate-950">Industry Partners</h1>
+          <p className="mt-2 max-w-2xl text-sm text-slate-600">{institutionDirectory ? 'Find approved partners for your learners anywhere in Ghana.' : 'Manage companies providing placement opportunities.'}</p>
         </div>
-        {['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'].includes(user?.role || '') && (
-          <div className="flex flex-col sm:flex-row items-start sm:items-center w-full md:w-auto mt-4 md:mt-0 space-y-2 sm:space-y-0 sm:space-x-2">
-                    <Button data-help-id="industry-partners-add" onClick={() => { setEditingPartner(null); setSearchOpen(true); }} className="bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-6 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
-              <Plus className="mr-2 h-5 w-5" /> Add Partner
-            </Button>
-          </div>
-        )}
-      </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" disabled={loading} onClick={() => setRefreshKey(value => value + 1)}><RefreshCw aria-hidden="true" className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />{loading ? 'Refreshing…' : 'Refresh partners'}</Button>
+          {['SuperAdmin', 'RegionalAdmin', 'Admin', 'Manager'].includes(user?.role || '') && <Button data-help-id="industry-partners-add" onClick={() => { setEditingPartner(null); setSearchOpen(true); }} className="bg-[#FFB800] text-slate-950 hover:bg-[#E6A600]"><Plus aria-hidden="true" className="mr-2 h-4 w-4" /> Add Partner</Button>}
+        </div>
+      </header>
 
-      {institutionDirectory && <TabsList className="max-w-full"><TabsTrigger value="browse">Browse partners</TabsTrigger><TabsTrigger value="submissions">My submissions &amp; changes</TabsTrigger></TabsList>}
+      {institutionDirectory && <Card className="overflow-hidden rounded-3xl">
+        <CardContent className="p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-blue-50 p-3 text-blue-700"><Building2 aria-hidden="true" className="h-6 w-6" /></div>
+              <div role="status" aria-live="polite">
+                <h2 className="text-lg font-bold text-slate-950">{tab === 'submissions' ? 'Your institution’s submissions' : 'Explore placement opportunities'}</h2>
+                <p className="mt-1 text-sm text-slate-600">{tab === 'submissions' ? 'Track partner approvals, corrections and institution relationships.' : institutionRegion ? `Your institution’s region: ${institutionRegion}. Browse other regions to find the right placement.` : 'Browse approved partners across Ghana.'}</p>
+                <p className="mt-1 text-xs text-slate-500">Capacity is for today and is checked again for your placement dates.</p>
+              </div>
+            </div>
+            <Badge variant="outline" className="w-fit">{tab === 'submissions' ? 'Institution submissions' : selectedRegion && selectedRegion !== 'all' ? selectedRegion : 'All regions'}</Badge>
+          </div>
+          <dl className="mt-5 grid grid-cols-3 gap-3 border-t border-slate-100 pt-4">
+            {[
+              ['Partners found', total],
+              ['Available on this page', partners.filter(partner => partner.status === 'Active' && isApprovedPartner(partner) && (partner.institutionCapacity?.availableSlots ?? 0) > 0).length],
+              ['Slots on this page', partners.reduce((sum, partner) => sum + (partner.status === 'Active' && isApprovedPartner(partner) ? partner.institutionCapacity?.availableSlots ?? 0 : 0), 0)],
+            ].map(([label, count]) => <div key={label} className="min-w-0"><dt className="text-xs font-medium text-slate-600">{label}</dt><dd className="mt-1 text-2xl font-bold text-slate-950">{loading || loadError ? '—' : count}</dd></div>)}
+          </dl>
+        </CardContent>
+      </Card>}
+
+      {institutionDirectory && <TabsList className="h-auto max-w-full flex-wrap justify-start rounded-xl bg-slate-100 p-1"><TabsTrigger value="browse">Browse partners</TabsTrigger><TabsTrigger value="submissions">My submissions &amp; changes</TabsTrigger></TabsList>}
       <TabsContent value={tab} className="w-full space-y-6">
-      {institutionDirectory && tab === 'browse' && <section aria-label="Partner directory filters" className="w-full rounded-2xl border border-gray-200 bg-white p-5 space-y-4">
+      {institutionDirectory && tab === 'browse' && <section aria-label="Partner directory filters" className="w-full rounded-3xl border border-slate-200 bg-white p-5 sm:p-6 space-y-4 shadow-sm">
         <div className="flex flex-wrap items-end gap-4">
-          <label className="min-w-64 flex-1 text-sm font-bold">Browse by region<select className="mt-2 block w-full rounded-lg border border-gray-300 bg-white p-3 font-medium" value={selectedRegion || 'all'} onChange={event => { setRegion(event.target.value); setPage(1) }}>
+          <label className="min-w-0 basis-full sm:basis-0 sm:min-w-64 flex-1 text-sm font-bold">Browse by region<select className="mt-2 block w-full rounded-lg border border-gray-300 bg-white p-3 font-medium" value={selectedRegion || 'all'} onChange={event => { setRegion(event.target.value); setPage(1) }}>
             <option value="all">All regions</option>{GHANA_REGIONS.map(name => <option key={name}>{name}</option>)}
           </select></label>
-          <div className="flex-1 min-w-64 text-sm text-gray-600">{institutionRegion && <span className="inline-block mb-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">{selectedRegion === institutionRegion ? 'Your institution’s region' : `Your institution: ${institutionRegion}`}</span>}<p>{institutionRegion ? `${institutionRegion} is selected by default. Switch regions to explore other partners.` : 'Select a region to explore approved partners across Ghana.'}</p></div>
+          <div className="flex-1 min-w-0 basis-full sm:basis-0 sm:min-w-64 text-sm text-gray-600">{institutionRegion && <span className="inline-block mb-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">{selectedRegion === institutionRegion ? 'Your institution’s region' : `Your institution: ${institutionRegion}`}</span>}<p>{institutionRegion ? `${institutionRegion} is selected by default. Switch regions to explore other partners.` : 'Select a region to explore approved partners across Ghana.'}</p></div>
         </div>
         <div className="flex flex-wrap gap-2" aria-label="Quick region selection">{[...new Set([institutionRegion, 'Greater Accra', 'Central', 'Eastern', 'Western'])].filter(Boolean).map(name => <Button key={name} variant="outline" aria-pressed={selectedRegion === name} className={selectedRegion === name ? 'bg-amber-50 border-amber-400' : ''} onClick={() => { setRegion(name); setPage(1) }}>{name}</Button>)}<Button variant="outline" aria-pressed={selectedRegion === 'all'} onClick={() => { setRegion('all'); setPage(1) }}>All regions</Button></div>
         <div className="flex flex-wrap items-center gap-3">
-          <Input className="min-w-56 flex-1" aria-label="Search partner name or town" placeholder="Search partner name or town" value={search} maxLength={160} onChange={event => setSearch(event.target.value)} />
-          <label className="sr-only" htmlFor="partner-sector">Sector</label><select id="partner-sector" className="max-w-full rounded-lg border border-gray-300 bg-white p-2 text-sm" value={sector} onChange={event => { setSector(event.target.value); setPage(1) }}><option value="">All sectors</option>{[...new Set([...directorySectors, ...(sector ? [sector] : [])])].map(name => <option key={name}>{name}</option>)}</select>
+          <Input className="min-w-0 basis-full sm:basis-0 sm:min-w-56 flex-1" aria-label="Search partner name or town" placeholder="Search partner name or town" value={search} maxLength={160} onChange={event => setSearch(event.target.value)} />
+          <label className="sr-only" htmlFor="partner-sector">Sector</label><select id="partner-sector" className="w-full sm:w-auto max-w-full rounded-lg border border-gray-300 bg-white p-2 text-sm" value={sector} onChange={event => { setSector(event.target.value); setPage(1) }}><option value="">All sectors</option>{[...new Set([...directorySectors, ...(sector ? [sector] : [])])].map(name => <option key={name}>{name}</option>)}</select>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={availableOnly} onChange={event => { setAvailableOnly(event.target.checked); setPage(1) }} />With available slots</label>
         </div>
         <p className="text-xs text-gray-500">Availability is for today. Capacity and permissions are checked again for the placement dates you choose.</p>
@@ -198,8 +218,8 @@ function IndustryPartnerDirectory() {
       <Dialog open={!!changePartner} onOpenChange={open => { if (!open) setChangePartner(null) }}><DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Request changes: {changePartner?.name}</DialogTitle><DialogDescription>Submit corrections for institution and HQ review.</DialogDescription></DialogHeader>{changePartner && <PartnerChangeForm partner={{ ...changePartner }} onDone={() => setChangePartner(null)} />}</DialogContent></Dialog>
       <Dialog open={!!relationshipPartner} onOpenChange={open => { if (!open) setRelationshipPartner(null) }}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>{relationshipPartner?.name}: institution details</DialogTitle><DialogDescription>Contacts and notes for your institution.</DialogDescription></DialogHeader>{relationshipPartner && <PartnerRelationship partner={relationshipPartner} onDone={() => setRelationshipPartner(null)} />}</DialogContent></Dialog>
       {allocationPartner && <PartnerSlotAllocations partner={allocationPartner} open={Boolean(allocationPartner)} onOpenChange={value => { if (!value) setAllocationPartner(null) }} onChanged={() => setRefreshKey(key => key + 1)} />}
-      <SearchPartnerDialog 
-        open={searchOpen} 
+      <SearchPartnerDialog
+        open={searchOpen}
         onOpenChange={setSearchOpen}
         onLinkSuccess={() => setRefreshKey(prev => prev + 1)}
         onRegisterNew={() => {
@@ -226,27 +246,27 @@ function IndustryPartnerDirectory() {
       </Dialog>
 
       {loading ? (
-        <div className="w-full text-center p-12 text-gray-400 font-bold animate-pulse">Loading partners...</div>
+        <div aria-label="Loading partners" className="grid gap-4 md:grid-cols-2">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-72 rounded-3xl" />)}</div>
       ) : loadError ? (
-        <div role="alert" className="w-full text-center p-12">
+        <div role="alert" className="w-full rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950">
           <p>Unable to load partners.</p>
           <Button variant="outline" className="mt-3" onClick={() => setRefreshKey(value => value + 1)}>Retry</Button>
         </div>
       ) : partners.length === 0 ? (
-        <div className="w-full text-center p-16 bg-white/50 border border-dashed border-gray-300 rounded-[2.5rem]">
+        <div className="w-full rounded-3xl border border-dashed border-slate-200 bg-white p-8 text-center sm:p-12">
           <Building2 className="h-16 w-16 text-gray-300 mx-auto mb-4" />
           <h3 className="text-xl font-black text-gray-500 tracking-tight">No partners found</h3>
           <p className="text-gray-400 mt-2 font-medium">{institutionDirectory ? tab === 'browse' ? 'Try another region or clear your search and filters.' : 'Your institution’s partner submissions will appear here.' : 'Add some industry partners to get started.'}</p>
         </div>
       ) : (
-        <div data-help-id="industry-partners-grid" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
+        <div data-help-id="industry-partners-grid" className={institutionDirectory ? 'grid w-full gap-4 md:grid-cols-2' : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full'}>
           {partners.map(partner => (
-            <Card key={partner._id} className="bg-white border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-xl hover:-translate-y-1 transition-all duration-300 rounded-[2rem] overflow-hidden group">
-              <div className="h-2 w-full bg-[#FFB800]" />
+            <Card key={partner._id} className={institutionDirectory ? 'rounded-3xl bg-white shadow-sm overflow-hidden' : 'bg-white border-none shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-xl hover:-translate-y-1 transition-all duration-300 rounded-[2rem] overflow-hidden group'}>
+              {!institutionDirectory && <div className="h-2 w-full bg-[#FFB800]" />}
               <CardHeader className="pb-4">
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-start gap-3">
                   <div>
-                     <CardTitle className="text-xl font-black text-gray-900 leading-tight group-hover:text-[#FFB800] transition-colors">{partner.name}</CardTitle>
+                     <h3 className="font-bold text-slate-950 leading-tight break-words">{partner.name}</h3>
                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 bg-gray-100 text-gray-600 mt-2 uppercase tracking-wide">
                         {partner.sector}
                      </span>
@@ -256,8 +276,8 @@ function IndustryPartnerDirectory() {
                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 mt-2 ml-2 ${partner.locationVerificationStatus === 'GPSVerified' ? 'bg-emerald-100 text-emerald-700' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
                        {partner.locationVerificationStatus === 'TownSelected' ? 'Town location selected' : partner.locationVerificationStatus === 'GPSVerified' ? 'Workplace location recorded' : partner.locationVerificationStatus === 'NotApplicableMobile' ? 'Mobile evidence' : 'GPS pending'}
                      </span>
-                     {institutionDirectory && tab === 'browse' && <span className="inline-flex mt-2 ml-2 rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">Approved</span>}
-                     {partner.approvalStatus && partner.approvalStatus !== 'Approved' && (
+
+                     {!institutionDirectory && partner.approvalStatus && partner.approvalStatus !== 'Approved' && (
                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold leading-5 mt-2 ml-2 uppercase tracking-wide ${
                          partner.approvalStatus === 'PendingHQApproval'
                            ? 'bg-amber-100 text-amber-700'
@@ -267,7 +287,7 @@ function IndustryPartnerDirectory() {
                        </span>
                      )}
                   </div>
-                  {partner.status === 'Active' ? (
+                  {institutionDirectory ? <Badge variant="outline" className={partner.status !== 'Active' || !isApprovedPartner(partner) || partner.institutionCapacity?.availableSlots === 0 ? 'shrink-0 bg-amber-100 text-amber-900 border-amber-200' : 'shrink-0 bg-emerald-100 text-emerald-800 border-emerald-200'}>{!isApprovedPartner(partner) ? partner.approvalStatus === 'Rejected' ? 'Rejected' : 'Pending HQ' : partner.status !== 'Active' ? 'Inactive' : partner.institutionCapacity?.availableSlots === 0 ? 'Full' : 'Approved'}</Badge> : partner.status === 'Active' ? (
                      <div className="h-3 w-3 rounded-full bg-emerald-400 border-2 border-white shadow-sm" title="Active"></div>
                   ) : (
                      <div className="h-3 w-3 rounded-full bg-red-400 border-2 border-white shadow-sm" title="Inactive"></div>
@@ -275,7 +295,7 @@ function IndustryPartnerDirectory() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4 text-sm font-medium text-gray-500">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
                     <div className="flex items-center gap-2">
                         <MapPin className="h-4 w-4 text-gray-400" />
                         <span className="truncate" title={partner.region}>{partner.town || partner.location ? `${partner.town || partner.location}, ${partner.region}` : partner.region}</span>
@@ -306,13 +326,13 @@ function IndustryPartnerDirectory() {
                     )}
                 </div>
 
-                <div className="bg-gray-50/50 rounded-2xl p-4 border border-gray-100/50 mt-4">
+                <div className="rounded-xl bg-slate-50 p-3 text-xs">
                     <div className="flex items-center justify-between mb-2">
                          <span className="text-xs font-bold text-gray-500 flex items-center gap-1.5"><BarChart2 className="h-4 w-4 text-[#FFB800]"/> {partner.institutionCapacity ? 'Available to your institution' : 'Capacity'}</span>
                          <span className="text-xl font-black text-gray-900">{partner.institutionCapacity?.availableSlots ?? `${partner.usedSlots} / ${partner.totalSlots}`}</span>
                     </div>
                     {!partner.institutionCapacity && <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-                        <div 
+                        <div
                          className={`h-1.5 rounded-full transition-all duration-500 ${partner.usedSlots >= partner.totalSlots ? 'bg-red-500' : 'bg-[#10b981]'}`}
                          style={{ width: `${partner.totalSlots > 0 ? Math.min((partner.usedSlots / partner.totalSlots) * 100, 100) : 0}%` }}
                         ></div>
@@ -322,7 +342,7 @@ function IndustryPartnerDirectory() {
 
                 {partner.approvalStatus === 'Rejected' && partner.approvalComment && <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800"><strong>HQ rejection reason:</strong> {partner.approvalComment}</p>}
                 {partner.canResubmit && <Button variant="outline" size="sm" onClick={() => { setEditingPartner(partner); setOpen(true) }}>Correct and resubmit</Button>}
-                {institutionDirectory && tab === 'browse' && <div className="flex gap-2 border-t pt-3"><Button variant="outline" className="flex-1" onClick={() => setDetailsPartner(partner)}>View details</Button><Button className="flex-1 bg-[#FFB800] text-gray-900 hover:bg-amber-400" disabled={partner.status !== 'Active' || !isApprovedPartner(partner) || partner.institutionCapacity?.availableSlots === 0} onClick={() => setPlacementPartner(partner)}>Use for placement</Button></div>}
+                {institutionDirectory && tab === 'browse' && <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3"><Button variant="outline" className="flex-1" onClick={() => setDetailsPartner(partner)}>View details</Button><Button className="flex-1 bg-[#FFB800] text-gray-900 hover:bg-amber-400" disabled={partner.status !== 'Active' || !isApprovedPartner(partner) || partner.institutionCapacity?.availableSlots === 0} onClick={() => setPlacementPartner(partner)}>Use for placement</Button></div>}
                 {(!institutionDirectory || tab === 'submissions') && ['Admin', 'Manager', 'Staff', 'RegionalAdmin'].includes(user?.role || '') && <div className="flex flex-wrap gap-2 border-t pt-3">{partner.canRequestChanges && <Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setChangePartner(partner)}>Request changes</Button>}{user?.role !== 'RegionalAdmin' && <><Button variant="outline" size="sm" onClick={() => setRelationshipPartner(partner)}>Institution details</Button><Button variant="outline" size="sm" disabled={!isApprovedPartner(partner)} onClick={() => setAllocationPartner(partner)}>Reserved slots</Button></>}</div>}
                 {(user?.role === 'SuperAdmin' || user?.role === 'RegionalAdmin') && (
                     <div className="flex gap-2 pt-2 border-t border-gray-100 mt-4">
