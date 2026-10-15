@@ -10,6 +10,7 @@ const schema = new mongoose.Schema({
   ipAddress: { type: String, default: '' },
   userAgent: { type: String, default: '' },
   expiresAt: { type: Date, required: true },
+  lastActivityAt: { type: Date },
   lastSeenAt: { type: Date, required: true },
   revokedAt: { type: Date, default: null },
   revokedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

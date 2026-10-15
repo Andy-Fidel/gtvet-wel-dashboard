@@ -1,3 +1,4 @@
+import { sessionExpired } from './sessionPolicy.js';
 import { AuthSession } from '../models/AuthSession.js';
 import { User } from '../models/User.js';
 import { MfaCredential } from '../models/MfaCredential.js';
@@ -9,6 +10,6 @@ export async function inspectionParent(parentId, inspectorId) {
     User.findById(inspectorId).select('+sessionVersion').populate('partnerId').populate('linkedLearners', '_id'),
     MfaCredential.exists({ userId: inspectorId, enabled: true }),
   ]);
-  if (!session || !user || user.role !== 'SuperAdmin' || user.status !== 'Active' || session.credentialVersion !== credentialVersion(user) || (mfa && !session.mfaVerified)) return null;
+  if (!session || sessionExpired(session) || !user || user.role !== 'SuperAdmin' || user.status !== 'Active' || session.credentialVersion !== credentialVersion(user) || (mfa && !session.mfaVerified)) return null;
   return { session, user };
 }

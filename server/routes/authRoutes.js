@@ -1,10 +1,11 @@
 import express from 'express';
+import { SESSION_MAX_MS, SESSION_IDLE_MS, sessionMetadata } from '../utils/sessionPolicy.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { User } from '../models/User.js';
 import { Institution } from '../models/Institution.js';
-import { auth, JWT_SECRET, clearSessionCookies, issueCsrfToken, setSessionCookies } from '../middleware/auth.js';
+import { auth, requireRecentAuth, getRequestToken, JWT_SECRET, clearSessionCookies, issueCsrfToken, setSessionCookies } from '../middleware/auth.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { logAuditEvent } from '../utils/audit.js';
 import { createAuthSession } from '../utils/authSessions.js';
@@ -21,7 +22,7 @@ router.use('/security', securityRoutes);
 
 async function issueSession(user, req, res, mfaVerified = false) {
   const session = await createAuthSession(user, req, mfaVerified);
-  const token = jwt.sign({ userId: user._id, sid: String(session._id) }, JWT_SECRET, { expiresIn: '7d', algorithm: 'HS256' });
+  const token = jwt.sign({ userId: user._id, sid: String(session._id) }, JWT_SECRET, { expiresIn: SESSION_MAX_MS / 1000, algorithm: 'HS256' });
   setSessionCookies(res, token);
 }
 
@@ -41,7 +42,7 @@ router.get('/csrf', (req, res) => {
 });
 
 // POST /api/auth/register (SuperAdmin only - used to create initial Institution Admins)
-router.post('/register', auth, (req, res, next) => {
+router.post('/register', auth, requireRecentAuth, (req, res, next) => {
   if (req.user.role !== 'SuperAdmin') {
     return res.status(403).json({ message: 'Only SuperAdmins can register new admins' });
   }
@@ -178,8 +179,19 @@ router.post('/login', async (req, res) => {
       await logAuditEvent({ req, actor: user, action: 'AUTH', entityType: 'AuthSession', entityId: user._id, summary: 'MFA verification failed', metadata: { outcome: 'FAILED' } });
       return res.status(401).json({ message: 'Enter a valid authenticator or recovery code. After repeated failures, wait 10 minutes.' });
     }
+    if (req.body.resumeUserId && String(user._id) !== req.body.resumeUserId) {
+      return res.status(409).json({ message: 'Sign in with the same account to restore this screen.' });
+    }
     user.lastLoginAt = new Date();
     await user.save();
+    if (req.body.resumeUserId) {
+      let previous;
+      try { previous = jwt.verify(getRequestToken(req) || '', JWT_SECRET, { algorithms: ['HS256'], ignoreExpiration: true }); }
+      catch { /* An expired or missing cookie never substitutes for the credentials just verified. */ }
+      if (previous && String(previous.userId) === String(user._id) && /^[a-f\d]{24}$/i.test(previous.sid || '')) {
+        await AuthSession.updateOne({ _id: previous.sid, userId: user._id, revokedAt: null }, { $set: { revokedAt: new Date(), reason: 'Reauthenticated' } });
+      }
+    }
     await issueSession(user, req, res, Boolean(mfa));
 
     await logAuditEvent({
@@ -208,10 +220,31 @@ router.get('/me', auth, async (req, res) => {
     .populate('partnerId')
     .populate('linkedLearners', 'name trackingId');
   if (!user) return res.status(404).json({ message: 'User not found' });
-  res.set('Cache-Control', 'no-store').json({ ...user.toJSON(), ...(req.inspectionActor ? {
+  res.set('Cache-Control', 'no-store').json({ ...user.toJSON(), session: sessionMetadata(req.authSession), ...(req.inspectionActor ? {
     passwordChangeRequired: false,
     inspection: { readOnly: true, actorName: req.inspectionActor.name, expiresAt: req.authSession.expiresAt },
   } : {}) });
+});
+
+// Reading session status never extends it. Only an explicit interaction heartbeat does.
+router.get('/session', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store').json(sessionMetadata(req.authSession));
+});
+
+router.post('/session/activity', auth, async (req, res) => {
+  const now = Date.now();
+  const result = await AuthSession.updateOne({
+    _id: req.authSession._id, revokedAt: null,
+    expiresAt: { $gt: new Date(now) },
+    createdAt: { $gt: new Date(now - SESSION_MAX_MS) },
+    $or: [
+      { lastActivityAt: { $gt: new Date(now - SESSION_IDLE_MS) } },
+      { lastActivityAt: { $exists: false }, createdAt: { $gt: new Date(now - SESSION_IDLE_MS) } },
+    ],
+  }, { $max: { lastActivityAt: new Date(now) } });
+  if (result.matchedCount !== 1) return res.status(401).json({ code: 'SESSION_EXPIRED', message: 'Your session has expired. Sign in again.' });
+  req.authSession.lastActivityAt = new Date(now);
+  res.set('Cache-Control', 'no-store').json(sessionMetadata(req.authSession, now));
 });
 
 router.post('/logout', auth, async (req, res) => {

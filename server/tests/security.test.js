@@ -39,7 +39,7 @@ test('session creation stores metadata but never a bearer token or password', as
 
 test('auth rejects old stateless tokens, revoked sessions, changed credentials, and missing MFA verification', async t => {
   let storedUser = user;
-  let session = { _id: sid, credentialVersion: credentialVersion(user), lastSeenAt: new Date(), mfaVerified: false };
+  let session = { createdAt: new Date(), expiresAt: new Date(Date.now() + 3600000), lastActivityAt: new Date(), _id: sid, credentialVersion: credentialVersion(user), lastSeenAt: new Date(), mfaVerified: false };
   let mfa = null;
   t.mock.method(User, 'findById', () => chain(storedUser));
   t.mock.method(AuthSession, 'findOne', filter => { assert.equal(filter.revokedAt, null); assert.ok(filter.expiresAt.$gt); return chain(session); });

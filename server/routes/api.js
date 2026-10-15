@@ -40,7 +40,7 @@ import { AccessApproval } from '../models/AccessApproval.js';
 import { GuardianConsent } from '../models/GuardianConsent.js';
 import { PlacementAgreement } from '../models/PlacementAgreement.js';
 import { Vacancy } from '../models/Vacancy.js';
-import { auth, requireRole } from '../middleware/auth.js';
+import { auth, requireRole, requireRecentAuth } from '../middleware/auth.js';
 import { Parser } from 'json2csv';
 import { parsePartnerCsv } from '../utils/partnerImport.js';
 import { partnerRegionMatch, partnerVisibilityFilter } from '../utils/partnerVisibility.js';
@@ -79,6 +79,11 @@ const INSTITUTION_MANAGEMENT_ROLES = ['Admin', 'Manager'];
 // All routes below require authentication
 router.use(auth);
 router.use(enforceHQAccess);
+router.use((req, res, next) => {
+  const changesAccess = !['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+    && (/^\/users(?:\/|$)/.test(req.path) || /^\/access-approvals\/[^/]+\/implement$/.test(req.path));
+  return changesAccess ? requireRecentAuth(req, res, next) : next();
+});
 router.use(offlineReplay);
 router.use((req, res, next) => {
   if (Object.hasOwn(req.body || {}, 'workflowVersion')) return res.status(400).json({ message: 'Workflow version is managed by the server.' });

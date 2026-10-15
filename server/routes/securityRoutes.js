@@ -1,4 +1,5 @@
 import express from 'express';
+import { SESSION_IDLE_MS, SESSION_MAX_MS } from '../utils/sessionPolicy.js';
 import mongoose from 'mongoose';
 import { auth, clearSessionCookies } from '../middleware/auth.js';
 import { AuthSession } from '../models/AuthSession.js';
@@ -59,7 +60,10 @@ router.get('/sessions', async (req, res) => {
   const all = req.query.scope === 'all';
   if (all && req.user.role !== 'SuperAdmin') return res.status(403).json({ message: 'Super Admin access required.' });
   const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
-  const filter = { revokedAt: null, expiresAt: { $gt: new Date() }, ...(all ? {} : { userId: req.user._id }) };
+  const now = Date.now();
+  const filter = { revokedAt: null, expiresAt: { $gt: new Date(now) }, createdAt: { $gt: new Date(now - SESSION_MAX_MS) },
+    $or: [{ lastActivityAt: { $gt: new Date(now - SESSION_IDLE_MS) } }, { lastActivityAt: { $exists: false }, createdAt: { $gt: new Date(now - SESSION_IDLE_MS) } }],
+    ...(all ? {} : { userId: req.user._id }) };
   const [sessions, total] = await Promise.all([
     AuthSession.find(filter).select('-credentialVersion').populate('userId', 'name email role status institution').sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 25).limit(25).lean(),
     AuthSession.countDocuments(filter),

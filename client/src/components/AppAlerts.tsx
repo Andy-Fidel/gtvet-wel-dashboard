@@ -90,7 +90,7 @@ export function AppAlerts() {
     document.addEventListener('focusin', trackAlertFocus)
     return () => document.removeEventListener('focusin', trackAlertFocus)
   }, [])
-  const { user } = useAuth()
+  const { user, sessionLocked } = useAuth()
   const previousUser = useRef(user?._id)
   useEffect(() => {
     if (previousUser.current && previousUser.current !== user?._id) toast.dismiss()
@@ -99,6 +99,6 @@ export function AppAlerts() {
   const alerts = useSyncExternalStore(subscribeAlerts, getAlerts, getAlerts)
   return <>
     {createPortal(<Toaster position="top-right" offset={24} closeButton style={{ zIndex: 190 }} toastOptions={{ closeButtonAriaLabel: 'Dismiss notification', className: 'rounded-2xl text-sm shadow-xl' }} />, document.body)}
-    {alerts[0] && <AlertDialog key={alerts[0].id} alert={alerts[0]} remaining={alerts.length - 1} />}
+    {!sessionLocked && alerts[0] && <AlertDialog key={alerts[0].id} alert={alerts[0]} remaining={alerts.length - 1} />}
   </>
 }

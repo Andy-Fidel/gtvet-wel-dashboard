@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { SESSION_MAX_MS, RECENT_AUTH_MS, sessionExpired } from '../utils/sessionPolicy.js';
 import crypto from 'crypto';
 import { User } from '../models/User.js';
 import { AuthSession } from '../models/AuthSession.js';
@@ -43,6 +44,10 @@ export const auth = async (req, res, next) => {
       return res.status(401).json({ message: 'Invalid token or inactive user' });
     }
 
+    if (sessionExpired(session)) {
+      return res.status(401).json({ code: 'SESSION_EXPIRED', message: 'Your session has expired. Sign in again to continue.' });
+    }
+
     if (session.parentSessionId) {
       const parent = await inspectionParent(session.parentSessionId, session.inspectorId);
       if (!parent) return res.status(401).json({ message: 'Inspection authorization has ended.' });
@@ -70,7 +75,7 @@ export const auth = async (req, res, next) => {
     if (req.inspectionActor) return inspectionContext.run(true, next);
     next();
   } catch (error) {
-    return res.status(401).json({ message: 'Token verification failed' });
+    return res.status(401).json({ ...(error.name === 'TokenExpiredError' ? { code: 'SESSION_EXPIRED' } : {}), message: 'Token verification failed' });
   }
 };
 
@@ -158,7 +163,7 @@ export const issueCsrfToken = (res) => {
     secure: isSecureCookie(),
     sameSite: 'Lax',
     path: '/',
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge: SESSION_MAX_MS / 1000,
   }));
   return csrfToken;
 };
@@ -169,7 +174,7 @@ export const setSessionCookies = (res, token) => {
     secure: isSecureCookie(),
     sameSite: 'Lax',
     path: '/',
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge: SESSION_MAX_MS / 1000,
   }));
   issueCsrfToken(res);
 };
@@ -220,4 +225,13 @@ export const getRequestToken = (req) => {
 
   const cookies = parseCookies(req.headers.cookie || '');
   return cookies[SESSION_COOKIE_NAME] || null;
+};
+
+// High-impact access changes require a recent password/MFA sign-in, not just activity.
+export const requireRecentAuth = (req, res, next) => {
+  const authenticatedAt = new Date(req.authSession.createdAt).getTime();
+  if (!Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt >= RECENT_AUTH_MS) {
+    return res.status(403).json({ code: 'REAUTHENTICATION_REQUIRED', message: 'Sign in again, then retry this access change.' });
+  }
+  next();
 };

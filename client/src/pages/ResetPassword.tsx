@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { API_BASE } from '@/config';
-import { ArrowLeft, Lock, CheckCircle2 } from 'lucide-react';
+import { Lock, CheckCircle2, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { PasswordRecoveryLayout, recoveryButtonClassName, recoveryInputClassName } from '@/components/auth/PasswordRecoveryLayout';
 import { toast } from '@/lib/toast';
 import { ensureCsrfToken } from '@/lib/csrf';
 
@@ -11,6 +10,8 @@ export default function ResetPassword() {
   const { token } = useParams<{ token: string }>();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const navigate = useNavigate();
@@ -47,10 +48,7 @@ export default function ResetPassword() {
       }
 
       setIsSuccess(true);
-      toast.success(data.message || 'Password has been reset successfully!', {
-        description: 'Close this message to continue to sign in.',
-        onDismiss: () => navigate('/login'),
-      });
+      toast.success(data.message || 'Password has been reset successfully!');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to reset password');
     } finally {
@@ -59,118 +57,72 @@ export default function ResetPassword() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden">
-      {/* Decorative background elements */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-gradient-to-br from-[#FFB800]/20 to-transparent blur-3xl" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-gradient-to-tl from-[#000000]/5 to-transparent blur-3xl" />
-      
-      <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
-        <div className="flex justify-center mb-8">
-          <div className="h-16 w-16 bg-black rounded-2xl flex items-center justify-center transform rotate-3 shadow-2xl overflow-hidden group hover:rotate-6 transition-all duration-300">
-            <span className="text-white font-black text-2xl tracking-tighter group-hover:scale-110 transition-transform">GT</span>
+    <PasswordRecoveryLayout
+      title={isSuccess ? 'Password reset' : 'Create a new password'}
+      description={isSuccess ? 'Your password has been updated successfully.' : 'Choose a new password to secure your institution portal.'}
+    >
+      {isSuccess ? (
+        <div role="status" className="text-center space-y-6">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#FFB800]/15 text-[#FFB800]">
+            <CheckCircle2 aria-hidden="true" className="h-7 w-7" />
           </div>
+          <p className="text-sm text-white/70 leading-relaxed">You can now sign in with your new password.</p>
+          <button type="button" onClick={() => navigate('/login')} className={recoveryButtonClassName}>Sign in</button>
         </div>
-        
-        <h2 className="mt-4 text-center text-3xl font-black tracking-tight text-gray-900">
-          Create new password
-        </h2>
-        <p className="mt-4 text-center text-sm text-gray-600 max-w-sm mx-auto font-medium">
-          Your new password must be securely formed and at least 6 characters.
-        </p>
-      </div>
-
-      <div className="mt-10 sm:mx-auto sm:w-full sm:max-w-md relative z-10">
-        <div className="bg-white/80 backdrop-blur-xl py-10 px-8 lg:px-12 shadow-[0_8px_30px_rgb(0,0,0,0.04)] sm:rounded-[2.5rem] border border-white/20 relative">
-          
-          <Button 
-            variant="ghost" 
-            className="absolute top-4 left-4 h-10 w-10 p-0 rounded-xl bg-gray-50/50 hover:bg-gray-100 text-gray-500 hover:text-gray-900"
-            onClick={() => navigate('/login')}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-
-          {isSuccess ? (
-            <div className="text-center space-y-6 mt-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center">
-                <CheckCircle2 className="h-8 w-8 text-green-500" />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-xl font-black text-gray-900">Password Reset</h3>
-                <p className="text-sm text-gray-500 leading-relaxed font-medium">
-                  Your password has been reset successfully. You will be redirected to the login portal momentarily.
-                </p>
-              </div>
-              <Button 
-                onClick={() => navigate('/login')}
-                className="w-full h-14 bg-black hover:bg-black/90 text-white rounded-2xl font-bold text-base transition-all duration-300 shadow-xl shadow-black/10 hover:shadow-black/20 hover:-translate-y-0.5"
-              >
-                Sign In Now
-              </Button>
+      ) : (
+        <form className="space-y-5" onSubmit={handleSubmit} aria-busy={isLoading}>
+          <div className="space-y-2">
+            <label htmlFor="password" className="block text-sm font-medium text-white/80">New password</label>
+            <div className="relative">
+              <Lock aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
+              <input
+                id="password"
+                name="password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                aria-describedby="password-help"
+                required
+                minLength={6}
+                disabled={isLoading}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={`${recoveryInputClassName} pr-14`}
+                placeholder="Enter new password"
+              />
+              <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? 'Hide new password' : 'Show new password'} aria-pressed={showPassword} className="absolute right-2 top-1/2 -translate-y-1/2 flex h-11 w-11 items-center justify-center rounded-xl text-white/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFB800]">
+                {showPassword ? <EyeOff aria-hidden="true" className="h-5 w-5" /> : <Eye aria-hidden="true" className="h-5 w-5" />}
+              </button>
             </div>
-          ) : (
-            <form className="space-y-6 mt-4" onSubmit={handleSubmit}>
-              <div className="space-y-2">
-                <label htmlFor="password" className="block text-sm font-bold text-gray-900 ml-1">
-                  New Password
-                </label>
-                <div className="relative group">
-                  <Input
-                    id="password"
-                    name="password"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="block w-full h-14 pl-12 pr-4 rounded-2xl border-gray-200 bg-gray-50/50 text-gray-900 placeholder:text-gray-400 focus:border-black focus:ring-black transition-all group-hover:bg-white"
-                    placeholder="Enter new password"
-                  />
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400 group-hover:text-black transition-colors" />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label htmlFor="confirmPassword" className="block text-sm font-bold text-gray-900 ml-1">
-                  Confirm Password
-                </label>
-                <div className="relative group">
-                  <Input
-                    id="confirmPassword"
-                    name="confirmPassword"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="block w-full h-14 pl-12 pr-4 rounded-2xl border-gray-200 bg-gray-50/50 text-gray-900 placeholder:text-gray-400 focus:border-black focus:ring-black transition-all group-hover:bg-white"
-                    placeholder="Confirm new password"
-                  />
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400 group-hover:text-black transition-colors" />
-                </div>
-              </div>
-
-              <div className="pt-2">
-                <Button
-                  type="submit"
-                  disabled={isLoading || !password || !confirmPassword}
-                  className="w-full h-14 bg-[#FFB800] hover:bg-[#FFB800]/90 text-black rounded-2xl font-black text-base transition-all duration-300 shadow-xl shadow-[#FFB800]/20 hover:shadow-[#FFB800]/30 hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0"
-                >
-                  {isLoading ? (
-                    <div className="flex items-center gap-2">
-                      <div className="h-4 w-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
-                      <span>Resetting...</span>
-                    </div>
-                  ) : (
-                    'Reset Password'
-                  )}
-                </Button>
-              </div>
-            </form>
-          )}
-
-        </div>
-      </div>
-    </div>
+            <p id="password-help" className="text-xs text-white/60">Use at least 6 characters.</p>
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-white/80">Confirm password</label>
+            <div className="relative">
+              <Lock aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 h-5 w-5 text-white/40" />
+              <input
+                id="confirmPassword"
+                name="confirmPassword"
+                type={showConfirmPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                required
+                minLength={6}
+                disabled={isLoading}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className={`${recoveryInputClassName} pr-14`}
+                placeholder="Confirm new password"
+              />
+              <button type="button" onClick={() => setShowConfirmPassword((current) => !current)} aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} aria-pressed={showConfirmPassword} className="absolute right-2 top-1/2 -translate-y-1/2 flex h-11 w-11 items-center justify-center rounded-xl text-white/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFB800]">
+                {showConfirmPassword ? <EyeOff aria-hidden="true" className="h-5 w-5" /> : <Eye aria-hidden="true" className="h-5 w-5" />}
+              </button>
+            </div>
+          </div>
+          <button type="submit" disabled={isLoading || !password || !confirmPassword} className={recoveryButtonClassName}>
+            {isLoading && <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin" />}
+            {isLoading ? 'Resetting password…' : 'Reset password'}
+          </button>
+        </form>
+      )}
+    </PasswordRecoveryLayout>
   );
 }

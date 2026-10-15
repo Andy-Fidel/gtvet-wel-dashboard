@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { SessionManager, type SessionTiming, SESSION_TIMING_KEY } from '@/components/auth/SessionManager';
 import { toast } from '@/lib/toast';
 import { useQueryClient } from '@tanstack/react-query';
 import { AUTH_CONTEXT_KEY, endInspection, INSPECTION_KEY } from '@/lib/inspection';
@@ -16,6 +17,7 @@ interface User {
   institution: string;
   phone?: string;
   passwordChangeRequired?: boolean;
+  session?: SessionTiming;
   inspection?: { readOnly: true; actorName: string; expiresAt: string };
   region?: string;
   hqScopeType?: 'National' | 'Region' | 'Institution';
@@ -37,6 +39,7 @@ interface AuthContextType {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  sessionLocked: boolean;
   passwordChangeRequired: boolean;
   offlineQueueCount: number;
   isSyncingOfflineQueue: boolean;
@@ -203,6 +206,12 @@ const isQueueableMutation = (url: string, options: RequestInit = {}) => (
   supportsOfflineAction(url, (options.method || 'GET').toUpperCase())
   && typeof options.body === 'string'
 );
+const accessScope = (value: User) => JSON.stringify([
+  value._id, value.status, value.role, value.institution, value.region, value.hqScopeType,
+  value.partnerId?._id, value.partnerPortalRole,
+  (value.linkedLearners || []).map(learner => learner._id).sort(),
+]);
+
 const SESSION_SNAPSHOT_KEY = 'gtvets-offline-session';
 const saveOfflineSession = (sessionUser: User) => {
   try {
@@ -214,7 +223,8 @@ const saveOfflineSession = (sessionUser: User) => {
 const cachedOfflineUser = (): User | null => {
   try {
     const snapshot = JSON.parse(localStorage.getItem(SESSION_SNAPSHOT_KEY) || 'null');
-    if (snapshot && Date.now() - snapshot.savedAt < 24 * 60 * 60 * 1000 && !snapshot.user.inspection && !snapshot.user.passwordChangeRequired
+    const timing = JSON.parse(localStorage.getItem(SESSION_TIMING_KEY) || 'null') || snapshot?.user?.session;
+    if (snapshot && timing?.userId === snapshot.user._id && timing.id === snapshot.user.session?.id && Date.now() + (timing.clockOffset || 0) < Math.min(timing.expiresAt, timing.idleExpiresAt) && !snapshot.user.inspection && !snapshot.user.passwordChangeRequired
       && ['Admin', 'Manager', 'Staff', 'IndustryPartner'].includes(snapshot.user.role)
       && getActiveOfflineScope() === `user:${snapshot.user._id}`) return snapshot.user;
   } catch { /* Invalid local data is not a session. */ }
@@ -243,6 +253,13 @@ const mapOfflineQueueState = (queue: OfflineMutation[]) => (
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
+  const [sessionLocked, setSessionLocked] = useState(false);
+  const sessionLockedRef = useRef(false);
+  const lockSession = useCallback(() => {
+    sessionLockedRef.current = true;
+    setSessionLocked(true);
+    void queryClient.cancelQueries();
+  }, [queryClient]);
   const token: string | null = null;
   const [isLoading, setIsLoading] = useState(true);
   const [passwordChangeRequired, setPasswordChangeRequired] = useState<boolean>(
@@ -382,7 +399,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { isMounted = false; };
   }, [activateOfflineScope, loadOfflineState]);
 
-  const login = useCallback(async (email: string, password: string, mfaCode?: string) => {
+  const login = useCallback(async (email: string, password: string, mfaCode?: string, preserveWork = false) => {
     // Always rotate the CSRF token before login. This prevents a token left by
     // a previous browser session from being reused after logout.
     const csrfToken = await ensureCsrfToken(true);
@@ -393,7 +410,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
       },
       credentials: 'include',
-      body: JSON.stringify({ email, password, mfaCode }),
+      body: JSON.stringify({ email, password, mfaCode, ...(preserveWork ? { resumeUserId: user?._id } : {}) }),
     });
 
     const data = await res.json().catch(() => ({}));
@@ -404,14 +421,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Prevent the token useEffect from racing with login hydration
     isLoggingInRef.current = true;
 
-    // Clear previous session's cached queries before setting new user
-    queryClient.clear();
+    // Resume keeps the mounted form and its query data intact.
+    if (!preserveWork) queryClient.clear();
 
     // Set user immediately from login response so the correct dashboard
     // renders on navigation — avoids showing the previous user's stale data
-    setUser(data.user);
-    activateOfflineScope(getOfflineScopeForUser(data.user));
-    setIsLoading(true);
+    if (!preserveWork) {
+      setUser(data.user);
+      activateOfflineScope(getOfflineScopeForUser(data.user));
+      setIsLoading(true);
+    }
 
     // Handle password change requirement
     if (data.passwordChangeRequired) {
@@ -424,21 +443,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       // Hydrate with full server data (populated fields like partnerId)
-      await hydrateSessionUser(data.user);
+      const hydratedUser = await hydrateSessionUser(data.user);
+      if (preserveWork && user && accessScope(user) !== accessScope(hydratedUser)) {
+        queryClient.clear();
+        window.location.reload();
+        return { passwordChangeRequired: Boolean(hydratedUser.passwordChangeRequired), mfaRequired: false };
+      }
+      if (preserveWork) toast.dismiss();
+      sessionLockedRef.current = false;
+      setSessionLocked(false);
     } finally {
       setIsLoading(false);
       isLoggingInRef.current = false;
     }
 
     return { passwordChangeRequired: data.passwordChangeRequired || false, mfaRequired: false };
-  }, [activateOfflineScope, hydrateSessionUser, queryClient]);
+  }, [activateOfflineScope, hydrateSessionUser, queryClient, user]);
 
   const logout = useCallback(async () => {
     if (user?.inspection || localStorage.getItem(INSPECTION_KEY) === 'true') {
       await endInspection();
       return;
     }
-    const csrfToken = await ensureCsrfToken();
+    const csrfToken = await ensureCsrfToken().catch(() => null);
 
     if ('serviceWorker' in navigator && 'PushManager' in window) {
       const registration = await navigator.serviceWorker.getRegistration('/').catch(() => undefined);
@@ -463,6 +490,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined,
     }).catch(() => undefined);
 
+    sessionLockedRef.current = false;
+    setSessionLocked(false);
+    localStorage.removeItem(SESSION_TIMING_KEY);
     localStorage.removeItem('passwordChangeRequired');
     clearLegacyOfflineStorage();
     queryClient.clear();
@@ -478,7 +508,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient, user?.inspection]);
 
   const syncOfflineQueue = useCallback(async () => {
-    if (!user || user.inspection || localStorage.getItem(INSPECTION_KEY) === 'true' || typeof window === 'undefined' || !window.navigator.onLine || syncInFlightRef.current) {
+    if (sessionLockedRef.current || !user || user.inspection || localStorage.getItem(INSPECTION_KEY) === 'true' || typeof window === 'undefined' || !window.navigator.onLine || syncInFlightRef.current) {
       return;
     }
 
@@ -499,7 +529,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await offlineLock(`sync:${activeScope}`, async () => {
         const csrfToken = await ensureCsrfToken();
         for (const request of readOfflineQueue(activeScope)) {
-          if (getActiveOfflineScope() !== activeScope) break;
+          if (sessionLockedRef.current || getActiveOfflineScope() !== activeScope) break;
           if (request.syncStatus === 'needs-review') continue;
           if (!readOfflineQueue(activeScope).some(item => item.id === request.id)) continue;
           let updatedRequest: OfflineMutation | null = null;
@@ -517,6 +547,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 syncedCount += 1;
               } else {
                 const payload = await response.json().catch(() => ({}));
+                if (response.status === 401) lockSession();
                 stop = response.status === 401 || payload.code === 'SESSION_CONTEXT_CHANGED' || payload.code === 'PASSWORD_CHANGE_REQUIRED';
                 updatedRequest = {
                   ...request,
@@ -554,7 +585,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsSyncingOfflineQueue(false);
     }
 
-  }, [user, loadOfflineState, queryClient]);
+  }, [user, loadOfflineState, queryClient, lockSession]);
 
   const removeOfflineQueueItem = useCallback((id: string) => {
     const scope = getActiveOfflineScope();
@@ -575,6 +606,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [loadOfflineState]);
 
   const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
+    if (sessionLockedRef.current) {
+      return new Response(JSON.stringify({ code: 'SESSION_EXPIRED', message: 'Sign in again to continue. Your open form is still here.' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+    }
     const method = (options.method || 'GET').toUpperCase();
     if ((user?.inspection || localStorage.getItem(INSPECTION_KEY) === 'true') && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
       return new Response(JSON.stringify({ message: 'Inspection mode is read-only. Return to Super Admin to make changes.' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
@@ -626,20 +660,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch { /* Storage exhaustion must not prevent online work. */ }
       }
 
-      if (response.status === 401) {
-        localStorage.removeItem('passwordChangeRequired');
-        queryClient.clear();
-        setUser(null);
-        localStorage.removeItem(SESSION_SNAPSHOT_KEY);
-        clearOfflineConflictBridge();
-        setPasswordChangeRequired(false);
-        setActiveOfflineScope(null);
-        setOfflineQueue([]);
-        setOfflineQueueCount(0);
-        setOfflineSyncHistory([]);
-      }
+      if (response.status === 401) lockSession();
       if (response.status === 403) {
         const payload = await response.clone().json().catch(() => ({}));
+        if (payload.code === 'REAUTHENTICATION_REQUIRED') lockSession();
         if (payload.code === 'PASSWORD_CHANGE_REQUIRED') {
           localStorage.setItem('passwordChangeRequired', 'true');
           setPasswordChangeRequired(true);
@@ -705,7 +729,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       throw error;
     }
-  }, [queryClient, user, loadOfflineState]);
+  }, [user, loadOfflineState, lockSession]);
 
   const changePassword = useCallback(async (newPassword: string, currentPassword?: string) => {
     const res = await authFetch(`${API_BASE}/auth/change-password`, {
@@ -756,6 +780,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     token,
     isAuthenticated: !!user && !passwordChangeRequired,
     isLoading,
+    sessionLocked,
     passwordChangeRequired,
     offlineQueueCount,
     offlineQueue,
@@ -774,6 +799,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={contextValue}>
       {children}
+      {user && <SessionManager
+        user={user}
+        locked={sessionLocked}
+        onLock={lockSession}
+        onResume={(password, mfaCode) => login(user.email, password, mfaCode, true)}
+        onLogout={logout}
+      />}
     </AuthContext.Provider>
   );
 }

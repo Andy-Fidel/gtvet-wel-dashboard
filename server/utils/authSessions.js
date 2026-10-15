@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { SESSION_MAX_MS } from './sessionPolicy.js';
 import { AuthSession } from '../models/AuthSession.js';
 
 // Password and scope changes invalidate sessions without relying on process-local caches.
@@ -19,6 +20,7 @@ export async function createAuthSession(user, req, mfaVerified = false) {
     ipAddress: String(req.ip || '').slice(0, 100),
     userAgent: String(req.headers?.['user-agent'] || '').slice(0, 500),
     lastSeenAt: new Date(),
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    lastActivityAt: new Date(),
+    expiresAt: new Date(Date.now() + SESSION_MAX_MS),
   });
 }

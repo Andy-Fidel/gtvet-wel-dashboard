@@ -1,5 +1,31 @@
 [
   {
+    "id": "2026-10-15-session-security-and-password-recovery",
+    "date": "2026-10-15",
+    "title": "Safer sessions and clearer password recovery",
+    "summary": "Get a warning before your session locks and return to open work after signing in again.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Keep your portal session secure",
+        "body": "Sessions now lock after 30 minutes of inactivity or eight hours from sign-in. A warning appears two minutes before expiry. Choose Stay signed in to extend inactivity time, or sign in again when the daily limit is reached. Background updates do not keep your session open. Existing sessions may require a new sign-in after this update.",
+        "audience": "Everyone"
+      },
+      {
+        "kind": "Improved",
+        "title": "Return to your open work after signing in",
+        "body": "When your session locks, sign in with the same account, including your authenticator code if enabled, to return to the open screen. Keep the tab open to retain unsaved entries. Closing or refreshing the tab can discard entries that have not been saved as drafts. User-management changes may ask you to sign in again before you retry them.",
+        "audience": "Everyone"
+      },
+      {
+        "kind": "Improved",
+        "title": "Reset your password with familiar screens",
+        "body": "Password recovery now uses the portal’s branding and sign-in design, with clear labels, mobile-friendly spacing and controls to show or hide your new password.",
+        "audience": "Everyone"
+      }
+    ]
+  },
+  {
     "id": "2026-10-09-institution-partner-design",
     "date": "2026-10-09",
     "title": "A clearer industry partner directory",

@@ -6,6 +6,8 @@ const queueKey = `gtvets-offline-mutation-queue:user:${actor._id}`
 const action = (id: string, status = 'pending') => ({ id, url: '/api/monitoring-visits', method: 'POST', body: JSON.stringify({ learner: '507f1f77bcf86cd799439012' }), headers: { 'Content-Type': 'application/json', 'X-Offline-Action': crypto.randomUUID() }, queuedAt: new Date().toISOString(), syncStatus: status })
 
 async function setup(page: Page, queued: ReturnType<typeof action>[] = []) {
+  const now = Date.now()
+  const session = { id: 'offline-qa-session', userId: actor._id, expiresAt: now + 8 * 3600000, idleExpiresAt: now + 30 * 60000, serverNow: now, warningMs: 120000 }
   await page.addInitScript(({ actor, latest, queueKey, queued }) => {
     localStorage.setItem('gtvets-offline-storage-scope', `user:${actor._id}`)
     localStorage.setItem(queueKey, JSON.stringify(queued))
@@ -14,7 +16,8 @@ async function setup(page: Page, queued: ReturnType<typeof action>[] = []) {
   }, { actor, latest: releases[0].id, queueKey, queued })
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/auth/me') return route.fulfill({ json: actor })
+    if (path === '/api/auth/me') return route.fulfill({ json: { ...actor, session } })
+    if (path === '/api/auth/session') return route.fulfill({ json: { ...session, serverNow: Date.now() } })
     if (path === '/api/auth/csrf') return route.fulfill({ json: { csrfToken: 'qa-token' } })
     if (path === '/api/notifications') return route.fulfill({ json: { items: [], unreadCount: 0 } })
     return route.fulfill({ json: [] })
