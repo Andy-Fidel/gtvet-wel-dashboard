@@ -1,10 +1,11 @@
 import { PartnerInsights } from '@/components/PartnerInsights'
 import { PartnerChangeQueue } from '@/components/PartnerChanges'
 import { canApproveHQ } from '@/lib/rbac'
+import { downloadPartnerRegistry, partnerRegistryCsv, partnerRegistryPdf } from '@/lib/partnerRegistryExport'
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from 'react-router-dom'
 import { formatDistanceToNow } from "date-fns"
-import { AlertTriangle, Building2, CheckCircle2, Clock3, Eye, Loader2, Mail, MapPin, Plus, Search, Trash2, UserPlus, XCircle } from "lucide-react"
+import { AlertTriangle, Building2, CheckCircle2, Clock3, Download, Eye, Loader2, Mail, MapPin, Plus, Search, Trash2, UserPlus, XCircle } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -42,6 +43,8 @@ export default function HQIndustryPartners() {
   const activeTab = user?.role === 'SuperAdmin' && searchParams.get('tab') === 'slot-approvals' ? 'slot-approvals' : 'registry'
   const [partners, setPartners] = useState<HQIndustryPartner[]>([])
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState<'csv' | 'pdf' | null>(null)
+  const exportInProgress = useRef(false)
   const [queryInput, setQueryInput] = useState("")
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<"All" | "PendingHQApproval" | "Approved" | "Rejected">("All")
@@ -228,6 +231,36 @@ export default function HQIndustryPartners() {
     await fetchPartners()
   }
 
+  const exportPartners = async (format: 'csv' | 'pdf') => {
+    if (exportInProgress.current) return
+    exportInProgress.current = true
+    setExporting(format)
+    try {
+      const params = new URLSearchParams({ includeAll: '1' })
+      if (query.trim()) params.set('q', query.trim())
+      if (statusFilter !== 'All') params.set('approvalStatus', statusFilter)
+      // Omitting pagination requests the complete filtered list within the user's scope.
+      const response = await authFetch(`/api/industry-partners?${params}`)
+      if (!response.ok) throw new Error('Unable to load partners for export. Please try again.')
+      const items: HQIndustryPartner[] = await response.json()
+      if (!Array.isArray(items)) throw new Error('Unexpected partner export response. Please try again.')
+      if (!items.length) {
+        toast.info('No partners match the current filters.')
+        return
+      }
+      const blob = format === 'csv'
+        ? new Blob([partnerRegistryCsv(items)], { type: 'text/csv;charset=utf-8;' })
+        : await partnerRegistryPdf(items, { query, status: statusFilter })
+      downloadPartnerRegistry(blob, format)
+      toast.success(`Exported ${items.length} partners to ${format.toUpperCase()}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to export partners. Please try again.')
+    } finally {
+      exportInProgress.current = false
+      setExporting(null)
+    }
+  }
+
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
       <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
@@ -293,6 +326,17 @@ export default function HQIndustryPartners() {
           </div>
         </CardHeader>
         <CardContent className="p-6 pt-3">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-gray-500">Export all partners matching the current search and approval filter.</p>
+            <div className="flex gap-2">
+              {(['csv', 'pdf'] as const).map(format => (
+                <Button key={format} variant="outline" className="rounded-xl" onClick={() => void exportPartners(format)} disabled={loading || exporting !== null || totalPartners === 0 || queryInput.trim() !== query}>
+                  {exporting === format ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                  {exporting === format ? `Exporting ${format.toUpperCase()}…` : `Export ${format.toUpperCase()}`}
+                </Button>
+              ))}
+            </div>
+          </div>
           {loading ? (
             <p className="text-center py-10 text-gray-400">Loading partner registry...</p>
           ) : partners.length === 0 ? (

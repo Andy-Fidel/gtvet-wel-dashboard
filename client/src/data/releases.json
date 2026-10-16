@@ -1,5 +1,19 @@
 [
   {
+    "id": "2026-10-16-partner-registry-exports",
+    "date": "2026-10-16",
+    "title": "Download the HQ partner registry",
+    "summary": "Export industry partners to CSV or PDF using your current registry filters.",
+    "changes": [{
+      "kind": "New",
+      "title": "Export your partner list",
+      "body": "Open the HQ Partner Registry and choose Export CSV or Export PDF to download every partner matching your search and approval filter, across all pages. Exports include partners within your assigned access scope. CSV includes registry and contact details; PDF provides a printable table with page numbers.",
+      "audience": "HQ teams",
+      "roles": ["SuperAdmin", "HQManager", "HQStaff"],
+      "action": { "label": "Open Partner Registry", "path": "/hq-industry-partners" }
+    }]
+  },
+  {
     "id": "2026-10-15-session-security-and-password-recovery",
     "date": "2026-10-15",
     "title": "Safer sessions and clearer password recovery",
