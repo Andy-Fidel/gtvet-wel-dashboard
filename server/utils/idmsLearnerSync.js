@@ -1,4 +1,4 @@
-const DEFAULT_IDMS_API_BASE = 'https://gtvet-idms-api-8466d2bbdaf1.herokuapp.com';
+const DEFAULT_IDMS_API_BASE = 'https://idms.gtvets.gov.gh/api/integration';
 const DEFAULT_TIMEOUT_MS = 15000;
 const MAX_PAGES = 100;
 const PAGE_SIZE = 200;
@@ -47,7 +47,7 @@ export const mapIdmsLearner = (record, { academicYear = '' } = {}) => {
   const firstName = cleanString(record?.first_name);
   const middleName = cleanString(record?.middle_name);
   const lastName = cleanString(record?.last_name);
-  const program = cleanString(record?.programme_name || record?.program_name);
+  const program = cleanString(record?.programme || record?.programme_name || record?.program_name);
   const year = mapYearGroup(record?.current_year || record?.year_group);
   const errors = [];
 
@@ -221,11 +221,16 @@ const idmsRequest = async (path, { query = {} } = {}) => {
         accept: 'application/json',
         authorization: `Bearer ${process.env.IDMS_API_TOKEN}`,
       },
+      redirect: 'error',
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const detail = payload?.detail || payload?.message || `IDMS returned ${response.status}`;
+      const detail = response.status === 401
+        ? 'IDMS rejected the service credential (401)'
+        : response.status === 403
+          ? 'IDMS access denied (403). Check service permissions and the WEL server outbound IP allowlist.'
+          : `IDMS returned ${response.status}`;
       const error = new Error(detail);
       error.status = response.status;
       throw error;
@@ -240,27 +245,36 @@ const idmsRequest = async (path, { query = {} } = {}) => {
 };
 
 export const fetchIdmsLearners = async ({ institutionId, academicYear }) => {
+  if (!cleanString(institutionId)) throw new Error('An IDMS institution ID is required');
   const learners = [];
+  const seenCursors = new Set();
+  let sinceId;
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const payload = await idmsRequest('/m7/learners', {
+    const payload = await idmsRequest('/learners', {
       query: {
         institution_id: institutionId,
         academic_year: academicYear,
-        paginated: true,
-        page,
+        since_id: sinceId,
         page_size: PAGE_SIZE,
       },
     });
-    const items = Array.isArray(payload) ? payload : payload?.items;
-    if (!Array.isArray(items)) throw new Error('IDMS returned an unsupported learner response');
+    const items = payload?.data;
+    if (!Array.isArray(items) || typeof payload?.has_more !== 'boolean') {
+      throw new Error('IDMS returned an unsupported learner response');
+    }
     learners.push(...items);
-    const total = Number(payload?.total ?? learners.length);
-    if (items.length < PAGE_SIZE || learners.length >= total) return learners;
+    if (!payload.has_more) return learners;
+    const nextCursor = cleanString(payload.next_since_id);
+    if (!nextCursor || seenCursors.has(nextCursor) || items.length === 0) {
+      throw new Error('IDMS returned an invalid or repeated learner cursor');
+    }
+    seenCursors.add(nextCursor);
+    sinceId = nextCursor;
   }
   throw new Error('IDMS learner response exceeded the supported page limit');
 };
 
-export const checkIdmsConnection = async ({ institutionId, academicYear }) => idmsRequest('/m7/stats', {
+export const checkIdmsConnection = async ({ institutionId, academicYear }) => idmsRequest('/statistics', {
   query: {
     institution_id: institutionId,
     academic_year: academicYear,

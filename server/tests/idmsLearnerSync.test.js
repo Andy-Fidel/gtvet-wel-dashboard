@@ -15,7 +15,7 @@ const remoteLearner = (overrides = {}) => ({
   date_of_birth: '2008-04-10',
   index_number: 'GTVET / 2026 / 001',
   programme_id: 'programme-1',
-  programme_name: 'Electrical Installation',
+  programme: 'Electrical Installation',
   current_year: 2,
   intake_year: 2025,
   status: 'active',
@@ -23,7 +23,7 @@ const remoteLearner = (overrides = {}) => ({
   ...overrides,
 });
 
-test('maps the IDMS M7 learner contract into WEL academic fields', () => {
+test('maps the IDMS integration learner contract into WEL academic fields', () => {
   const { mapped, errors } = mapIdmsLearner(remoteLearner(), { academicYear: '2026/2027' });
   assert.deepEqual(errors, []);
   assert.equal(mapped.idmsLearnerId, 'idms-learner-1');
@@ -105,10 +105,89 @@ test('refuses to move an IDMS-linked learner between WEL institutions', () => {
 
 test('rejects IDMS records that cannot satisfy required WEL learner fields', () => {
   const plan = buildIdmsSyncPlan({
-    remoteLearners: [remoteLearner({ index_number: '', programme_name: '', current_year: 7 })],
+    remoteLearners: [remoteLearner({ index_number: '', programme: '', current_year: 7 })],
     localLearners: [],
     academicYear: '2026/2027',
   });
   assert.equal(plan.summary.invalid, 1);
   assert.deepEqual(plan.items[0].errors, ['Missing index number', 'Missing programme', 'Invalid year group']);
+});
+
+const withIdmsTransport = async (t, responses, run) => {
+  const { fetchIdmsLearners, checkIdmsConnection } = await import('../utils/idmsLearnerSync.js');
+  const previous = Object.fromEntries(['IDMS_SYNC_ENABLED', 'IDMS_API_TOKEN', 'IDMS_API_BASE'].map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { IDMS_SYNC_ENABLED: 'true', IDMS_API_TOKEN: 'test-service-token', IDMS_API_BASE: 'https://idms.example/api/integration' });
+  const restoreEnvironment = () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push({ url: new URL(url), options });
+    assert.ok(responses.length, 'Unexpected additional IDMS request');
+    const { status = 200, body } = responses.shift();
+    return new Response(JSON.stringify(body), { status });
+  });
+  try {
+    await run({ fetchIdmsLearners, checkIdmsConnection, requests });
+  } finally {
+    t.mock.restoreAll();
+    restoreEnvironment();
+  }
+};
+
+test('follows forward cursors even on short pages and preserves institution filters', async (t) => {
+  await withIdmsTransport(t, [
+    { body: { data: [remoteLearner()], next_since_id: 42, has_more: true } },
+    { body: { data: [remoteLearner({ public_id: 'learner-2' })], next_since_id: 43, has_more: false } },
+  ], async ({ fetchIdmsLearners, requests }) => {
+    const records = await fetchIdmsLearners({ institutionId: 'institution-1', academicYear: '2026/2027' });
+    assert.equal(records.length, 2);
+    assert.equal(requests[0].url.searchParams.has('since_id'), false);
+    assert.equal(requests[1].url.searchParams.get('since_id'), '42');
+    for (const { url, options } of requests) {
+      assert.equal(url.pathname, '/api/integration/learners');
+      assert.equal(url.searchParams.get('institution_id'), 'institution-1');
+      assert.equal(url.searchParams.get('academic_year'), '2026/2027');
+      assert.equal(url.searchParams.has('page'), false);
+      assert.equal(options.headers.authorization, 'Bearer test-service-token');
+      assert.equal(options.headers.accept, 'application/json');
+      assert.equal(options.redirect, 'error');
+    }
+  });
+});
+
+test('rejects malformed and stalled pagination instead of importing incomplete data', async (t) => {
+  for (const body of [
+    { data: [], has_more: true, next_since_id: 42 },
+    { data: [remoteLearner()], has_more: true },
+    { data: [remoteLearner()] },
+  ]) {
+    await withIdmsTransport(t, [{ body }], async ({ fetchIdmsLearners }) => {
+      await assert.rejects(fetchIdmsLearners({ institutionId: 'institution-1' }), /unsupported learner response|invalid or repeated learner cursor/);
+    });
+  }
+});
+
+test('rejects repeated cursors', async (t) => {
+  await withIdmsTransport(t, [
+    { body: { data: [remoteLearner()], next_since_id: 42, has_more: true } },
+    { body: { data: [remoteLearner()], next_since_id: 42, has_more: true } },
+  ], async ({ fetchIdmsLearners }) => {
+    await assert.rejects(fetchIdmsLearners({ institutionId: 'institution-1' }), /repeated learner cursor/);
+  });
+});
+
+test('checks statistics and explains access denial without returning remote response details', async (t) => {
+  await withIdmsTransport(t, [{ status: 403, body: { detail: 'sensitive upstream detail' } }], async ({ checkIdmsConnection, requests }) => {
+    await assert.rejects(checkIdmsConnection({ institutionId: 'institution-1', academicYear: '2026/2027' }), (error) => {
+      assert.equal(error.status, 403);
+      assert.match(error.message, /outbound IP allowlist/);
+      assert.doesNotMatch(error.message, /sensitive upstream detail/);
+      return true;
+    });
+    assert.equal(requests[0].url.pathname, '/api/integration/statistics');
+  });
 });

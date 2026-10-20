@@ -62,13 +62,17 @@ HTTPS in production (localhost is allowed during development).
 Optional GTVET-IDMS integration vars:
 
 ```bash
-IDMS_API_BASE=https://gtvet-idms-api-8466d2bbdaf1.herokuapp.com
+IDMS_API_BASE=https://idms.gtvets.gov.gh/api/integration
 IDMS_SYNC_ENABLED=false
 IDMS_API_TOKEN=
 IDMS_REQUEST_TIMEOUT_MS=15000
 ```
 
-Set an institution's IDMS identifier and enable synchronization from the institution editor before changing `IDMS_SYNC_ENABLED` to `true`. Institution Admin and Manager users can check authenticated connectivity through `GET /api/idms/status?academicYear=YYYY/YYYY`, preview changes through `GET /api/idms/learner-sync/preview`, and apply a reviewed import through `POST /api/idms/learner-sync`. The service credential remains server-side and requires read-only access to IDMS M7 learner and statistics endpoints.
+Set an institution's IDMS identifier and enable synchronization from the institution editor before changing `IDMS_SYNC_ENABLED` to `true`. Institution Admin and Manager users can check authenticated connectivity through `GET /api/idms/status?academicYear=YYYY/YYYY`, preview changes through `GET /api/idms/learner-sync/preview`, and apply a reviewed import through `POST /api/idms/learner-sync`. The service credential remains server-side and requires read-only access to IDMS `/learners` and `/statistics` endpoints.
+
+IDMS access is restricted to the WEL server outbound IP `197.253.124.38`. A `403` can indicate an unapproved source IP or insufficient endpoint permissions; a `401` indicates an invalid or missing token. Store `IDMS_API_TOKEN` only in the protected server environment (`/etc/gtvet-wel/app.env`, mode `0600`, for the self-hosted deployment), then recreate the application container to load changes. Never include the token in source control or client configuration.
+
+Learner synchronization calls `/learners` with the institution and academic-year filters and follows `next_since_id` while `has_more` is true. The adapter reads the `data` array with boolean `has_more` and the resolved programme name from `programme`. Use the internal `institution_id` from `/institutions`, not the CSSPS `code`. Confirm institution identity and learner changes in a one-institution preview before applying an import. Invalid or stalled pagination fails the preview instead of producing a partial import.
 
 Contributing
 

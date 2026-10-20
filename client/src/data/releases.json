@@ -1,5 +1,18 @@
 [
   {
+    "id": "2026-10-20-idms-integration",
+    "date": "2026-10-20",
+    "title": "Connect learner records from IDMS",
+    "summary": "Preview learner changes from IDMS for institutions configured for synchronization.",
+    "changes": [{
+      "kind": "Fixed",
+      "title": "Preview learners from IDMS",
+      "body": "Institution administrators and managers can preview learner records for a selected academic year once a Super Admin has linked their institution to IDMS and enabled synchronization. Review new records, changes and conflicts before applying an import. Existing WEL placement information is preserved.",
+      "audience": "Institution teams",
+      "roles": ["Admin", "Manager"]
+    }]
+  },
+  {
     "id": "2026-10-16-partner-registry-exports",
     "date": "2026-10-16",
     "title": "Download the HQ partner registry",
