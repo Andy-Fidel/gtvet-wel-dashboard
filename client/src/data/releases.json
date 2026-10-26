@@ -1,5 +1,56 @@
 [
   {
+    "id": "2026-10-26-user-governance-and-audit",
+    "date": "2026-10-26",
+    "title": "Clearer user management and audit investigations",
+    "summary": "Find accounts, understand access, and investigate activity with clearer filters and details.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Find and manage user accounts",
+        "body": "The user directory now appears first, with search, role, access, institution and region filters together where available. Sort users across all directory pages, select a name to review access and history, and distinguish enabled access from incomplete password setup. Governance and approval tools remain available below the directory.",
+        "audience": "User administrators",
+        "roles": [
+          "SuperAdmin",
+          "RegionalAdmin",
+          "Admin"
+        ],
+        "action": {
+          "label": "Open User Management",
+          "path": "/users"
+        }
+      },
+      {
+        "kind": "Fixed",
+        "title": "Review account changes and exports with confidence",
+        "body": "Account actions show progress, deletion identifies the account before confirmation, and assigned-work checks remain in place. Failed directory updates keep previous results visible with a retry option. User CSV and PDF exports are clearly labeled as the current page and include the visible account information.",
+        "audience": "User administrators",
+        "roles": [
+          "SuperAdmin",
+          "RegionalAdmin",
+          "Admin"
+        ]
+      },
+      {
+        "kind": "Improved",
+        "title": "Investigate audit events more easily",
+        "body": "Browse older audit events with working pagination, apply filters together, and inspect previous and new field values separately from metadata. Audit signals link to relevant investigations. Timestamps use UTC, and audit CSV exports use applied filters with a maximum of the latest 1,000 matching events.",
+        "audience": "Audit reviewers",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin"
+        ],
+        "action": {
+          "label": "Open Audit Log",
+          "path": "/activity-log"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-10-20-idms-integration",
     "date": "2026-10-20",
     "title": "Connect learner records from IDMS",

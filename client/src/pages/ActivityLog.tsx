@@ -1,503 +1,285 @@
-import { useEffect, useState } from "react"
-import { format } from "date-fns"
-import { toast } from "@/lib/toast"
-import { Activity, AlertTriangle, Download, Eye, Filter, ShieldCheck } from "lucide-react"
-import { useAuth } from "@/context/AuthContext"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Skeleton } from "@/components/ui/skeleton"
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Activity, Download, Eye, RefreshCw, ShieldCheck, X } from 'lucide-react'
+import { useAuth } from '@/context/AuthContext'
+import { toast } from '@/lib/toast'
+import { auditActionLabels, auditParams, auditTimestamp, emptyAuditFilters, type AuditAnomalies, type AuditFilters, type AuditLogEntry } from '@/lib/audit-log'
+import { AuditEventDetails } from '@/components/AuditEventDetails'
+import { AuditAnomalyPanel } from '@/components/AuditAnomalyPanel'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
 
-type AuditAction = "CREATE" | "UPDATE" | "DELETE" | "STATUS_CHANGE" | "UPLOAD" | "AUTH"
-
-interface AuditLogEntry {
-  _id: string
-  action: AuditAction
-  entityType: string
-  entityId: string
-  summary: string
-  actorName: string
-  actorRole: string
-  actorId?: string
-  institution: string
-  route: string
-  method: string
-  changedFields: string[]
-  beforeData?: unknown
-  afterData?: unknown
-  metadata?: unknown
-  createdAt: string
+interface Registry {
+  items: AuditLogEntry[]
+  total: number
+  stats: { total: number; creates: number; updates: number; deletes: number }
+  entityOptions: string[]
+  actorOptions: Array<{ actorId: string; actorName: string; actorRole: string }>
 }
-
-interface AuditAnomalies {
-  windowDays: number
-  deleteSpikes: { institution: string; date: string; count: number; severity: string }[]
-  failedAuthActors: { actorName: string; institution: string; count: number }[]
-  failedAuthInstitutions: { institution: string; count: number }[]
-  massUpdates: { actorName: string; institution: string; count: number; severity: string }[]
-  riskyInstitutions: { institution: string; score: number; failedAuths: number; deleteSpikes: number }[]
+const PAGE_SIZE = 10
+const ALL = '__all'
+const press = 'transition-[color,background-color,transform] duration-150 ease-out active:scale-[0.98] focus-visible:transition-none focus-visible:active:scale-100 motion-reduce:transition-none motion-reduce:active:scale-100'
+const labels: Record<keyof AuditFilters, string> = {
+  search: 'Search', action: 'Action', entityType: 'Entity type', actorId: 'Actor', actorName: 'Actor name',
+  entityId: 'Entity ID', institution: 'Institution', outcome: 'Auth outcome', dateFrom: 'From', dateTo: 'To',
 }
-
-const ALL_ACTIONS = "__all_actions"
-const ALL_ENTITIES = "__all_entities"
+function ActionBadge({ action }: { action: string }) {
+  const tone = action === 'DELETE' ? 'border-red-200 bg-red-50 text-red-700'
+    : action === 'CREATE' ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : action === 'STATUS_CHANGE' ? 'border-amber-200 bg-amber-50 text-amber-700'
+        : 'border-gray-200 bg-gray-50 text-gray-700'
+  return <Badge className={tone}>{auditActionLabels[action] || action}</Badge>
+}
 
 export default function ActivityLog() {
-  const RECENT_EVENTS_PAGE_SIZE = 10
   const { authFetch } = useAuth()
-  const [logs, setLogs] = useState<AuditLogEntry[]>([])
-  const [anomalies, setAnomalies] = useState<AuditAnomalies | null>(null)
+  const [draft, setDraft] = useState<AuditFilters>(emptyAuditFilters)
+  const [applied, setApplied] = useState<AuditFilters>(emptyAuditFilters)
+  const [page, setPage] = useState(1)
+  const [revision, setRevision] = useState(0)
+  const [registry, setRegistry] = useState<Registry | null>(null)
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState("")
-  const [actionFilter, setActionFilter] = useState("")
-  const [entityFilter, setEntityFilter] = useState("")
-  const [actorFilter, setActorFilter] = useState("")
-  const [entityIdFilter, setEntityIdFilter] = useState("")
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
+  const [error, setError] = useState('')
+  const [filterError, setFilterError] = useState('')
+  const [exporting, setExporting] = useState(false)
   const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null)
-  const [recentEventsPage, setRecentEventsPage] = useState(1)
-  const [recentEventsTotal, setRecentEventsTotal] = useState(0)
-  const [entityOptions, setEntityOptions] = useState<string[]>([])
-  const [actorOptions, setActorOptions] = useState<Array<{ actorId: string; actorName: string; actorRole: string }>>([])
-  const [stats, setStats] = useState({
-    total: 0,
-    creates: 0,
-    updates: 0,
-    deletes: 0,
-  })
+  const [anomalies, setAnomalies] = useState<AuditAnomalies | null>(null)
+  const [signalsLoading, setSignalsLoading] = useState(true)
+  const [signalsError, setSignalsError] = useState('')
+  const [signalsRevision, setSignalsRevision] = useState(0)
+  const eventsRef = useRef<HTMLElement>(null)
+  const detailTriggerRef = useRef<HTMLButtonElement>(null)
+  const paramsString = auditParams(applied).toString()
+  const dirty = auditParams(draft).toString() !== paramsString
 
-  const buildParams = () => {
-    const params = new URLSearchParams()
-    if (search.trim()) params.set("search", search.trim())
-    if (actionFilter) params.set("action", actionFilter)
-    if (entityFilter) params.set("entityType", entityFilter)
-    if (actorFilter) params.set("actorId", actorFilter)
-    if (entityIdFilter.trim()) params.set("entityId", entityIdFilter.trim())
-    if (dateFrom) params.set("dateFrom", dateFrom)
-    if (dateTo) params.set("dateTo", dateTo)
-    return params
-  }
-
-  const fetchLogs = async () => {
+  useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
-    try {
-      const params = buildParams()
-      params.set("page", String(recentEventsPage))
-      params.set("pageSize", String(RECENT_EVENTS_PAGE_SIZE))
-      const res = await authFetch(`/api/audit-logs?${params.toString()}`)
-      if (!res.ok) throw new Error("Failed to fetch audit logs")
-      const data = await res.json()
-      setLogs(Array.isArray(data.items) ? data.items : [])
-      setRecentEventsTotal(typeof data.total === "number" ? data.total : 0)
-      setStats(data.stats ?? { total: 0, creates: 0, updates: 0, deletes: 0 })
-      setEntityOptions(Array.isArray(data.entityOptions) ? data.entityOptions : [])
-      setActorOptions(Array.isArray(data.actorOptions) ? data.actorOptions : [])
-    } catch (error) {
-      console.error("Error fetching audit logs:", error)
-      toast.error("Failed to load activity log")
-    } finally {
-      setLoading(false)
+    setError('')
+    const load = async () => {
+      try {
+        const params = new URLSearchParams(paramsString)
+        params.set('page', String(page))
+        params.set('pageSize', String(PAGE_SIZE))
+        const response = await authFetch(`/api/audit-logs?${params}`, { signal: controller.signal })
+        if (!response.ok) throw new Error('Unable to load audit events. Please retry.')
+        const payload: Registry = await response.json()
+        if (controller.signal.aborted) return
+        const lastPage = Math.max(1, Math.ceil(payload.total / PAGE_SIZE))
+        if (page > lastPage) { setPage(lastPage); return }
+        setRegistry(payload)
+      } catch (failure) {
+        if (!controller.signal.aborted) {
+          console.error('Error fetching audit logs:', failure)
+          setError('Unable to load audit events. Please retry. Previous results, if shown, may be out of date.')
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
     }
-  }
-
-  const fetchAnomalies = async () => {
-    try {
-      const res = await authFetch("/api/audit-logs/anomalies")
-      if (!res.ok) throw new Error("Failed to fetch audit anomalies")
-      const data = await res.json()
-      setAnomalies(data)
-    } catch (error) {
-      console.error("Error fetching audit anomalies:", error)
-      toast.error("Failed to load audit anomalies")
-    }
-  }
+    void load()
+    return () => controller.abort()
+  }, [authFetch, paramsString, page, revision])
 
   useEffect(() => {
-    fetchLogs()
-    fetchAnomalies()
-  }, [actionFilter, entityFilter, actorFilter, dateFrom, dateTo, recentEventsPage])
+    const controller = new AbortController()
+    setSignalsLoading(true)
+    setSignalsError('')
+    const load = async () => {
+      try {
+        const response = await authFetch('/api/audit-logs/anomalies', { signal: controller.signal })
+        if (!response.ok) throw new Error('Failed to load audit signals')
+        const payload = await response.json()
+        if (!controller.signal.aborted) setAnomalies(payload)
+      } catch (failure) {
+        if (!controller.signal.aborted) {
+          console.error('Error fetching audit signals:', failure)
+          setSignalsError('Unable to update audit signals. Any signals shown are from the previous load.')
+        }
+      } finally {
+        if (!controller.signal.aborted) setSignalsLoading(false)
+      }
+    }
+    void load()
+    return () => controller.abort()
+  }, [authFetch, signalsRevision])
 
-  useEffect(() => {
-    setRecentEventsPage(1)
-  }, [actionFilter, entityFilter, actorFilter, dateFrom, dateTo])
-
-  const handleSearchSubmit = () => {
-    if (recentEventsPage !== 1) {
-      setRecentEventsPage(1)
+  const apply = (filters: AuditFilters) => {
+    const normalized = { ...filters }
+    for (const key of Object.keys(normalized) as Array<keyof AuditFilters>) normalized[key] = normalized[key].trim()
+    setDraft(normalized)
+    setApplied(normalized)
+    setFilterError('')
+    setPage(1)
+    setRevision(value => value + 1)
+  }
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (draft.dateFrom && draft.dateTo && draft.dateFrom > draft.dateTo) {
+      setFilterError('Start date must be on or before end date.')
       return
     }
-    fetchLogs()
+    apply(draft)
   }
-
-  const recentEventsTotalPages = Math.max(1, Math.ceil(recentEventsTotal / RECENT_EVENTS_PAGE_SIZE))
-  const safeRecentEventsPage = Math.min(recentEventsPage, recentEventsTotalPages)
-
-  const getActionBadge = (action: AuditAction) => {
-    if (action === "DELETE") return <Badge className="bg-red-100 text-red-700 border-red-200">Delete</Badge>
-    if (action === "CREATE") return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Create</Badge>
-    if (action === "UPLOAD") return <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200">Upload</Badge>
-    if (action === "AUTH") return <Badge className="bg-slate-100 text-slate-700 border-slate-200">Auth</Badge>
-    if (action === "STATUS_CHANGE") return <Badge className="bg-amber-100 text-amber-700 border-amber-200">Status</Badge>
-    return <Badge className="bg-blue-100 text-blue-700 border-blue-200">Update</Badge>
+  const investigate = (filters: Partial<AuditFilters>) => {
+    apply({ ...emptyAuditFilters, ...filters })
+    eventsRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' })
+    eventsRef.current?.focus({ preventScroll: true })
   }
+  const total = registry?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const logs = registry?.items ?? []
+  const setField = (key: keyof AuditFilters, value: string) => setDraft(current => ({ ...current, [key]: value }))
+  const refresh = () => { setRevision(value => value + 1); setSignalsRevision(value => value + 1) }
 
-  const handleExport = async () => {
+  const exportLogs = async () => {
+    if (exporting) return
+    setExporting(true)
     try {
-      const params = buildParams()
-      const res = await authFetch(`/api/audit-logs/export?${params.toString()}`)
-      if (!res.ok) throw new Error("Failed to export audit log")
-      const blob = await res.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `audit_log_export_${new Date().toISOString().split("T")[0]}.csv`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
-      toast.success("Audit log export downloaded")
-    } catch (error) {
-      console.error("Error exporting audit logs:", error)
-      toast.error("Failed to export audit log")
-    }
+      const response = await authFetch(`/api/audit-logs/export?${paramsString}`)
+      if (!response.ok) throw new Error('Failed to export audit log')
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `audit_log_export_${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success('Audit export downloaded (up to 1,000 latest matching events).')
+    } catch (failure) {
+      console.error('Error exporting audit logs:', failure)
+      toast.error('Unable to export audit events. Please try again.')
+    } finally { setExporting(false) }
   }
 
-  return (
-    <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
-      <Dialog open={Boolean(selectedLog)} onOpenChange={(open) => !open && setSelectedLog(null)}>
-        <DialogContent className="sm:max-w-[860px] bg-white rounded-[2rem] border-none shadow-2xl overflow-y-auto max-h-[90vh]">
-          {selectedLog && (
-            <>
-              <DialogHeader className="pt-6 px-6 pb-0">
-                <DialogTitle className="text-gray-900">{selectedLog.summary}</DialogTitle>
-                <DialogDescription className="text-gray-500">
-                  {selectedLog.actorName} · {selectedLog.actorRole} · {format(new Date(selectedLog.createdAt), "PPpp")}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="px-6 pb-6 space-y-5">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
-                    <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Entity</p>
-                    <p className="text-sm font-bold text-gray-900 mt-1">{selectedLog.entityType}</p>
-                  </div>
-                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
-                    <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Route</p>
-                    <p className="text-sm font-bold text-gray-900 mt-1 break-all">{selectedLog.method} {selectedLog.route}</p>
-                  </div>
-                  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
-                    <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Changed Fields</p>
-                    <p className="text-sm font-bold text-gray-900 mt-1">{selectedLog.changedFields?.join(", ") || "None captured"}</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <div className="rounded-2xl bg-[#111827] text-white p-4 overflow-auto">
-                    <p className="text-xs font-black text-white/50 uppercase tracking-wider mb-3">Before</p>
-                    <pre className="text-xs whitespace-pre-wrap break-words">{JSON.stringify(selectedLog.beforeData ?? {}, null, 2)}</pre>
-                  </div>
-                  <div className="rounded-2xl bg-[#111827] text-white p-4 overflow-auto">
-                    <p className="text-xs font-black text-white/50 uppercase tracking-wider mb-3">After</p>
-                    <pre className="text-xs whitespace-pre-wrap break-words">{JSON.stringify(selectedLog.afterData ?? selectedLog.metadata ?? {}, null, 2)}</pre>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
-            <ShieldCheck className="h-6 w-6 md:h-8 md:w-8 text-[#FFB800]" />
-            Activity & Audit Log
-          </h2>
-          <p className="text-muted-foreground mt-1 font-medium">
-            Review who changed what and when for compliance and troubleshooting.
-          </p>
-        </div>
-        <Button variant="outline" className="rounded-xl border-gray-200" onClick={fetchLogs}>
-          <Filter className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
-        <Button variant="outline" className="rounded-xl border-gray-200" onClick={handleExport}>
-          <Download className="h-4 w-4 mr-2" />
-          Export CSV
-        </Button>
-      </div>
-
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          {[...Array(4)].map((_, index) => <Skeleton key={index} className="h-28 rounded-[2rem]" />)}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Events</p><p className="text-3xl font-black text-gray-900">{stats.total}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Creates</p><p className="text-3xl font-black text-emerald-600">{stats.creates}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Updates</p><p className="text-3xl font-black text-blue-600">{stats.updates}</p></CardContent></Card>
-          <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Deletes</p><p className="text-3xl font-black text-red-600">{stats.deletes}</p></CardContent></Card>
-        </div>
-      )}
-
-      {anomalies ? (
-        <Card className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
-          <CardHeader>
-            <CardTitle className="text-lg font-black text-gray-900 flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-red-500" />
-              Audit Anomaly Detection
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-red-100 bg-red-50/70 p-4">
-                <p className="text-sm font-black text-red-700">Delete Spikes</p>
-                <div className="mt-3 space-y-3">
-                  {anomalies.deleteSpikes.length === 0 ? <p className="text-sm text-gray-500">No unusual delete spikes in the last {anomalies.windowDays} days.</p> : anomalies.deleteSpikes.map((entry) => (
-                    <div key={`${entry.institution}-${entry.date}`} className="flex items-center justify-between gap-3 text-sm">
-                      <div>
-                        <p className="font-bold text-gray-900">{entry.institution}</p>
-                        <p className="text-gray-500">{entry.date}</p>
-                      </div>
-                      <Badge className={entry.severity === "high" ? "bg-red-500 text-white border-0" : "bg-orange-100 text-orange-700 border-orange-200"}>{entry.count} deletes</Badge>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
-                <p className="text-sm font-black text-amber-700">Repeated Failed Auth Attempts</p>
-                <div className="mt-3 space-y-3">
-                  {anomalies.failedAuthActors.length === 0 ? <p className="text-sm text-gray-500">No repeated failed authentication patterns detected.</p> : anomalies.failedAuthActors.map((entry) => (
-                    <div key={`${entry.actorName}-${entry.institution}`} className="flex items-center justify-between gap-3 text-sm">
-                      <div>
-                        <p className="font-bold text-gray-900">{entry.actorName}</p>
-                        <p className="text-gray-500">{entry.institution}</p>
-                      </div>
-                      <Badge className="bg-amber-100 text-amber-700 border-amber-200">{entry.count} failures</Badge>
-                    </div>
-                  ))}
-                </div>
-                {anomalies.failedAuthInstitutions.length > 0 ? (
-                  <div className="mt-4 border-t border-amber-200 pt-4 space-y-2">
-                    <p className="text-xs font-black uppercase tracking-wider text-amber-700">By Institution</p>
-                    {anomalies.failedAuthInstitutions.map((entry) => (
-                      <div key={entry.institution} className="flex items-center justify-between gap-3 text-sm">
-                        <p className="font-bold text-gray-900">{entry.institution}</p>
-                        <Badge className="bg-amber-100 text-amber-700 border-amber-200">{entry.count} failures</Badge>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
-                <p className="text-sm font-black text-blue-700">Mass Update Signals</p>
-                <div className="mt-3 space-y-3">
-                  {anomalies.massUpdates.length === 0 ? <p className="text-sm text-gray-500">No sudden mass updates detected.</p> : anomalies.massUpdates.map((entry) => (
-                    <div key={`${entry.actorName}-${entry.institution}`} className="flex items-center justify-between gap-3 text-sm">
-                      <div>
-                        <p className="font-bold text-gray-900">{entry.actorName}</p>
-                        <p className="text-gray-500">{entry.institution}</p>
-                      </div>
-                      <Badge className={entry.severity === "high" ? "bg-red-500 text-white border-0" : "bg-blue-100 text-blue-700 border-blue-200"}>{entry.count} updates</Badge>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/70 p-4">
-                <p className="text-sm font-black text-fuchsia-700">Top Risky Institutions</p>
-                <div className="mt-3 space-y-3">
-                  {anomalies.riskyInstitutions.length === 0 ? <p className="text-sm text-gray-500">No elevated institution risk detected in this window.</p> : anomalies.riskyInstitutions.map((entry, index) => (
-                    <div key={entry.institution} className="flex items-center justify-between gap-3 text-sm">
-                      <div>
-                        <p className="font-bold text-gray-900">#{index + 1} {entry.institution}</p>
-                        <p className="text-gray-500">{entry.failedAuths} failed auths · {entry.deleteSpikes} delete spike days</p>
-                      </div>
-                      <Badge className="bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200">Risk {entry.score}</Badge>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card data-help-id="activity-log-filters" className="bg-white border-none shadow-xl rounded-[2rem]">
-        <CardContent className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Input
-              placeholder="Search summary, actor, entity, or ID..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearchSubmit()}
-              className="rounded-xl bg-gray-50 border-gray-200"
-            />
-            <Select value={actionFilter || ALL_ACTIONS} onValueChange={(value) => setActionFilter(value === ALL_ACTIONS ? "" : value)}>
-              <SelectTrigger className="rounded-xl bg-gray-50 border-gray-200">
-                <SelectValue placeholder="All actions" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_ACTIONS}>All actions</SelectItem>
-                <SelectItem value="CREATE">Create</SelectItem>
-                <SelectItem value="UPDATE">Update</SelectItem>
-                <SelectItem value="DELETE">Delete</SelectItem>
-                <SelectItem value="STATUS_CHANGE">Status Change</SelectItem>
-                <SelectItem value="UPLOAD">Upload</SelectItem>
-                <SelectItem value="AUTH">Auth</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={entityFilter || ALL_ENTITIES} onValueChange={(value) => setEntityFilter(value === ALL_ENTITIES ? "" : value)}>
-              <SelectTrigger className="rounded-xl bg-gray-50 border-gray-200">
-                <SelectValue placeholder="All entities" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_ENTITIES}>All entities</SelectItem>
-                {entityOptions.map((entity) => (
-                  <SelectItem key={entity} value={entity}>{entity}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={actorFilter || ALL_ENTITIES} onValueChange={(value) => setActorFilter(value === ALL_ENTITIES ? "" : value)}>
-              <SelectTrigger className="rounded-xl bg-gray-50 border-gray-200">
-                <SelectValue placeholder="All actors" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_ENTITIES}>All actors</SelectItem>
-                {actorOptions.map((actor) => (
-                  <SelectItem key={actor.actorId} value={actor.actorId}>
-                    {actor.actorName} ({actor.actorRole})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-            <Input
-              placeholder="Filter by entity ID..."
-              value={entityIdFilter}
-              onChange={(e) => setEntityIdFilter(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearchSubmit()}
-              className="rounded-xl bg-gray-50 border-gray-200"
-            />
-            <Input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="rounded-xl bg-gray-50 border-gray-200"
-            />
-            <Input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="rounded-xl bg-gray-50 border-gray-200"
-            />
-          </div>
-          <div className="mt-4">
-            <Button className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={handleSearchSubmit}>
-              Search Audit Log
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card data-help-id="activity-log-recent-events" className="bg-white border-none shadow-xl rounded-[2rem] overflow-hidden">
-        <CardHeader>
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <CardTitle className="text-lg font-black text-gray-900 flex items-center gap-2">
-              <Activity className="h-5 w-5 text-[#FFB800]" />
-              Recent Events
-            </CardTitle>
-            {logs.length > RECENT_EVENTS_PAGE_SIZE ? (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="rounded-xl"
-                  disabled={safeRecentEventsPage === 1}
-                  onClick={() => setRecentEventsPage((page) => Math.max(1, page - 1))}
-                >
-                  Previous
-                </Button>
-                <span className="text-xs font-bold text-gray-500">
-                  {safeRecentEventsPage} / {recentEventsTotalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="rounded-xl"
-                  disabled={safeRecentEventsPage >= recentEventsTotalPages}
-                  onClick={() => setRecentEventsPage((page) => Math.min(recentEventsTotalPages, page + 1))}
-                >
-                  Next
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="p-6 space-y-4">
-              {[...Array(5)].map((_, index) => <Skeleton key={index} className="h-14 rounded-xl" />)}
-            </div>
-          ) : logs.length === 0 ? (
-            <div className="p-12 text-center">
-              <Activity className="h-16 w-16 text-gray-200 mx-auto mb-4" />
-              <p className="text-gray-500 font-medium">No audit log entries found</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>When</TableHead>
-                  <TableHead>Actor</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Entity</TableHead>
-                  <TableHead>Summary</TableHead>
-                  <TableHead>Changed Fields</TableHead>
-                  <TableHead className="text-right">Details</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {logs.map((log) => (
-                  <TableRow key={log._id}>
-                    <TableCell className="text-sm text-gray-600">{format(new Date(log.createdAt), "PP p")}</TableCell>
-                    <TableCell>
-                      <div className="font-bold text-gray-900">{log.actorName}</div>
-                      <div className="text-xs text-gray-500">{log.actorRole}</div>
-                    </TableCell>
-                    <TableCell>{getActionBadge(log.action)}</TableCell>
-                    <TableCell>
-                      <div className="font-bold text-gray-900">{log.entityType}</div>
-                      <div className="text-xs text-gray-500 font-mono">{log.entityId}</div>
-                    </TableCell>
-                    <TableCell className="max-w-[340px]">
-                      <div className="text-sm text-gray-700 line-clamp-2">{log.summary}</div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="text-xs text-gray-500 max-w-[200px] line-clamp-2">
-                        {log.changedFields?.length ? log.changedFields.join(", ") : "None"}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setSelectedLog(log)}>
-                        <Eye className="h-3.5 w-3.5 mr-1" />
-                        View
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+  const selectField = (key: 'action' | 'entityType' | 'actorId' | 'outcome', options: Array<{ value: string; label: string }>) => (
+    <div className="space-y-2">
+      <label htmlFor={`audit-${key}`} className="block text-sm font-medium text-gray-700">{labels[key]}</label>
+      <Select value={draft[key] || ALL} onValueChange={value => {
+        setDraft(current => ({ ...current, [key]: value === ALL ? '' : value, ...(key === 'actorId' ? { actorName: '' } : {}) }))
+      }}>
+        <SelectTrigger id={`audit-${key}`} className="h-11 rounded-lg border-gray-200 bg-white"><SelectValue /></SelectTrigger>
+        <SelectContent><SelectItem value={ALL}>All {key === 'action' ? 'actions' : key === 'entityType' ? 'entity types' : key === 'actorId' ? 'actors' : 'outcomes'}</SelectItem>
+          {options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
     </div>
   )
+  const textField = (key: 'search' | 'entityId' | 'institution' | 'dateFrom' | 'dateTo', placeholder?: string) => (
+    <div className="space-y-2">
+      <label htmlFor={`audit-${key}`} className="block text-sm font-medium text-gray-700">{labels[key]}{key.startsWith('date') ? ' (UTC)' : ''}</label>
+      <Input id={`audit-${key}`} type={key.startsWith('date') ? 'date' : key === 'search' ? 'search' : 'text'}
+        value={draft[key]} onChange={event => setField(key, event.target.value)} placeholder={placeholder}
+        maxLength={200} className="h-11 rounded-lg border-gray-200 bg-white"
+        aria-invalid={key.startsWith('date') && Boolean(filterError)} aria-describedby={key.startsWith('date') && filterError ? 'audit-date-error' : undefined} />
+    </div>
+  )
+
+  return <div className="mx-auto w-full max-w-7xl flex-1 space-y-5 p-4 sm:p-6 lg:p-8">
+    <AuditEventDetails entry={selectedLog} onClose={() => setSelectedLog(null)} onRestoreFocus={() => {
+      if (detailTriggerRef.current?.isConnected) detailTriggerRef.current.focus()
+      else eventsRef.current?.focus()
+    }} />
+    <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-gray-900"><ShieldCheck className="h-6 w-6 text-amber-600" aria-hidden="true" />Audit log</h1>
+        <p className="mt-1 text-sm text-gray-500">Investigate who changed what, when, and at which institution.</p>
+      </div>
+      <div className="space-y-2">
+        <div className="flex gap-2 lg:justify-end">
+          <Button variant="outline" className={`rounded-lg ${press}`} disabled={loading || signalsLoading} onClick={refresh}>
+            <RefreshCw aria-hidden="true" className={`h-4 w-4 ${loading || signalsLoading ? 'animate-spin motion-reduce:animate-none' : ''}`} />Refresh
+          </Button>
+          <Button variant="outline" className={`rounded-lg ${press}`} disabled={exporting || loading || Boolean(error) || !registry || total === 0} onClick={() => void exportLogs()}>
+            <Download aria-hidden="true" className="h-4 w-4" />{exporting ? 'Exporting…' : 'Export CSV'}
+          </Button>
+        </div>
+        <p className="text-xs text-gray-500">Export uses applied filters · latest 1,000 events maximum · UTC</p>
+      </div>
+    </header>
+
+    <section data-help-id="activity-log-filters" aria-label="Audit filters" className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+      <form onSubmit={submit} noValidate className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {textField('search', 'Summary, actor, entity, or ID')}
+          {selectField('action', Object.entries(auditActionLabels).map(([value, label]) => ({ value, label })))}
+          {selectField('entityType', (registry?.entityOptions || []).map(value => ({ value, label: value })))}
+          {selectField('actorId', (registry?.actorOptions || []).map(actor => ({ value: actor.actorId, label: `${actor.actorName} (${actor.actorRole})` })))}
+        </div>
+        <details className="rounded-xl border border-gray-200 p-3">
+          <summary className="cursor-pointer text-sm font-medium text-gray-700 focus-visible:outline focus-visible:outline-2">More filters: institution, entity ID, dates, and outcome</summary>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {textField('institution', 'Exact institution name')}
+            {textField('entityId', 'Entity ID or part of an ID')}
+            {textField('dateFrom')}
+            {textField('dateTo')}
+            {selectField('outcome', [{ value: 'FAILED', label: 'Failed' }, { value: 'SUCCESS', label: 'Successful' }])}
+          </div>
+        </details>
+        {filterError && <p id="audit-date-error" role="alert" className="text-sm text-red-700">{filterError}</p>}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit" className={`rounded-lg bg-[#FFB800] text-gray-900 hover:bg-[#e5a600] ${press}`}>Apply filters</Button>
+          <Button type="button" variant="ghost" className={`rounded-lg ${press}`} onClick={() => apply(emptyAuditFilters)}>Clear all</Button>
+          <span className="text-sm text-gray-500" role="status">{dirty ? 'Unapplied changes. Apply filters to update results.' : 'Results use the applied filters below.'}</span>
+        </div>
+      </form>
+      <div className="mt-4 flex flex-wrap gap-2 border-t border-gray-200 pt-4" aria-label="Applied filters">
+        {Object.entries(applied).filter(([, value]) => Boolean(value)).map(([key, value]) => {
+          const name = key as keyof AuditFilters
+          const display = name === 'action' ? auditActionLabels[value] || value : name === 'actorId' ? registry?.actorOptions.find(actor => actor.actorId === value)?.actorName || value : value
+          return <button key={key} type="button" className="inline-flex max-w-full items-center gap-2 rounded-full border bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2" onClick={() => apply({ ...applied, [key]: '' })} aria-label={`Remove ${labels[name]} filter`}>
+            <span className="break-all">{labels[name]}: {display}</span><X className="h-3 w-3 shrink-0" aria-hidden="true" />
+          </button>
+        })}
+        {!Object.values(applied).some(Boolean) && <span className="text-xs text-gray-500">All events in your authorized scope · all dates</span>}
+      </div>
+    </section>
+
+    <section ref={eventsRef} tabIndex={-1} data-help-id="activity-log-recent-events" aria-label="Audit events" aria-busy={loading} className="scroll-mt-4 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm focus-visible:outline focus-visible:outline-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 p-4 sm:px-5">
+        <h2 className="flex items-center gap-2 font-semibold text-gray-900"><Activity className="h-4 w-4 text-gray-500" aria-hidden="true" />Events</h2>
+        <p role="status" className="text-xs text-gray-500">{loading ? registry ? 'Updating… Previous results remain visible.' : 'Loading events…' : error ? 'Results could not be updated.' : `${total.toLocaleString()} matching events`}</p>
+      </div>
+      {registry && <dl className="grid grid-cols-2 gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 text-sm sm:grid-cols-4 sm:px-5" aria-label={loading || error ? 'Last loaded event totals' : 'Matching event totals'}>
+        {([['Events', registry.stats.total], ['Creates', registry.stats.creates], ['Updates / status', registry.stats.updates], ['Deletes', registry.stats.deletes]] as const).map(([label, count]) => <div key={label} className="flex items-center gap-2"><dt className="text-gray-500">{label}</dt><dd className="font-semibold tabular-nums">{count.toLocaleString()}</dd></div>)}
+      </dl>}
+      {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-red-100 bg-red-50 p-4 text-sm text-red-800"><p>{error}</p><Button variant="outline" onClick={() => setRevision(value => value + 1)}>Retry events</Button></div>}
+      {!registry && loading ? <div className="space-y-3 p-5">{[0, 1, 2, 3, 4].map(index => <Skeleton key={index} className="h-14 rounded-lg" />)}</div>
+        : registry && !logs.length ? <div className="p-10 text-center"><Activity className="mx-auto mb-3 h-8 w-8 text-gray-400" aria-hidden="true" /><p className="font-medium text-gray-800">No matching events</p><p className="mt-1 text-sm text-gray-500">Try a broader date range or clear the filters.</p><Button variant="outline" className="mt-4" onClick={() => apply(emptyAuditFilters)}>Clear filters</Button></div>
+          : logs.length > 0 && <>
+            <div className="hidden xl:block"><Table>
+              <TableHeader><TableRow><TableHead>When (UTC)</TableHead><TableHead>Actor / institution</TableHead><TableHead>Action</TableHead><TableHead>Entity</TableHead><TableHead>Summary</TableHead><TableHead><span className="sr-only">Details</span></TableHead></TableRow></TableHeader>
+              <TableBody>{logs.map(log => <TableRow key={log._id}>
+                <TableCell className="whitespace-nowrap text-xs text-gray-600"><time dateTime={log.createdAt}>{auditTimestamp(log.createdAt)}</time></TableCell>
+                <TableCell><div className="font-medium text-gray-900">{log.actorName}</div><div className="text-xs text-gray-500">{log.actorRole}</div><div className="mt-1 text-xs text-gray-600">{log.institution || 'Not recorded'}</div></TableCell>
+                <TableCell><ActionBadge action={log.action} /></TableCell>
+                <TableCell><div className="text-sm font-medium">{log.entityType}</div><div className="max-w-40 break-all font-mono text-xs text-gray-500">{log.entityId}</div></TableCell>
+                <TableCell className="max-w-xs"><p className="line-clamp-2 text-sm text-gray-700">{log.summary}</p><p className="mt-1 line-clamp-1 text-xs text-gray-500">{log.changedFields?.length ? `${log.changedFields.length} changed ${log.changedFields.length === 1 ? 'field' : 'fields'}` : 'No field changes captured'}</p></TableCell>
+                <TableCell><Button variant="ghost" size="sm" className={`rounded-lg ${press}`} aria-label={`View event: ${log.summary}`} onClick={event => { detailTriggerRef.current = event.currentTarget; setSelectedLog(log) }}><Eye aria-hidden="true" className="h-4 w-4" />View</Button></TableCell>
+              </TableRow>)}</TableBody>
+            </Table></div>
+            <div className="divide-y divide-gray-200 xl:hidden">{logs.map(log => <article key={log._id} className="space-y-3 p-4">
+              <div className="flex items-center justify-between gap-3"><ActionBadge action={log.action} /><time className="text-xs text-gray-500" dateTime={log.createdAt}>{auditTimestamp(log.createdAt)}</time></div>
+              <p className="text-sm font-medium text-gray-900">{log.summary}</p>
+              <p className="text-sm text-gray-600">{log.actorName} · {log.actorRole}<span className="block text-xs">{log.institution || 'Institution not recorded'}</span></p>
+              <p className="break-all text-xs text-gray-500">{log.entityType} · {log.entityId}</p>
+              <Button variant="outline" className={`min-h-11 w-full rounded-lg ${press}`} aria-label={`View event: ${log.summary}`} onClick={event => { detailTriggerRef.current = event.currentTarget; setSelectedLog(log) }}>View event details</Button>
+            </article>)}</div>
+          </>}
+      {registry && <div className="flex flex-col justify-between gap-3 border-t border-gray-200 p-4 text-sm sm:flex-row sm:items-center sm:px-5">
+        <p className="text-gray-500">{loading || error ? 'Last loaded results' : `Showing ${total ? (page - 1) * PAGE_SIZE + 1 : 0}–${Math.min(page * PAGE_SIZE, total)} of ${total.toLocaleString()} events`}</p>
+        <nav aria-label="Event pagination" className="flex items-center gap-2">
+          <Button variant="outline" className={`rounded-lg ${press}`} disabled={loading || Boolean(error) || page <= 1} onClick={() => setPage(value => value - 1)}>Previous</Button>
+          <span className="min-w-24 text-center text-xs tabular-nums text-gray-600">Page {total ? page : 0} of {total ? totalPages : 0}</span>
+          <Button variant="outline" className={`rounded-lg ${press}`} disabled={loading || Boolean(error) || page >= totalPages || total === 0} onClick={() => setPage(value => value + 1)}>Next</Button>
+        </nav>
+      </div>}
+    </section>
+    <AuditAnomalyPanel data={anomalies} loading={signalsLoading} error={signalsError} onRetry={() => setSignalsRevision(value => value + 1)} onInvestigate={investigate} />
+  </div>
 }

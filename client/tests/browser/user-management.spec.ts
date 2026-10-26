@@ -47,11 +47,14 @@ async function setup(page: Page, mode: 'delete' | 'suspend' | 'password') {
 
 test('registry deletion shows delegation blockers and permits an explicit retry after release', async ({ page }) => {
   const { errors, writes } = await setup(page, 'delete')
-  page.on('dialog', dialog => dialog.accept())
   await page.goto('/users')
   const row = page.getByRole('row').filter({ hasText: 'QA Officer' })
-  await row.getByRole('button', { name: 'Open menu' }).click()
-  await page.getByRole('menuitem', { name: 'Delete User' }).click()
+  await row.getByRole('button', { name: 'Actions for QA Officer' }).click()
+  await page.getByRole('menuitem', { name: 'Delete user', exact: true }).click()
+  const confirmation = page.getByRole('dialog', { name: 'Delete user account?', exact: true })
+  await expect(confirmation.getByText('staff@example.test')).toBeVisible()
+  expect(writes).toEqual([])
+  await confirmation.getByRole('button', { name: 'Delete account', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Reassign Work Before Removing Access' })
   await expect(dialog.getByText('Monitoring Delegations', { exact: true })).toBeVisible()
   await expect(dialog.getByText('QA Workplace · QA Learner · Origin Institution')).toBeVisible()
@@ -71,8 +74,8 @@ test('registry deletion shows delegation blockers and permits an explicit retry 
 test('a conflict without workload blockers displays its explanation without opening a broken dialog', async ({ page }) => {
   const { errors } = await setup(page, 'suspend')
   await page.goto('/users')
-  await page.getByRole('row').filter({ hasText: 'QA Officer' }).getByRole('button', { name: 'Open menu' }).click()
-  await page.getByRole('menuitem', { name: 'Mark as Inactive' }).click()
+  await page.getByRole('row').filter({ hasText: 'QA Officer' }).getByRole('button', { name: 'Actions for QA Officer' }).click()
+  await page.getByRole('menuitem', { name: 'Suspend access', exact: true }).click()
   await expect(page.getByText('Another account or assignment update is in progress. Please retry.')).toBeVisible()
   await page.getByRole('alertdialog', { name: 'Unable to complete action' }).getByRole('button', { name: 'Close', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)

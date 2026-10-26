@@ -39,6 +39,11 @@ interface DataTableProps<TData, TValue> {
   sorting?: SortingState
   onSortingChange?: OnChangeFn<SortingState>
   exportTitle?: string
+  manualSorting?: boolean
+  exportCurrentPage?: boolean
+  exportDisabled?: boolean
+  emptyMessage?: string
+  showNameFilter?: boolean
   disablePagination?: boolean
   columnVisibility?: VisibilityState
   onColumnVisibilityChange?: OnChangeFn<VisibilityState>
@@ -48,6 +53,7 @@ interface DataTableProps<TData, TValue> {
 }
 
 type ExportableColumnMeta<TData> = {
+  label?: string
   exportValue?: (row: TData) => string | number | boolean | null | undefined
 }
 
@@ -59,6 +65,11 @@ export function DataTable<TData, TValue>({
   onSortingChange: setExternalSorting,
   exportTitle = "GTVET WEL System Data Export",
   disablePagination = false,
+  showNameFilter = true,
+  manualSorting = false,
+  exportCurrentPage = false,
+  exportDisabled = false,
+  emptyMessage = "No results.",
   columnVisibility: externalColumnVisibility,
   onColumnVisibilityChange: setExternalColumnVisibility,
   rowSelection,
@@ -97,6 +108,7 @@ export function DataTable<TData, TValue>({
     getPaginationRowModel: getPaginationRowModel(),
     onSortingChange: onSortingChange,
     getSortedRowModel: getSortedRowModel(),
+    manualSorting,
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
     onColumnVisibilityChange: onColumnVisibilityChange,
@@ -133,20 +145,21 @@ export function DataTable<TData, TValue>({
   }
 
   const getColumnLabel = (column: ReturnType<typeof table.getVisibleLeafColumns>[number]) =>
-    typeof column.columnDef.header === 'string'
+    (column.columnDef.meta as ExportableColumnMeta<TData> | undefined)?.label ?? (typeof column.columnDef.header === 'string'
       ? column.columnDef.header
-      : column.id.replace(/([A-Z])/g, ' $1').replace(/^./, value => value.toUpperCase())
+      : column.id.replace(/([A-Z])/g, ' $1').replace(/^./, value => value.toUpperCase()))
 
   const downloadCSV = () => {
-    if (!data.length) return;
+    if (!data.length || exportDisabled) return;
     
     const visibleColumns = table.getVisibleLeafColumns().filter(col => col.id !== 'actions' && col.id !== 'select');
-    const headers = visibleColumns.map(col => typeof col.columnDef.header === 'string' ? col.columnDef.header : col.id).join(",");
+    const headers = visibleColumns.map(getColumnLabel).join(",");
     
-    const rowsExport = table.getCoreRowModel().rows.map(row => {
+    const rowsExport = (exportCurrentPage ? table.getRowModel().rows : table.getCoreRowModel().rows).map(row => {
       return visibleColumns.map(col => {
         const val = getExportCellValue(row, col);
-        const str = val === null || val === undefined ? '' : typeof val === 'object' ? JSON.stringify(val) : String(val);
+        const raw = val === null || val === undefined ? '' : typeof val === 'object' ? JSON.stringify(val) : String(val);
+        const str = typeof val === 'string' && /^[=+@\-\t\r]/.test(raw) ? `'${raw}` : raw;
         return str.includes(",") || str.includes('\n') || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
       }).join(",");
     });
@@ -160,12 +173,12 @@ export function DataTable<TData, TValue>({
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
-    link.click();
     document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const downloadPDF = async () => {
-    if (!data.length) return;
+    if (!data.length || exportDisabled) return;
     
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const doc = new (jsPDF as any)('l', 'mm', 'a4'); // Export as Landscape
@@ -192,9 +205,9 @@ export function DataTable<TData, TValue>({
     }
     
     const visibleColumns = table.getVisibleLeafColumns().filter(col => col.id !== 'actions' && col.id !== 'select');
-    const headers = visibleColumns.map(col => typeof col.columnDef.header === 'string' ? col.columnDef.header : col.id);
+    const headers = visibleColumns.map(getColumnLabel);
     
-    const rowsExport = table.getCoreRowModel().rows.map(row => {
+    const rowsExport = (exportCurrentPage ? table.getRowModel().rows : table.getCoreRowModel().rows).map(row => {
       return visibleColumns.map(col => {
         const val = getExportCellValue(row, col);
         if (val === null || val === undefined) return '';
@@ -219,7 +232,7 @@ export function DataTable<TData, TValue>({
   return (
     <div>
       <div className="flex flex-col sm:flex-row items-center gap-4 py-4 w-full">
-        {table.getAllColumns().some(col => col.id === "name") && (
+        {showNameFilter && table.getAllColumns().some(col => col.id === "name") && (
           <Input
             placeholder="Filter names..."
             value={(table.getColumn("name")?.getFilterValue() as string) ?? ""}
@@ -243,17 +256,9 @@ export function DataTable<TData, TValue>({
               <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] max-h-[320px] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg p-1.5">
                 {table.getAllColumns()
                   .filter(col => typeof col.accessorFn !== 'undefined' || col.id !== 'actions')
-                  .filter(col => col.id !== 'actions')
+                  .filter(col => col.getCanHide())
                   .map(col => {
-                    const headerText = typeof col.columnDef.header === 'string'
-                      ? col.columnDef.header
-                      : col.id === 'name' ? 'Learner'
-                      : col.id === 'closureSummary' ? 'Closure'
-                      : col.id === 'healthScore' ? 'Health'
-                      : col.id === 'owner' ? 'Owner'
-                      : col.id === 'delegate' ? 'Delegate'
-                      : col.id === 'operationalReadiness' ? 'Operational'
-                      : col.id.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase())
+                    const headerText = getColumnLabel(col)
                     return (
                       <button
                         key={col.id}
@@ -278,17 +283,19 @@ export function DataTable<TData, TValue>({
           </div>
           <Button 
             variant="outline" 
+            disabled={exportDisabled || !data.length}
             onClick={downloadCSV}
             className="w-full sm:w-auto rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
           >
-            <Download className="mr-2 h-4 w-4" /> Export CSV
+            <Download className="mr-2 h-4 w-4" /> {exportCurrentPage ? "Export page CSV" : "Export CSV"}
           </Button>
           <Button 
             variant="outline" 
+            disabled={exportDisabled || !data.length}
             onClick={downloadPDF}
             className="w-full sm:w-auto rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
           >
-            <FileText className="mr-2 h-4 w-4" /> Export PDF
+            <FileText className="mr-2 h-4 w-4" /> {exportCurrentPage ? "Export page PDF" : "Export PDF"}
           </Button>
         </div>
       </div>
@@ -326,7 +333,7 @@ export function DataTable<TData, TValue>({
               ) : null}
             </article>
           )
-        }) : <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">No results.</div>}
+        }) : <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">{emptyMessage}</div>}
       </div>
       <div className="hidden rounded-md border border-gray-200 bg-white shadow-sm overflow-x-auto xl:block">
         <Table>
@@ -335,7 +342,7 @@ export function DataTable<TData, TValue>({
               <TableRow key={headerGroup.id} className="border-b border-gray-200 hover:bg-gray-50">
                 {headerGroup.headers.map((header) => {
                   return (
-                    <TableHead key={header.id} className="text-gray-700 font-semibold">
+                    <TableHead key={header.id} aria-sort={header.column.getCanSort() ? header.column.getIsSorted() === "asc" ? "ascending" : header.column.getIsSorted() === "desc" ? "descending" : "none" : undefined} className="text-gray-700 font-semibold">
                       {header.isPlaceholder
                         ? null
                         : flexRender(
@@ -366,7 +373,7 @@ export function DataTable<TData, TValue>({
             ) : (
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-24 text-center">
-                  No results.
+                  {emptyMessage}
                 </TableCell>
               </TableRow>
             )}

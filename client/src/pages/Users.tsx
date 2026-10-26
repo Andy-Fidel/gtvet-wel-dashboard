@@ -1,11 +1,13 @@
 
 import {
   type SortingState,
+  type VisibilityState,
 } from "@tanstack/react-table"
 
 import { Button } from "@/components/ui/button"
-import { useState, useEffect, useMemo, type ComponentProps } from "react"
-import { AlertTriangle, Plus, ShieldAlert, Users as UsersIcon, X } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { useState, useEffect, useMemo, useRef, type ComponentProps } from "react"
+import { AlertTriangle, RefreshCw, Plus, ShieldAlert, Users as UsersIcon, X } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -24,6 +26,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { UserDetailsSheet } from "@/components/UserDetailsSheet"
+import { GHANA_REGIONS } from "@/lib/constants"
+import { userRoleLabel } from "@/lib/user-directory"
 import { InspectUserDialog } from "@/components/InspectUserDialog"
 
 type UserFormInitialData = NonNullable<ComponentProps<typeof UserForm>["initialData"]>
@@ -180,6 +185,19 @@ export default function Users() {
     const [accessApprovalQueue, setAccessApprovalQueue] = useState<AccessApprovalQueueItem[]>([])
     const [loading, setLoading] = useState(true)
     const [tableLoading, setTableLoading] = useState(true)
+    const [institutionOptions, setInstitutionOptions] = useState<Array<{ name: string; region: string }>>([])
+    const [registryError, setRegistryError] = useState("")
+    const [fullDirectoryError, setFullDirectoryError] = useState("")
+    const [hasDirectoryLoaded, setHasDirectoryLoaded] = useState(false)
+    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({ email: false, accessVisibility: false, auditVisibility: false })
+    const [pendingUserActions, setPendingUserActions] = useState<Record<string, string>>({})
+    const [deleteTarget, setDeleteTarget] = useState<User | null>(null)
+    const pendingUserIds = useRef(new Set<string>())
+    const detailTriggerRef = useRef<HTMLElement | null>(null)
+    const deleteTriggerRef = useRef<HTMLElement | null>(null)
+    const directoryRef = useRef<HTMLElement>(null)
+    const [registrySearch, setRegistrySearch] = useState("")
+    const registryQuery = registrySearch.trim()
     const [registryPage, setRegistryPage] = useState(1)
     const [registryPageSize] = useState(12)
     const [registryTotal, setRegistryTotal] = useState(0)
@@ -191,6 +209,8 @@ export default function Users() {
     const [editingUser, setEditingUser] = useState<User | null>(null)
     const [refreshKey, setRefreshKey] = useState(0)
     const [sorting, setSorting] = useState<SortingState>([])
+    const registrySortBy = sorting[0]?.id || "createdAt"
+    const registrySortDirection = sorting[0] ? sorting[0].desc ? "desc" : "asc" : "desc"
     const [deactivationImpact, setDeactivationImpact] = useState<DeactivationImpact | null>(null)
     const [blockedUser, setBlockedUser] = useState<User | null>(null)
     const [blockedAction, setBlockedAction] = useState<'suspend' | 'delete' | null>(null)
@@ -235,6 +255,21 @@ export default function Users() {
     const createMode = searchParams.get("create") || ""
     const linkedLearnerId = searchParams.get("learnerId") || ""
 
+    const startUserAction = (id: string, message: string) => {
+        if (pendingUserIds.current.has(id)) return false
+        pendingUserIds.current.add(id)
+        setPendingUserActions(current => ({ ...current, [id]: message }))
+        return true
+    }
+    const finishUserAction = (id: string) => {
+        pendingUserIds.current.delete(id)
+        setPendingUserActions(current => { const next = { ...current }; delete next[id]; return next })
+    }
+    const viewUserDetails = (target: User, trigger?: HTMLElement) => {
+        detailTriggerRef.current = trigger || null
+        setAuditUser(target)
+    }
+
     const clearTransientParams = () => {
         setSearchParams((prev) => {
             const next = new URLSearchParams(prev)
@@ -252,20 +287,35 @@ export default function Users() {
     }
 
     useEffect(() => {
+        if (!user?.role || user.role === "Admin") return
+        const controller = new AbortController()
+        authFetch("/api/institutions", { signal: controller.signal })
+            .then(async response => { if (!response.ok) throw new Error("Unable to load institution filters"); return response.json() })
+            .then(payload => { if (!controller.signal.aborted) setInstitutionOptions(Array.isArray(payload) ? payload : []) })
+            .catch(error => { if (!controller.signal.aborted) console.error("Error fetching institution filters:", error) })
+        return () => controller.abort()
+    }, [authFetch, user?.role])
+
+    useEffect(() => {
+        const controller = new AbortController()
+        if (governanceFilter) { setLoading(true); setFullDirectoryError("") }
         const fetchData = async () => {
             try {
                 const shouldFetchFullUsers = Boolean(governanceFilter)
-                const requests = shouldFetchFullUsers ? [authFetch('/api/users')] : []
+                const requests = shouldFetchFullUsers ? [authFetch('/api/users', { signal: controller.signal })] : []
                 if (user?.role === "SuperAdmin") {
-                    requests.push(authFetch('/api/access-approvals'))
+                    requests.push(authFetch('/api/access-approvals', { signal: controller.signal }))
                 }
 
                 const responses = await Promise.all(requests)
+                if (controller.signal.aborted) return
                 if (shouldFetchFullUsers) {
                     const usersResponse = responses[0]
                     if (!usersResponse.ok) throw new Error("Failed to fetch")
                     const usersData = await usersResponse.json()
+                    if (controller.signal.aborted) return
                     setData(usersData)
+                    setHasDirectoryLoaded(true)
                 } else {
                     setData([])
                 }
@@ -280,39 +330,45 @@ export default function Users() {
                     setAccessApprovalQueue([])
                 }
             } catch (err) {
+                if (controller.signal.aborted) return
+                if (governanceFilter) setFullDirectoryError("Unable to load this user view. Previous results may be out of date.")
                 console.error(err)
-                toast.error("Failed to load users")
+                if (!governanceFilter) toast.error("Failed to load access approvals")
             } finally {
-                setLoading(false)
+                if (!controller.signal.aborted) setLoading(false)
             }
         }
         fetchData()
+        return () => controller.abort()
     }, [refreshKey, authFetch, user?.role, governanceFilter])
 
     useEffect(() => {
-        if (user?.role !== "SuperAdmin" || governanceFilter) {
+        if (user?.role !== "SuperAdmin") {
             setHqGovernanceOverview(null)
             return
         }
 
+        const controller = new AbortController()
         const fetchHqGovernanceOverview = async () => {
             try {
                 const params = new URLSearchParams()
                 params.set("anomalyPage", String(anomalyPage))
                 params.set("dormantPage", String(dormantPage))
                 params.set("pageSize", String(GOVERNANCE_PAGE_SIZE))
-                const res = await authFetch(`/api/users/governance/overview?${params.toString()}`)
+                const res = await authFetch(`/api/users/governance/overview?${params.toString()}`, { signal: controller.signal })
                 if (!res.ok) throw new Error("Failed to fetch governance overview")
                 const payload = await res.json()
-                setHqGovernanceOverview(payload)
+                if (!controller.signal.aborted) setHqGovernanceOverview(payload)
             } catch (error) {
+                if (controller.signal.aborted) return
                 console.error("Error fetching user governance overview:", error)
                 toast.error("Failed to load governance overview")
             }
         }
 
         fetchHqGovernanceOverview()
-    }, [authFetch, anomalyPage, dormantPage, governanceFilter, user?.role])
+        return () => controller.abort()
+    }, [authFetch, anomalyPage, dormantPage, refreshKey, user?.role])
 
     useEffect(() => {
         if (user?.role !== "RegionalAdmin" || governanceFilter) {
@@ -356,34 +412,49 @@ export default function Users() {
             return
         }
 
+        const controller = new AbortController()
+        setTableLoading(true)
+        setRegistryError("")
         const fetchRegistry = async () => {
-            setTableLoading(true)
+            let pageAdjusted = false
             try {
                 const params = new URLSearchParams()
                 if (roleFilter) params.set("role", roleFilter)
                 if (statusFilter) params.set("status", statusFilter)
                 if (institutionFilter) params.set("institution", institutionFilter)
                 if (regionFilter) params.set("region", regionFilter)
+                if (registryQuery) params.set("q", registryQuery)
+                params.set("sortBy", registrySortBy)
+                params.set("sortDirection", registrySortDirection)
                 params.set("page", String(registryPage))
                 params.set("pageSize", String(registryPageSize))
 
-                const res = await authFetch(`/api/users/registry?${params.toString()}`)
+                const res = await authFetch(`/api/users/registry?${params.toString()}`, { signal: controller.signal })
                 if (!res.ok) throw new Error("Failed to fetch user registry")
                 const payload = await res.json()
+                if (controller.signal.aborted) return
+                const lastPage = Math.max(1, payload.totalPages || 1)
+                if (registryPage > lastPage) { pageAdjusted = true; setRegistryPage(lastPage); return }
+                setHasDirectoryLoaded(true)
                 setTableData(Array.isArray(payload.items) ? payload.items : [])
                 setRegistryTotal(typeof payload.total === "number" ? payload.total : 0)
                 setRegistryTotalPages(typeof payload.totalPages === "number" ? payload.totalPages : 0)
                 setRegistryPage(typeof payload.page === "number" ? payload.page : 1)
             } catch (error) {
+                if (controller.signal.aborted) return
+                setRegistryError("Unable to load users. Previous results may be out of date. Please retry.")
                 console.error("Error fetching user registry:", error)
-                toast.error("Failed to load user registry")
             } finally {
-                setTableLoading(false)
+                if (!controller.signal.aborted && !pageAdjusted) setTableLoading(false)
             }
         }
 
-        fetchRegistry()
-    }, [authFetch, governanceFilter, institutionFilter, refreshKey, regionFilter, registryPage, registryPageSize, roleFilter, statusFilter])
+        const timeout = setTimeout(fetchRegistry, registryQuery ? 300 : 0)
+        return () => {
+            clearTimeout(timeout)
+            controller.abort()
+        }
+    }, [authFetch, governanceFilter, institutionFilter, refreshKey, regionFilter, registryPage, registryPageSize, registryQuery, registrySortBy, registrySortDirection, roleFilter, statusFilter])
 
     useEffect(() => {
         if (createMode !== "guardian" || !linkedLearnerId || open || editingUser) return
@@ -430,6 +501,7 @@ export default function Users() {
     }
     
     const handleToggleStatus = async (user: User) => {
+        if (!startUserAction(user._id, 'Updating access…')) return
         const newStatus = user.status === 'Active' ? 'Inactive' : 'Active'
         try {
             const res = await authFetch(`/api/users/${user._id}`, {
@@ -451,11 +523,11 @@ export default function Users() {
             setDeactivationImpact(null)
             setBlockedUser(null)
             setBlockedAction(null)
-            toast.success(`User marked as ${newStatus}`)
+            toast.success(newStatus === "Active" ? "User access restored" : "User access suspended")
         } catch (error) {
             console.error("Error toggling status:", error)
             toast.error(error instanceof Error ? error.message : "Failed to update user status")
-        }
+        } finally { finishUserAction(user._id) }
     }
 
     const loadReassignmentOptions = async (targetUser: User) => {
@@ -573,14 +645,18 @@ export default function Users() {
     }
 
     const handleDelete = async (id: string, confirmed = false) => {
-        if (confirmed || confirm("Are you sure you want to delete this user?")) {
+        if (!confirmed) {
+            setDeleteTarget([...tableData, ...data].find(entry => entry._id === id) || null)
+            return
+        }
+        if (startUserAction(id, 'Deleting account…')) {
             try {
                 const res = await authFetch(`/api/users/${id}`, { method: 'DELETE' })
                 const payload = await res.json().catch(() => ({}))
                 if (!res.ok) {
                     if (res.status === 409 && payload.blockers) {
                         const target = [...tableData, ...data].find(entry => entry._id === id)
-                        if (target) { setBlockedUser(target); setBlockedAction('delete'); setDeactivationImpact(payload as DeactivationImpact) }
+                        if (target) { setDeleteTarget(null); setBlockedUser(target); setBlockedAction('delete'); setDeactivationImpact(payload as DeactivationImpact) }
                         return
                     }
                     throw new Error(payload.message || 'Failed to delete user')
@@ -589,15 +665,17 @@ export default function Users() {
                 setDeactivationImpact(null)
                 setBlockedUser(null)
                 setBlockedAction(null)
+                setDeleteTarget(null)
                 toast.success("User deleted successfully")
             } catch (error) {
                 console.error("Error deleting user:", error)
                 toast.error(error instanceof Error ? error.message : "Failed to delete user")
-            }
+            } finally { finishUserAction(id) }
         }
     }
 
     const handleSendSetupLink = async (targetUser: User) => {
+        if (!startUserAction(targetUser._id, 'Sending setup link…')) return
         try {
             const res = await authFetch(`/api/users/${targetUser._id}/send-setup-link`, { method: "POST" })
             const payload = await res.json().catch(() => ({}))
@@ -607,11 +685,14 @@ export default function Users() {
         } catch (error) {
             console.error("Error sending setup link:", error)
             toast.error(error instanceof Error ? error.message : "Failed to send setup link")
-        }
+        } finally { finishUserAction(targetUser._id) }
     }
 
     const filteredData = useMemo(() => {
+        const query = registryQuery.toLowerCase()
         return data.filter((user) => {
+            if (query && ![user.name, user.email, user.institution, user.region]
+                .some((value) => value?.toLowerCase().includes(query))) return false
             if (roleFilter && user.role !== roleFilter) return false
             if (statusFilter && user.status !== statusFilter) return false
             if (institutionFilter && user.institution !== institutionFilter) return false
@@ -647,11 +728,11 @@ export default function Users() {
 
             return true
         })
-    }, [data, roleFilter, statusFilter, institutionFilter, regionFilter, governanceFilter])
+    }, [data, roleFilter, statusFilter, institutionFilter, regionFilter, governanceFilter, registryQuery])
 
     const activeFilters = [
-        roleFilter ? `Role: ${roleFilter}` : "",
-        statusFilter ? `Status: ${statusFilter}` : "",
+        roleFilter ? `Role: ${userRoleLabel(roleFilter)}` : "",
+        statusFilter ? `Access: ${statusFilter === "Active" ? "Enabled" : "Suspended"}` : "",
         institutionFilter ? `Institution: ${institutionFilter}` : "",
         regionFilter ? `Region: ${regionFilter}` : "",
         governanceFilter === "orphaned-institutions" ? "View: Active admins" : "",
@@ -670,7 +751,11 @@ export default function Users() {
         setRegistryPage(1)
     }, [roleFilter, statusFilter, institutionFilter, regionFilter, governanceFilter])
 
-    const clearFilters = () => setSearchParams({})
+    const clearFilters = () => { setRegistrySearch(""); setRegistryPage(1); setSearchParams({}) }
+    const setDirectoryFilter = (key: string, value: string) => {
+        setRegistryPage(1)
+        setSearchParams(previous => { const next = new URLSearchParams(previous); if (value) next.set(key, value); else next.delete(key); return next })
+    }
 
     const regionalInstitutionStats = useMemo(() => {
         if (user?.role !== "RegionalAdmin") return []
@@ -758,17 +843,6 @@ export default function Users() {
         if (user?.role === "RegionalAdmin") return ["RegionalAdmin", "Admin", "Manager", "Staff", "Guardian"].includes(target.role)
         return ["Manager", "Staff", "Guardian"].includes(target.role)
     }
-
-    const hqRegionOptions = useMemo(() => {
-        if (user?.role !== "SuperAdmin") return []
-        if (hqGovernanceOverview) {
-            return hqGovernanceOverview.regionStats
-                .map((entry) => entry.region)
-                .filter((region) => Boolean(region) && region !== "Unassigned")
-                .sort()
-        }
-        return [...new Set(data.map((entry) => entry.effectiveRegion).filter((region): region is string => Boolean(region)))].sort()
-    }, [data, hqGovernanceOverview, user?.role])
 
     const hqRoleGovernance = useMemo(() => {
         if (user?.role !== "SuperAdmin") return null
@@ -1119,8 +1193,11 @@ export default function Users() {
         }
     }
 
+    const directoryLoading = governanceFilter ? loading : tableLoading
+    const directoryError = governanceFilter ? fullDirectoryError : registryError
+
     return (
-        <div className="h-full flex-1 flex-col space-y-4 md:space-y-8 pt-16 px-0 pb-4 sm:p-4 md:p-8 flex">
+        <div className="h-full flex-1 flex-col space-y-5 p-4 md:p-8 flex">
              <Dialog open={escalationOpen} onOpenChange={setEscalationOpen}>
                 <DialogContent className="sm:max-w-[640px] overflow-y-auto max-h-[90vh] bg-white border-gray-200 text-gray-900 [&>button]:bg-gray-100 [&>button]:text-gray-600 [&>button]:hover:bg-gray-200 [&>button]:hover:text-gray-900">
                     <DialogHeader>
@@ -1225,73 +1302,22 @@ export default function Users() {
                     ) : null}
                 </DialogContent>
              </Dialog>
-             <Dialog open={Boolean(auditUser)} onOpenChange={(open) => { if (!open) setAuditUser(null) }}>
-                <DialogContent className="sm:max-w-[760px] overflow-y-auto max-h-[90vh] bg-white border-gray-200 text-gray-900 [&>button]:bg-gray-100 [&>button]:text-gray-600 [&>button]:hover:bg-gray-200 [&>button]:hover:text-gray-900">
-                    <DialogHeader>
-                        <DialogTitle className="text-gray-900">User Audit Visibility</DialogTitle>
-                        <DialogDescription className="text-gray-600">
-                            Review account provenance, access changes, authentication failures, and recent sensitive actions.
-                        </DialogDescription>
-                    </DialogHeader>
-                    {auditUser ? (
-                        <div className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">Created By</p>
-                                    <p className="mt-2 font-bold text-gray-900">
-                                        {auditUser.auditSummary?.createdBy ? `${auditUser.auditSummary.createdBy.actorName} (${auditUser.auditSummary.createdBy.actorRole})` : "Not recorded"}
-                                    </p>
-                                    <p className="text-sm text-gray-600 mt-1">
-                                        {auditUser.auditSummary?.createdBy?.createdAt ? new Date(auditUser.auditSummary.createdBy.createdAt).toLocaleString() : "No creation audit timestamp"}
-                                    </p>
-                                </div>
-                                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">Last Role Change</p>
-                                    <p className="mt-2 font-bold text-gray-900">
-                                        {auditUser.auditSummary?.lastRoleChange ? `${auditUser.auditSummary.lastRoleChange.actorName} (${auditUser.auditSummary.lastRoleChange.actorRole})` : "No role change recorded"}
-                                    </p>
-                                    <p className="text-sm text-gray-600 mt-1">
-                                        {auditUser.auditSummary?.lastRoleChange?.createdAt ? new Date(auditUser.auditSummary.lastRoleChange.createdAt).toLocaleString() : "No role change timestamp"}
-                                    </p>
-                                </div>
-                                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">Last Login</p>
-                                    <p className="mt-2 font-bold text-gray-900">
-                                        {auditUser.auditSummary?.lastLoginAt ? new Date(auditUser.auditSummary.lastLoginAt).toLocaleString() : "No successful login yet"}
-                                    </p>
-                                </div>
-                                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                                    <p className="text-xs font-black uppercase tracking-wider text-gray-400">Failed Login Count</p>
-                                    <p className="mt-2 text-2xl font-black text-gray-900">{auditUser.auditSummary?.failedLoginCount ?? 0}</p>
-                                </div>
-                            </div>
-
-                            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-3">
-                                <p className="text-sm font-black text-gray-900">Recent Sensitive Actions</p>
-                                {auditUser.auditSummary?.recentSensitiveActions?.length ? (
-                                    auditUser.auditSummary.recentSensitiveActions.map((action) => (
-                                        <div key={action._id} className="rounded-xl border border-gray-200 bg-white p-3">
-                                            <p className="text-sm font-bold text-gray-900">{action.summary}</p>
-                                            <p className="text-xs text-gray-500 mt-1">
-                                                {action.actorName} ({action.actorRole}) · {new Date(action.createdAt).toLocaleString()}
-                                            </p>
-                                            {action.changedFields.length > 0 ? (
-                                                <div className="mt-2 flex flex-wrap gap-2">
-                                                    {action.changedFields.map((field) => (
-                                                        <span key={field} className="rounded-full border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-600">
-                                                            {field}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            ) : null}
-                                        </div>
-                                    ))
-                                ) : (
-                                    <p className="text-sm text-gray-500">No recent sensitive actions recorded for this account.</p>
-                                )}
-                            </div>
-                        </div>
-                    ) : null}
+             <UserDetailsSheet user={auditUser} onClose={() => setAuditUser(null)} onRestoreFocus={() => {
+                if (detailTriggerRef.current?.isConnected) detailTriggerRef.current.focus()
+                else directoryRef.current?.focus()
+             }} />
+             <Dialog open={Boolean(deleteTarget)} onOpenChange={open => { if (!open && deleteTarget && !pendingUserActions[deleteTarget._id]) setDeleteTarget(null) }}>
+                <DialogContent className="sm:max-w-lg sm:rounded-2xl motion-reduce:animate-none" onCloseAutoFocus={event => {
+                    event.preventDefault()
+                    if (deleteTriggerRef.current?.isConnected) deleteTriggerRef.current.focus()
+                    else directoryRef.current?.focus()
+                }}>
+                    <DialogHeader><DialogTitle>Delete user account?</DialogTitle><DialogDescription>This permanently removes the account and revokes its active sessions. Assigned work must be reassigned before deletion can proceed.</DialogDescription></DialogHeader>
+                    {deleteTarget && <>
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4"><p className="font-semibold">{deleteTarget.name}</p><p className="break-all text-sm text-gray-600">{deleteTarget.email}</p><p className="mt-1 text-xs text-gray-500">{userRoleLabel(deleteTarget.role)} · {deleteTarget.institution || deleteTarget.region || "Platform scope"}</p></div>
+                        <p className="text-sm text-gray-600">To temporarily block sign-in, use Suspend access instead.</p>
+                        <div className="flex justify-end gap-2"><Button variant="outline" disabled={Boolean(pendingUserActions[deleteTarget._id])} onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" disabled={Boolean(pendingUserActions[deleteTarget._id])} onClick={() => void handleDelete(deleteTarget._id, true)}>{pendingUserActions[deleteTarget._id] ? "Deleting…" : "Delete account"}</Button></div>
+                    </>}
                 </DialogContent>
              </Dialog>
              <Dialog open={bulkSuspendOpen} onOpenChange={(open) => {
@@ -1679,7 +1705,7 @@ export default function Users() {
                                 </div>
                             ) : null}
 
-                            {blockedAction ? <Button disabled={getBlockerCount(deactivationImpact) > 0 || Boolean(releasingDelegation)} onClick={refreshBlockedUserState} className="w-full rounded-2xl">
+                            {blockedAction ? <Button disabled={getBlockerCount(deactivationImpact) > 0 || Boolean(releasingDelegation) || Boolean(blockedUser && pendingUserActions[blockedUser._id])} onClick={refreshBlockedUserState} className="w-full rounded-2xl">
                                 {blockedAction === 'delete' ? 'Retry deletion' : 'Retry suspension'}
                             </Button> : null}
                             <Button variant="outline" onClick={() => { setDeactivationImpact(null); setBlockedAction(null) }} className="w-full rounded-2xl">
@@ -1691,7 +1717,7 @@ export default function Users() {
              </Dialog>
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-2 px-4 sm:px-0">
                 <div>
-                <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+                <h2 className="text-2xl font-semibold text-gray-900 tracking-tight flex items-center gap-3">
                    <UsersIcon className="h-6 w-6 md:h-8 md:w-8 text-[#FFB800]" />
                    User Management
                 </h2>
@@ -1708,7 +1734,7 @@ export default function Users() {
                             Escalate to HQ
                         </Button>
                     ) : null}
-                    <Button data-help-id="users-add" onClick={() => { setEditingUser(null); setUserFormPrefill(null); setImplementationApprovalId(null); setOpen(true); }} className="w-full sm:w-auto bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-black h-12 px-8 rounded-2xl shadow-lg shadow-[#FFB800]/20 hover:-translate-y-0.5 transition-all">
+                    <Button data-help-id="users-add" onClick={() => { setEditingUser(null); setUserFormPrefill(null); setImplementationApprovalId(null); setOpen(true); }} className="w-full sm:w-auto bg-[#FFB800] hover:bg-[#FFD700] text-gray-900 font-semibold h-11 px-5 rounded-xl transition-colors duration-150">
                         <Plus className="mr-3 h-5 w-5" /> Add User
                     </Button>
                     <Dialog open={open} onOpenChange={setOpen}>
@@ -1729,9 +1755,76 @@ export default function Users() {
                 </div>
             </div>
 
+            <section ref={directoryRef} tabIndex={-1} aria-label="User directory" aria-busy={directoryLoading} className="scroll-mt-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5 focus-visible:outline focus-visible:outline-2">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div><h3 className="font-semibold text-gray-900">User directory</h3><p className="mt-1 text-sm text-gray-500">Select a name to review account access and history.</p></div>
+                    <Button variant="outline" className="rounded-xl" disabled={directoryLoading} onClick={() => setRefreshKey(value => value + 1)}><RefreshCw aria-hidden="true" className="mr-2 h-4 w-4" />Refresh users</Button>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-2 sm:col-span-2 lg:col-span-1">
+                        <label htmlFor="user-registry-search" className="block text-sm font-medium text-gray-700">Search users</label>
+                        <Input id="user-registry-search" type="search" placeholder="Name, email, institution, or region" value={registrySearch} onChange={event => { setRegistrySearch(event.target.value); setRegistryPage(1) }} />
+                    </div>
+                    <div className="space-y-2"><label htmlFor="directory-role" className="block text-sm font-medium text-gray-700">Role</label>
+                        <Select value={roleFilter || "all"} onValueChange={value => setDirectoryFilter("role", value === "all" ? "" : value)}><SelectTrigger id="directory-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All roles</SelectItem>{(user?.role === "SuperAdmin" ? ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner", "Guardian"] : user?.role === "RegionalAdmin" ? ["RegionalAdmin", "Admin", "Manager", "Staff", "Guardian"] : ["Admin", "Manager", "Staff", "Guardian"]).map(role => <SelectItem key={role} value={role}>{userRoleLabel(role)}</SelectItem>)}</SelectContent></Select>
+                    </div>
+                    <div className="space-y-2"><label htmlFor="directory-status" className="block text-sm font-medium text-gray-700">Account access</label>
+                        <Select value={statusFilter || "all"} onValueChange={value => setDirectoryFilter("status", value === "all" ? "" : value)}><SelectTrigger id="directory-status"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All account access</SelectItem><SelectItem value="Active">Enabled</SelectItem><SelectItem value="Inactive">Suspended</SelectItem></SelectContent></Select>
+                    </div>
+                    {user?.role !== "Admin" && <div className="space-y-2"><label htmlFor="directory-institution" className="block text-sm font-medium text-gray-700">Institution</label>
+                        <Select value={institutionFilter || "all"} onValueChange={value => setDirectoryFilter("institution", value === "all" ? "" : value)}><SelectTrigger id="directory-institution"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All institutions</SelectItem>{[...new Set([...institutionOptions.map(entry => entry.name), ...(institutionFilter ? [institutionFilter] : [])])].sort().map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}</SelectContent></Select>
+                    </div>}
+                    {user?.role === "SuperAdmin" && <div className="space-y-2"><label htmlFor="directory-region" className="block text-sm font-medium text-gray-700">Region</label>
+                        <Select value={regionFilter || "all"} onValueChange={value => setDirectoryFilter("region", value === "all" ? "" : value)}><SelectTrigger id="directory-region"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All regions</SelectItem>{GHANA_REGIONS.map(region => <SelectItem key={region} value={region}>{region}</SelectItem>)}</SelectContent></Select>
+                    </div>}
+                    <div className="space-y-2"><label htmlFor="directory-sort" className="block text-sm font-medium text-gray-700">Sort users</label>
+                        <Select value={`${registrySortBy}:${registrySortDirection}`} onValueChange={value => { const [id, direction] = value.split(":"); setRegistryPage(1); setSorting(id === "createdAt" ? [] : [{ id, desc: direction === "desc" }]) }}><SelectTrigger id="directory-sort"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="createdAt:desc">Newest added</SelectItem><SelectItem value="name:asc">Name A–Z</SelectItem><SelectItem value="name:desc">Name Z–A</SelectItem></SelectContent></Select>
+                    </div>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                    {activeFilters.map(filter => <button key={filter} type="button" aria-label={`Remove ${filter}`} onClick={() => setDirectoryFilter(filter.startsWith("Role:") ? "role" : filter.startsWith("Access:") ? "status" : filter.startsWith("Institution:") ? "institution" : filter.startsWith("Region:") ? "region" : "governance", "")} className="inline-flex max-w-full items-center gap-2 rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2"><span className="break-words">{filter}</span><X aria-hidden="true" className="h-3 w-3 shrink-0" /></button>)}
+                    {registrySearch && <Button variant="ghost" onClick={() => { setRegistrySearch(""); setRegistryPage(1) }}><X aria-hidden="true" className="mr-2 h-4 w-4" />Clear search</Button>}
+                    {(activeFilters.length > 0 || registrySearch) && <Button variant="ghost" onClick={clearFilters}>Clear all filters</Button>}
+                </div>
+                <p role="status" className="mt-3 text-xs text-gray-500">{directoryLoading ? hasDirectoryLoaded ? "Updating users… Previous results remain visible." : "Loading users…" : directoryError ? "The directory could not be updated." : governanceFilter ? `${filteredData.length} matching users in this view` : `${registryTotal} matching users in your authorized scope`}</p>
+                {directoryError && <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><p>{directoryError}</p><Button variant="outline" onClick={() => setRefreshKey(value => value + 1)}>Retry users</Button></div>}
+                {directoryLoading && !hasDirectoryLoaded ? <div className="space-y-3 py-4">{[0, 1, 2, 3].map(index => <Skeleton key={index} className="h-14 w-full rounded-xl" />)}</div> : <>
+                    <DataTable
+                        key={governanceFilter ? "governance" : "registry"}
+                        showNameFilter={false}
+                        exportTitle="User Directory — Current Page"
+                        exportCurrentPage
+                        exportDisabled={directoryLoading || Boolean(directoryError)}
+                        emptyMessage={directoryLoading ? "Updating users…" : directoryError ? "Results are unavailable. Retry loading the directory." : "No users match these filters. Try another search or clear the filters."}
+                        data={governanceFilter ? filteredData : tableData}
+                        columns={columns}
+                        getRowId={row => row._id}
+                        columnVisibility={columnVisibility}
+                        onColumnVisibilityChange={setColumnVisibility}
+                        meta={{ onEdit: handleEdit, onDelete: (id: string, trigger?: HTMLElement) => { deleteTriggerRef.current = trigger || null; void handleDelete(id) }, onToggleStatus: handleToggleStatus, onSendSetupLink: handleSendSetupLink, onViewDetails: viewUserDetails, onInspect: user?.role === 'SuperAdmin' ? setInspectionTarget : undefined, canManageUser, pendingUserActions, actionsDisabled: directoryLoading || Boolean(directoryError) }}
+                        sorting={sorting}
+                        onSortingChange={update => { setRegistryPage(1); setSorting(update) }}
+                        manualSorting={!governanceFilter}
+                        disablePagination={!governanceFilter}
+                    />
+                    <p className="mt-3 text-xs text-gray-500">CSV and PDF exports contain this page only and the visible columns.</p>
+                    {!governanceFilter && <div className="mt-4 flex flex-col gap-3 border-t border-gray-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm text-gray-500">{directoryLoading || directoryError ? "Last loaded results" : `Showing ${registryTotal === 0 ? 0 : (registryPage - 1) * registryPageSize + 1}-${Math.min(registryPage * registryPageSize, registryTotal)} of ${registryTotal} users`}</p>
+                        <nav aria-label="User pagination" className="flex items-center gap-2">
+                            <Button variant="outline" className="rounded-xl" disabled={directoryLoading || Boolean(directoryError) || registryPage <= 1} onClick={() => setRegistryPage(page => Math.max(1, page - 1))}>Previous</Button>
+                            <span className="min-w-24 text-center text-xs tabular-nums text-gray-600">Page {registryTotal === 0 ? 0 : registryPage} of {registryTotal === 0 ? 0 : registryTotalPages}</span>
+                            <Button variant="outline" className="rounded-xl" disabled={directoryLoading || Boolean(directoryError) || registryTotal === 0 || registryPage >= registryTotalPages} onClick={() => setRegistryPage(page => Math.min(page + 1, Math.max(registryTotalPages, 1)))}>Next</Button>
+                        </nav>
+                    </div>}
+                </>}
+            </section>
+            {inspectionTarget && <InspectUserDialog key={inspectionTarget._id} target={inspectionTarget} onClose={() => setInspectionTarget(null)} />}
+            <details className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5" open={governanceFilter ? true : undefined}>
+                <summary className="cursor-pointer font-semibold text-gray-800 focus-visible:outline focus-visible:outline-2">Governance, approvals, and team oversight{user?.role === "SuperAdmin" ? ` · ${accessApprovalViews.pending.length} pending approvals` : ""}</summary>
+                <div className="mt-5 space-y-5">
             {user?.role === "SuperAdmin" && (hqGovernanceOverview || hqRoleGovernance) ? (
                 <>
-                    <Card data-help-id="users-governance" className="rounded-[2.5rem] border-none shadow-lg bg-gradient-to-r from-[#0f172a] via-[#111827] to-[#172554] text-white overflow-hidden">
+                    <Card data-help-id="users-governance" className="rounded-2xl border border-gray-800 shadow-sm bg-slate-900 text-white overflow-hidden">
                         <CardContent className="p-6 md:p-7 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5">
                             <div>
                                 <p className="text-xs font-black uppercase tracking-[0.3em] text-slate-300">HQ Governance</p>
@@ -1740,39 +1833,15 @@ export default function Users() {
                                     Review access across every region, monitor risky accounts, and work the access approval inbox without leaving user management.
                                 </p>
                             </div>
-                            <div className="w-full xl:w-[320px]">
-                                <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-300 mb-2">Cross-region filter</p>
-                                <Select value={regionFilter || "all"} onValueChange={(value) => {
-                                    setSearchParams((prev) => {
-                                        const next = new URLSearchParams(prev)
-                                        if (value === "all") {
-                                            next.delete("region")
-                                        } else {
-                                            next.set("region", value)
-                                        }
-                                        return next
-                                    })
-                                }}>
-                                    <SelectTrigger className="rounded-2xl border-white/15 bg-white/10 text-white">
-                                        <SelectValue placeholder="All regions" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All regions</SelectItem>
-                                        {hqRegionOptions.map((region) => (
-                                            <SelectItem key={region} value={region}>{region}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
                         </CardContent>
                     </Card>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4 px-4 sm:px-0">
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Total Users</p><p className="text-3xl font-black text-gray-900 mt-1">{hqGovernanceOverview?.totalUsers ?? data.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Regions</p><p className="text-3xl font-black text-gray-900 mt-1">{hqGovernanceOverview?.regionStats.length ?? hqRoleGovernance?.regionStats.length ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Risky Accounts</p><p className="text-3xl font-black text-red-600 mt-1">{hqGovernanceOverview?.riskyAccounts.total ?? hqRoleGovernance?.riskyAccounts.length ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Pending Approvals</p><p className="text-3xl font-black text-amber-600 mt-1">{accessApprovalViews.pending.length}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Dormant Privileged</p><p className="text-3xl font-black text-sky-600 mt-1">{hqGovernanceOverview?.dormantPrivilegedAccounts.total ?? hqRoleGovernance?.dormantPrivilegedAccounts.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Total Users</p><p className="text-3xl font-black text-gray-900 mt-1">{hqGovernanceOverview?.totalUsers ?? data.length}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Regions</p><p className="text-3xl font-black text-gray-900 mt-1">{hqGovernanceOverview?.regionStats.length ?? hqRoleGovernance?.regionStats.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Risky Accounts</p><p className="text-3xl font-black text-red-600 mt-1">{hqGovernanceOverview?.riskyAccounts.total ?? hqRoleGovernance?.riskyAccounts.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Pending Approvals</p><p className="text-3xl font-black text-amber-600 mt-1">{accessApprovalViews.pending.length}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Dormant Privileged</p><p className="text-3xl font-black text-sky-600 mt-1">{hqGovernanceOverview?.dormantPrivilegedAccounts.total ?? hqRoleGovernance?.dormantPrivilegedAccounts.length ?? 0}</p></CardContent></Card>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 px-4 sm:px-0">
@@ -1827,7 +1896,7 @@ export default function Users() {
                     </div>
 
                     <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                        <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden xl:col-span-2">
+                        <Card className="rounded-2xl border border-gray-200 shadow-sm overflow-hidden xl:col-span-2">
                             <CardHeader>
                                 <CardTitle className="text-xl font-black text-gray-900">Role Governance Dashboard</CardTitle>
                             </CardHeader>
@@ -1878,7 +1947,7 @@ export default function Users() {
                             </CardContent>
                         </Card>
 
-                        <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden">
+                        <Card className="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                             <CardHeader>
                                 <CardTitle className="text-xl font-black text-gray-900">
                                     {governanceFilter === "approved-awaiting-implementation"
@@ -1994,7 +2063,7 @@ export default function Users() {
                     </div>
 
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                        <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden">
+                        <Card className="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                             <CardHeader>
                                 <CardTitle className="text-xl font-black text-gray-900">Anomaly Flags</CardTitle>
                             </CardHeader>
@@ -2053,7 +2122,7 @@ export default function Users() {
                             </CardContent>
                         </Card>
 
-                        <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden">
+                        <Card className="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                             <CardHeader>
                                 <CardTitle className="text-xl font-black text-gray-900">Dormant Privileged Accounts</CardTitle>
                             </CardHeader>
@@ -2137,13 +2206,13 @@ export default function Users() {
                     </Card>
 
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 sm:px-0">
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Institutions</p><p className="text-3xl font-black text-gray-900 mt-1">{regionalOversightOverview?.summary.institutions ?? regionalOversightStats?.institutions ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Missing Active Admin</p><p className="text-3xl font-black text-red-600 mt-1">{regionalOversightOverview?.summary.institutionsMissingAdmin ?? regionalOversightStats?.institutionsMissingAdmin ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Invited Users</p><p className="text-3xl font-black text-amber-600 mt-1">{regionalOversightOverview?.summary.invitedUsers ?? regionalOversightStats?.invitedUsers ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Password Setup Pending</p><p className="text-3xl font-black text-sky-600 mt-1">{regionalOversightOverview?.summary.passwordResetsPending ?? regionalOversightStats?.passwordResetsPending ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Institutions</p><p className="text-3xl font-black text-gray-900 mt-1">{regionalOversightOverview?.summary.institutions ?? regionalOversightStats?.institutions ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Missing Active Admin</p><p className="text-3xl font-black text-red-600 mt-1">{regionalOversightOverview?.summary.institutionsMissingAdmin ?? regionalOversightStats?.institutionsMissingAdmin ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Invited Users</p><p className="text-3xl font-black text-amber-600 mt-1">{regionalOversightOverview?.summary.invitedUsers ?? regionalOversightStats?.invitedUsers ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Password Setup Pending</p><p className="text-3xl font-black text-sky-600 mt-1">{regionalOversightOverview?.summary.passwordResetsPending ?? regionalOversightStats?.passwordResetsPending ?? 0}</p></CardContent></Card>
                     </div>
 
-                    <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden">
+                    <Card className="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                         <CardHeader>
                             <CardTitle className="text-xl font-black text-gray-900">Regional Institution Oversight</CardTitle>
                         </CardHeader>
@@ -2311,15 +2380,15 @@ export default function Users() {
                     </Card>
 
                     <div className="grid grid-cols-1 md:grid-cols-5 gap-4 px-4 sm:px-0">
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Team Members</p><p className="text-3xl font-black text-gray-900 mt-1">{institutionTeamOverview?.summary.teamMembers ?? institutionTeamStats?.teamUsers.length ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Managers</p><p className="text-3xl font-black text-blue-700 mt-1">{institutionTeamOverview?.summary.managers ?? institutionTeamStats?.managers.length ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Guardians</p><p className="text-3xl font-black text-teal-700 mt-1">{institutionTeamOverview?.summary.guardians ?? institutionTeamStats?.guardians.length ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Pending Invites</p><p className="text-3xl font-black text-amber-600 mt-1">{institutionTeamOverview?.summary.pendingInvites ?? institutionTeamStats?.pendingInvites.length ?? 0}</p></CardContent></Card>
-                        <Card className="rounded-[2rem] border-none shadow-lg"><CardContent className="p-5"><p className="text-sm text-gray-500">Suspended</p><p className="text-3xl font-black text-rose-600 mt-1">{institutionTeamOverview?.summary.suspended ?? institutionTeamStats?.suspended.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Team Members</p><p className="text-3xl font-black text-gray-900 mt-1">{institutionTeamOverview?.summary.teamMembers ?? institutionTeamStats?.teamUsers.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Managers</p><p className="text-3xl font-black text-blue-700 mt-1">{institutionTeamOverview?.summary.managers ?? institutionTeamStats?.managers.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Guardians</p><p className="text-3xl font-black text-teal-700 mt-1">{institutionTeamOverview?.summary.guardians ?? institutionTeamStats?.guardians.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Pending Invites</p><p className="text-3xl font-black text-amber-600 mt-1">{institutionTeamOverview?.summary.pendingInvites ?? institutionTeamStats?.pendingInvites.length ?? 0}</p></CardContent></Card>
+                        <Card className="rounded-xl border border-gray-200 shadow-sm"><CardContent className="p-5"><p className="text-sm text-gray-500">Suspended</p><p className="text-3xl font-black text-rose-600 mt-1">{institutionTeamOverview?.summary.suspended ?? institutionTeamStats?.suspended.length ?? 0}</p></CardContent></Card>
                     </div>
 
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                        <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden">
+                        <Card className="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                             <CardHeader>
                                 <CardTitle className="text-xl font-black text-gray-900">Role Guide</CardTitle>
                             </CardHeader>
@@ -2354,7 +2423,7 @@ export default function Users() {
                             </CardContent>
                         </Card>
 
-                        <Card className="rounded-[2.5rem] border-none shadow-xl overflow-hidden">
+                        <Card className="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                             <CardHeader>
                                 <CardTitle className="text-xl font-black text-gray-900">Staff Workload</CardTitle>
                             </CardHeader>
@@ -2387,89 +2456,8 @@ export default function Users() {
                 </>
             ) : null}
 
-            {activeFilters.length > 0 && (
-                <div className="px-4 sm:px-0">
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                        <div className="flex flex-wrap gap-2">
-                            {activeFilters.map((filter) => (
-                                <span key={filter} className="text-xs font-black text-amber-700 bg-white border border-amber-200 px-3 py-1 rounded-full">
-                                    {filter}
-                                </span>
-                            ))}
-                        </div>
-                        <Button variant="ghost" onClick={clearFilters} className="h-9 rounded-xl text-amber-700 hover:text-amber-800 hover:bg-amber-100">
-                            <X className="h-4 w-4 mr-2" />
-                            Clear Filters
-                        </Button>
-                    </div>
                 </div>
-            )}
-
-            <div className="rounded-none sm:rounded-2xl md:rounded-[2.5rem] border-y sm:border border-gray-100 bg-white shadow-sm sm:shadow-xl overflow-hidden p-0 sm:p-2">
-                {loading || tableLoading ? (
-                    <div className="p-4 space-y-4">
-                        <div className="flex items-center space-x-4">
-                           <Skeleton className="h-12 w-full" />
-                        </div>
-                        <div className="space-y-2">
-                            <Skeleton className="h-12 w-full" />
-                            <Skeleton className="h-12 w-full" />
-                            <Skeleton className="h-12 w-full" />
-                            <Skeleton className="h-12 w-full" />
-                        </div>
-                    </div>
-                ) : (
-                    <>
-                        {inspectionTarget && <InspectUserDialog key={inspectionTarget._id} target={inspectionTarget} onClose={() => setInspectionTarget(null)} />}
-                        <DataTable 
-                            exportTitle="System Users Report"
-                            data={governanceFilter ? filteredData : tableData}
-                            columns={columns} 
-                            meta={{ 
-                                onEdit: handleEdit, 
-                                onDelete: handleDelete,
-                                onToggleStatus: handleToggleStatus,
-                                onSendSetupLink: handleSendSetupLink,
-                                onViewAudit: setAuditUser,
-                                onInspect: user?.role === 'SuperAdmin' ? setInspectionTarget : undefined,
-                                canManageUser,
-                            }} 
-                            sorting={sorting}
-                            onSortingChange={setSorting}
-                            disablePagination={!governanceFilter}
-                        />
-                        {!governanceFilter ? (
-                            <div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-                                <p className="text-sm font-medium text-gray-500">
-                                    Showing {registryTotal === 0 ? 0 : (registryPage - 1) * registryPageSize + 1}-
-                                    {Math.min(registryPage * registryPageSize, registryTotal)} of {registryTotal} users
-                                </p>
-                                <div className="flex items-center gap-2">
-                                    <Button
-                                        variant="outline"
-                                        className="rounded-xl"
-                                        disabled={registryPage <= 1}
-                                        onClick={() => setRegistryPage((page) => Math.max(1, page - 1))}
-                                    >
-                                        Previous
-                                    </Button>
-                                    <span className="min-w-[96px] text-center text-sm font-medium text-gray-600">
-                                        Page {registryTotal === 0 ? 0 : registryPage} of {Math.max(registryTotalPages, 1)}
-                                    </span>
-                                    <Button
-                                        variant="outline"
-                                        className="rounded-xl"
-                                        disabled={registryTotal === 0 || registryPage >= registryTotalPages}
-                                        onClick={() => setRegistryPage((page) => Math.min(page + 1, Math.max(registryTotalPages, 1)))}
-                                    >
-                                        Next
-                                    </Button>
-                                </div>
-                            </div>
-                        ) : null}
-                    </>
-                )}
-            </div>
+            </details>
         </div>
     )
 }

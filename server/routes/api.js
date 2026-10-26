@@ -63,6 +63,8 @@ import { notifyUsers } from '../utils/notifications.js';
 import { notifyGuardianUpdates } from '../utils/guardianNotifications.js';
 import { getVapidPublicKey, isWebPushConfigured, isTrustedPushEndpoint } from '../utils/webPush.js';
 import { logAuditEvent } from '../utils/audit.js';
+import { auditLogQuery } from '../utils/auditLogQuery.js';
+import { userRegistrySort } from '../utils/userRegistrySort.js';
 import { canAccessSupportTicket, isSupportResponder } from '../utils/supportAccess.js';
 import { sendPasswordResetEmail } from '../utils/mailer.js';
 import { canSendWhatsApp, sendWhatsAppMessage } from '../utils/whatsapp.js';
@@ -4020,39 +4022,12 @@ router.put('/support-tickets/:id/escalation', userAssignmentMutation(async (req,
 
 // ==================== AUDIT LOGS ====================
 
-const buildAuditLogQuery = async (user, params) => {
-    const scope = await getAuditLogScope(user);
-    const { entityType, action, actorId, entityId, search, dateFrom, dateTo } = params;
-    const query = { ...scope };
-
-    if (entityType) query.entityType = entityType;
-    if (action) query.action = action;
-    if (actorId) query.actorId = actorId;
-    if (entityId) query.entityId = { $regex: entityId, $options: 'i' };
-    if (dateFrom || dateTo) {
-        query.createdAt = {};
-        if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
-        if (dateTo) {
-            const end = new Date(dateTo);
-            end.setHours(23, 59, 59, 999);
-            query.createdAt.$lte = end;
-        }
-    }
-    if (search) {
-        query.$or = [
-            { summary: { $regex: search, $options: 'i' } },
-            { actorName: { $regex: search, $options: 'i' } },
-            { entityType: { $regex: search, $options: 'i' } },
-            { entityId: { $regex: search, $options: 'i' } },
-        ];
-    }
-
-    return query;
-};
+const buildAuditLogQuery = async (user, params) => auditLogQuery(await getAuditLogScope(user), params);
 
 router.get('/audit-logs', requireRole('HQManager', 'HQStaff', 'Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const query = await buildAuditLogQuery(req.user, req.query);
+        const optionScope = await getAuditLogScope(req.user);
+        const query = auditLogQuery(optionScope, req.query);
         const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
         const parsedPageSize = Number.parseInt(String(req.query.pageSize || ''), 10);
         const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
@@ -4087,9 +4062,9 @@ router.get('/audit-logs', requireRole('HQManager', 'HQStaff', 'Admin', 'SuperAdm
                     },
                 },
             ]),
-            AuditLog.distinct('entityType', query),
+            AuditLog.distinct('entityType', optionScope),
             AuditLog.aggregate([
-                { $match: query },
+                { $match: optionScope },
                 { $match: { actorId: { $exists: true, $ne: null } } },
                 {
                     $group: {
@@ -4124,6 +4099,7 @@ router.get('/audit-logs', requireRole('HQManager', 'HQStaff', 'Admin', 'SuperAdm
             })),
         });
     } catch (error) {
+        if (error.status === 400) return res.status(400).json({ message: error.message });
         console.error('Error fetching audit logs:', error);
         res.status(500).json({ message: 'Error fetching audit logs' });
     }
@@ -4155,6 +4131,7 @@ router.get('/audit-logs/export', requireRole('HQManager', 'HQStaff', 'Admin', 'S
         res.attachment(`Audit_Log_Export_${new Date().toISOString().split('T')[0]}.csv`);
         return res.send(csv);
     } catch (error) {
+        if (error.status === 400) return res.status(400).json({ message: error.message });
         console.error('Error exporting audit logs:', error);
         res.status(500).json({ message: 'Error exporting audit logs' });
     }
@@ -4201,6 +4178,7 @@ router.get('/audit-logs/anomalies', requireRole('HQManager', 'HQStaff', 'Admin',
                             institution: { $ifNull: ['$institution', 'N/A'] },
                         },
                         actorName: { $first: '$actorName' },
+                        actorId: { $first: '$actorId' },
                         count: { $sum: 1 },
                     },
                 },
@@ -4229,6 +4207,7 @@ router.get('/audit-logs/anomalies', requireRole('HQManager', 'HQStaff', 'Admin',
                             institution: { $ifNull: ['$institution', 'N/A'] },
                         },
                         actorName: { $first: '$actorName' },
+                        actorId: { $first: '$actorId' },
                         count: { $sum: 1 },
                     },
                 },
@@ -4247,6 +4226,7 @@ router.get('/audit-logs/anomalies', requireRole('HQManager', 'HQStaff', 'Admin',
 
         const failedAuthActors = failedAuthActorRows.map((entry) => ({
             actorName: entry.actorName || 'Unknown',
+            actorId: entry.actorId || null,
             institution: entry._id.institution,
             count: entry.count,
         }));
@@ -4258,6 +4238,7 @@ router.get('/audit-logs/anomalies', requireRole('HQManager', 'HQStaff', 'Admin',
 
         const massUpdates = massUpdateRows.map((entry) => ({
             actorName: entry.actorName || 'Unknown',
+            actorId: entry.actorId || null,
             institution: entry._id.institution,
             count: entry.count,
             severity: entry.count >= 40 ? 'high' : 'medium',
@@ -11117,6 +11098,7 @@ router.put('/attendance-logs/:id/reject', requireRole('IndustryPartner'), async 
 
 router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
+        const sort = userRegistrySort(req.query);
         const filter = await getUserManagementFilter(req.user);
         const {
             role,
@@ -11188,7 +11170,7 @@ router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'
             User.find(filter)
                 .populate('partnerId', 'name')
                 .populate('linkedLearners', 'firstName middleName lastName trackingId institution')
-                .sort({ createdAt: -1, name: 1 })
+                .sort(sort)
                 .skip((page - 1) * pageSize)
                 .limit(pageSize),
         ]);
@@ -11202,6 +11184,7 @@ router.get('/users/registry', requireRole('Admin', 'SuperAdmin', 'RegionalAdmin'
             totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
         });
     } catch (error) {
+        if (error.status === 400) return res.status(400).json({ message: error.message });
         console.error('Error fetching user registry:', error);
         res.status(500).json({ message: 'Server Error' });
     }
