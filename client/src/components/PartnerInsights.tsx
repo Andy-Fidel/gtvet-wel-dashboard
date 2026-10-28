@@ -14,7 +14,7 @@ type Insights = {
 const number = (value = 0) => value.toLocaleString()
 const chartColors = ['#0f766e', '#f59e0b', '#2563eb', '#9333ea', '#dc2626', '#0891b2', '#65a30d', '#c026d3', '#ea580c', '#475569']
 
-export function PartnerInsights() {
+export function PartnerInsights({ onInspect }: { onInspect?: (filters: Record<string, string>) => void } = {}) {
   const { authFetch, user } = useAuth()
   const query = useQuery<Insights>({
     queryKey: ['partner-insights', user?._id],
@@ -84,11 +84,11 @@ export function PartnerInsights() {
         </div>
       </div>
     ))}</div>
-    <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">Reported slots are registry totals, not verified availability. Verified capacity and reserved slots are not yet tracked. Partner counts follow the partner registry scope; placements and requests follow institution access. All periods are included; archived operations are excluded.</p>
+    <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">Reported slots are registry totals, not verified availability. Reserved slots are managed through approved, date-bound allocations. Review the partner’s reservations for the intended placement dates; registry totals alone do not establish availability. Partner counts follow the partner registry scope; placements and requests follow institution access. All periods are included; archived operations are excluded.</p>
     <div className="grid gap-4 lg:grid-cols-2">{donut('Partners by region', data.regions)}{donut('Partners by sector', data.sectors)}</div>
     <div className="grid gap-4 lg:grid-cols-2"><Card><CardHeader><CardTitle>Placement request progress</CardTitle></CardHeader><CardContent className="overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">Requests by current status</caption><thead><tr><th className="pb-3">Status</th><th>Requests</th><th>Slots requested</th></tr></thead><tbody>{data.requests.map(row => <tr key={row._id} className="border-t"><td className="py-3">{row._id.replaceAll('_', ' ')}</td><td>{row.count}</td><td>{row.requestedSlots}</td></tr>)}</tbody></table>{!data.requests.length && <p>No requests in this scope.</p>}<p className="mt-4 text-xs text-muted-foreground">Requests can include multiple learners. Requested slots may overlap across requests and are not reservations.</p>{open.map(row => <p key={row._id} className="mt-2 text-sm">Oldest {row._id.replaceAll('_', ' ').toLowerCase()}: {row.oldestCreatedAt ? new Date(row.oldestCreatedAt).toLocaleDateString() : 'Date unavailable'}</p>)}</CardContent></Card>
     <Card><CardHeader><CardTitle>Partner records needing attention</CardTitle></CardHeader><CardContent className="space-y-3">{[
       ['Awaiting HQ approval', s.pendingApproval], ['Programme eligibility missing', s.missingPrograms], ['District missing', s.missingDistrict], ['Email missing', s.missingEmail], ['MoU document missing', s.missingMou],
-    ].map(([label, count]) => <div className="flex justify-between gap-3 border-b pb-2 text-sm" key={String(label)}><span>{label}</span><strong>{number(Number(count) || 0)}</strong></div>)}<p className="text-xs text-muted-foreground">A partner may appear in multiple categories. Missing records do not establish that an agreement or contact does not exist.</p></CardContent></Card></div>
+    ].map(([label, count], index) => <div className="flex items-center justify-between gap-3 border-b pb-2 text-sm" key={String(label)}><span>{label}</span>{onInspect ? <button type="button" className="min-h-11 min-w-11 rounded-lg px-2 font-semibold text-blue-700 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2" aria-label={`View partners: ${label}`} onClick={() => onInspect(index === 0 ? { approvalStatus: 'PendingHQApproval' } : { attention: ['missingPrograms', 'missingDistrict', 'missingEmail', 'missingMou'][index - 1] })}>{number(Number(count) || 0)}</button> : <strong>{number(Number(count) || 0)}</strong>}</div>)}<p className="text-xs text-muted-foreground">A partner may appear in multiple categories. Missing records do not establish that an agreement or contact does not exist.</p></CardContent></Card></div>
   </section>
 }

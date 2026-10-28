@@ -1,5 +1,50 @@
 [
   {
+    "id": "2026-10-28-partner-registry-workflow",
+    "date": "2026-10-28",
+    "title": "Find and review partners more easily",
+    "summary": "A clearer HQ registry brings partner search, approval context and account status together.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Find partners with focused registry controls",
+        "body": "The HQ Partner Registry now opens with the partner list. Filter by region, sector, partner type, approval, operational status and missing information, and sort across every page. Search, filters and page position stay in the address so you can return to the same results. CSV and PDF exports include all matching partners using those filters.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open Partner Registry",
+          "path": "/hq-industry-partners"
+        }
+      },
+      {
+        "kind": "Improved",
+        "title": "Review partner evidence and account setup clearly",
+        "body": "Partner records distinguish approval, operational status, location evidence and reported capacity. Review reservations for the intended placement dates before assigning learners. Account creation shows progress and coordinator setup status, while failed registry or detail requests offer a retry without losing context.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ]
+      },
+      {
+        "kind": "Improved",
+        "title": "Move from insights to records needing attention",
+        "body": "Partner and industry insights has its own section with the existing summary card design. Select an attention count to open the matching partner records for review. Change requests and pending slot approvals remain available in their own sections.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ]
+      }
+    ]
+  },
+  {
     "id": "2026-10-26-user-governance-and-audit",
     "date": "2026-10-26",
     "title": "Clearer user management and audit investigations",

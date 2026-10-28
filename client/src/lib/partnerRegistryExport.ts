@@ -25,13 +25,13 @@ export function partnerRegistryCsv(partners: HQPartnerRecord[]) {
   return '\uFEFF' + rows.map(row => row.map(csvCell).join(',')).join('\r\n')
 }
 
-export async function partnerRegistryPdf(partners: HQPartnerRecord[], filters: { query: string; status: string }, generatedAt = new Date()) {
+export async function partnerRegistryPdf(partners: HQPartnerRecord[], filters: { query: string; status: string; extra?: string }, generatedAt = new Date()) {
   const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')])
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   doc.setFontSize(17)
   doc.text('HQ Industry Partner Registry', 14, 18)
   doc.setFontSize(9)
-  const description = `Generated: ${generatedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC | Partners: ${partners.length}\nApproval: ${filters.status === 'PendingHQApproval' ? 'Pending HQ Approval' : filters.status} | Search: ${filters.query || 'All partners'}`
+  const description = `Generated: ${generatedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC | Partners: ${partners.length}\nApproval: ${filters.status === 'PendingHQApproval' ? 'Pending HQ Approval' : filters.status} | Search: ${filters.query || 'All partners'}${filters.extra ? `\n${filters.extra}` : ''}`
   const lines = doc.splitTextToSize(description, 269)
   doc.text(lines, 14, 25)
   autoTable(doc, {

@@ -50,6 +50,7 @@ import { PartnerSlotAllocation } from '../models/PartnerSlotAllocation.js';
 import { importSummary, preparePartnerImport, startPartnerImport, advancePartnerImport } from '../utils/partnerImportJobs.js';
 import { decoratePartnerCapacities, partnerCapacityAt, availablePartnerPipeline } from '../utils/partnerCapacity.js';
 import { partnerDirectoryFilters } from '../utils/partnerDirectory.js';
+import { hqRegistryOptions, partnerPortalSummaries } from '../utils/hqPartnerRegistry.js';
 import { canEditPlacementRequest, placementRequestEditValues } from '../utils/placementRequestEdits.js';
 import { isPartnerSector } from '../utils/partnerTaxonomy.js';
 import { hasCoordinates, isFlexibleWorksite, normalizeCoordinates, worksiteRequiresCoordinates, coordinateStatus, registeredCoordinates, monitoringLocationCheck } from '../utils/workplaceCoordinates.js';
@@ -13345,6 +13346,8 @@ router.put('/vacancies/:id', requireRole('IndustryPartner'), async (req, res) =>
 
 router.get('/industry-partners', async (req, res) => {
     try {
+        const registry = req.query.registry === '1' && isHQRole(req.user.role);
+        const options = registry ? hqRegistryOptions(req.query) : { clauses: [], sort: { createdAt: -1, name: 1, _id: 1 } };
         const directory = await partnerDirectoryFilters(req.user, req.query);
         const includeAll = directory.directory ? directory.submissions : req.query.includeAll === '1' || req.query.includeAll === 'true';
         const searchQuery = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -13358,8 +13361,8 @@ router.get('/industry-partners', async (req, res) => {
             : 24;
         const scopeClauses = [await partnerVisibilityFilter(req.user), ...directory.clauses];
 
-        const filter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
-        const summaryFilter = scopeClauses.length ? { $and: [...scopeClauses] } : {};
+        const filter = { $and: [...scopeClauses, ...options.clauses] };
+        const summaryFilter = { $and: registry ? [scopeClauses[0]] : [...scopeClauses] };
 
         if (!includeAll) {
             filter.$and = [
@@ -13421,7 +13424,7 @@ router.get('/industry-partners', async (req, res) => {
         const partnersQuery = IndustryPartner.find(availablePage ? { $and: [filter, { _id: { $in: availablePage.items.map(item => item._id) } }] } : filter)
             .populate('addedBy', 'name role institution region')
             .populate('approvalReviewedBy', 'name role')
-            .sort({ createdAt: -1, name: 1, _id: 1 });
+            .sort(options.sort);
 
         if (usePagination && !availablePage) {
             partnersQuery.skip((page - 1) * pageSize).limit(pageSize);
@@ -13465,14 +13468,15 @@ router.get('/industry-partners', async (req, res) => {
                     },
                 ])
                 : Promise.resolve(null),
-            directory.directory && !directory.submissions
+            registry ? IndustryPartner.distinct('sector', scopeClauses[0]) : directory.directory && !directory.submissions
                 ? IndustryPartner.distinct('sector', { status: 'Active', $and: [scopeClauses[0], ...directory.clauses.filter(clause => !Object.hasOwn(clause, 'sector')), { $or: [{ approvalStatus: 'Approved' }, { approvalStatus: { $exists: false } }] }] })
                 : Promise.resolve(null),
         ]);
         const capacityAwarePartners = req.user.institution && ['Admin', 'Manager', 'Staff'].includes(req.user.role)
             ? await decoratePartnerCapacities(partners, req.user.institution, capacityDate)
             : partners;
-        const partnersWithPermissions = capacityAwarePartners.map(partner => ({
+        const registryPartners = registry && usePagination ? await partnerPortalSummaries(capacityAwarePartners, { emailConflicts: req.user.role === 'SuperAdmin' }) : capacityAwarePartners;
+        const partnersWithPermissions = registryPartners.map(partner => ({
             ...partner,
             canRequestChanges: canRequestPartnerChanges(req.user, partner),
             canResubmit: canResubmitPartner(req.user, partner),
@@ -13488,6 +13492,7 @@ router.get('/industry-partners', async (req, res) => {
                 pageSize,
                 totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
                 summary,
+                ...(registry ? { sectors: (directorySectors || []).filter(value => typeof value === "string" && value).sort() } : {}),
                 ...(directory.directory ? { institutionRegion: directory.institutionRegion, selectedRegion: directory.selectedRegion, sectors: directorySectors?.filter(value => typeof value === 'string' && value).sort() || [] } : {}),
             });
         }
@@ -13540,8 +13545,9 @@ router.get('/industry-partners/:id', requireRole('SuperAdmin', 'HQManager', 'HQS
         const reviewHistoryCount = partner.changeRequests?.length || 0;
         const deleteBlockers = getPartnerDeletionBlockers(dependencies, reviewHistoryCount);
         delete partner.changeRequests;
+        const [registryPartner] = await partnerPortalSummaries([partner], { emailConflicts: req.user.role === 'SuperAdmin' });
         return res.json({
-            partner,
+            partner: registryPartner,
             dependencies,
             auditHistory,
             deletion: {

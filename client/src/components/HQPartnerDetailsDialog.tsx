@@ -1,4 +1,5 @@
-import { format } from 'date-fns'
+import { auditTimestamp } from '@/lib/audit-log'
+import { partnerAttention, locationLabel, portalLabels } from '@/lib/hqPartnerRegistry'
 import { Building2, ExternalLink, FileClock, Mail, MapPin, Pencil, Phone, ShieldCheck, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,7 @@ export type PartnerDeletionBlocker = {
 }
 
 export type HQPartnerRecord = IndustryPartner & {
+  portalAccount?: { state: string; count: number }
   district?: string
   tradeArea?: string
   town?: string
@@ -60,7 +62,7 @@ const dependencyLabels: Record<string, string> = {
 }
 
 const display = (value?: string | number | null) => value === undefined || value === null || value === '' ? 'Not provided' : String(value)
-const dateLabel = (value?: string) => value ? format(new Date(value), 'dd MMM yyyy, HH:mm') : 'Not available'
+const dateLabel = (value?: string) => value ? auditTimestamp(value) : 'Not available'
 
 function Detail({ label, value }: { label: string; value?: string | number | null }) {
   return <div className="rounded-2xl bg-slate-50 p-4"><p className="text-[11px] font-black uppercase tracking-widest text-slate-400">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{display(value)}</p></div>
@@ -74,6 +76,7 @@ export function HQPartnerDetailsDialog({
   onEdit,
   onDelete,
   canManage,
+  selectedName, error, onRetry, onRestoreFocus,
 }: {
   open: boolean
   loading: boolean
@@ -82,6 +85,10 @@ export function HQPartnerDetailsDialog({
   onEdit: (partner: HQPartnerRecord) => void
   onDelete: (details: HQPartnerDetails) => void
   canManage: boolean
+  selectedName?: string
+  error?: string
+  onRetry?: () => void
+  onRestoreFocus?: () => void
 }) {
   const partner = details?.partner
   const dependencyEntries = Object.entries(details?.dependencies || {}).filter(([, count]) => count > 0)
@@ -90,8 +97,9 @@ export function HQPartnerDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] overflow-y-auto rounded-[2rem] border-none bg-white p-0 sm:max-w-4xl">
+      <DialogContent className="max-h-[92vh] overflow-y-auto rounded-[2rem] border-none bg-white p-0 sm:max-w-4xl motion-reduce:animate-none" onCloseAutoFocus={event => { if (onRestoreFocus) { event.preventDefault(); onRestoreFocus() } }}>
         <div className="p-6 sm:p-8">
+          {(loading || !partner) && <DialogHeader className="pr-8"><DialogTitle>{selectedName || 'Partner details'}</DialogTitle><DialogDescription>Complete registry record and operational usage.</DialogDescription></DialogHeader>}
           {loading ? <div className="py-24 text-center font-semibold text-slate-400">Loading complete partner record…</div> : partner && details ? (
             <div className="space-y-7">
               <DialogHeader className="pr-12">
@@ -111,6 +119,12 @@ export function HQPartnerDetailsDialog({
                 <Badge className="border-0 bg-violet-100 text-violet-700">{display(partner.operatingModel).replace(/([a-z])([A-Z])/g, '$1 $2')}</Badge>
               </div>
 
+              <section aria-label="Placement review" className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+                <h3 className="font-semibold">Placement review</h3>
+                <p className="mt-2">Approval and active status do not confirm availability for specific placement dates. Reported slots are registry figures; review reservations and the placement requirements before assigning learners.</p>
+                <p className="mt-2">{locationLabel(partner)} · {partner.portalAccount ? portalLabels[partner.portalAccount.state] : 'Portal account status unavailable'}</p>
+                {partnerAttention(partner).length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-amber-900">{partnerAttention(partner).map(reason => <li key={reason}>{reason}</li>)}</ul>}
+              </section>
               <section>
                 <h3 className="mb-3 text-sm font-black uppercase tracking-wider text-slate-500">Registry details</h3>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -119,7 +133,7 @@ export function HQPartnerDetailsDialog({
                   <Detail label="Region" value={partner.region} />
                   <Detail label="District" value={partner.district} />
                   <Detail label="Town" value={partner.town} />
-                  <Detail label="Capacity" value={`${partner.usedSlots || 0} used of ${partner.totalSlots || 0}`} />
+                  <Detail label="Reported capacity" value={`${partner.usedSlots || 0} used of ${partner.totalSlots || 0}`} />
                   <Detail label="Registered" value={dateLabel(partner.createdAt)} />
                   <Detail label="Last updated" value={dateLabel(partner.updatedAt)} />
                 </div>
@@ -132,7 +146,7 @@ export function HQPartnerDetailsDialog({
                     <p><span className="font-bold text-slate-800">Address:</span> {display(partner.location)}</p>
                     {partner.approximateLocation && <p><span className="font-bold text-slate-800">Approximate town location:</span> {partner.approximateLocation.name} ({partner.approximateLocation.lat}, {partner.approximateLocation.lng}) · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" className="underline">© OpenStreetMap contributors</a></p>}
                     <p><span className="font-bold text-slate-800">GhanaPost GPS:</span> {display(partner.ghanaPostGps)}</p>
-                    <p><span className="font-bold text-slate-800">Location type:</span> {partner.coordinates?.precision === 'Town' ? 'Town (approximate 5 km radius)' : 'Actual workplace (500 m radius)'}</p>
+                    <p><span className="font-bold text-slate-800">Location type:</span> {partner.coordinates?.lat != null && partner.coordinates?.lng != null ? partner.coordinates.precision === 'Town' ? 'Town (approximate 5 km review radius)' : 'Actual workplace (500 m review radius)' : 'Coordinates not recorded'}</p>
                     <p><span className="font-bold text-slate-800">Coordinates:</span> {partner.coordinates?.lat != null && partner.coordinates?.lng != null ? `${partner.coordinates.lat}, ${partner.coordinates.lng}` : 'Pending capture'}</p>
                     <p><span className="font-bold text-slate-800">Verification:</span> {display(partner.locationVerificationStatus).replace(/([a-z])([A-Z])/g, '$1 $2')}</p>
                     {partner.locationVerificationNotes ? <p className="rounded-xl bg-slate-50 p-3">{partner.locationVerificationNotes}</p> : null}
@@ -154,7 +168,7 @@ export function HQPartnerDetailsDialog({
                 <h3 className="mb-3 flex items-center gap-2 text-sm font-black uppercase tracking-wider text-slate-500"><ShieldCheck className="h-4 w-4" /> Governance</h3>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Detail label="Submitted by" value={`${partner.addedBy?.name || 'Unknown'}${partner.addedBy?.role ? ` · ${partner.addedBy.role}` : ''}`} />
-                  <Detail label="HQ reviewer" value={partner.approvalReviewedBy?.name || 'Awaiting review'} />
+                  <Detail label="HQ reviewer" value={partner.approvalReviewedBy?.name || (partner.approvalStatus === 'PendingHQApproval' ? 'Awaiting review' : 'Reviewer not recorded')} />
                   <Detail label="Linked institutions" value={partner.linkedInstitutions?.length || 0} />
                 </div>
                 {partner.approvalComment ? <p className="mt-3 rounded-2xl bg-slate-50 p-4 text-sm text-slate-700"><span className="font-bold">HQ comment:</span> {partner.approvalComment}</p> : null}
@@ -184,7 +198,7 @@ export function HQPartnerDetailsDialog({
                 </div> : null}
               </div> : null}
             </div>
-          ) : <div className="py-24 text-center font-semibold text-rose-600">The complete partner record could not be loaded.</div>}
+          ) : <div role="alert" className="space-y-4 py-12 text-center text-sm text-red-700"><p>{error || "The complete partner record could not be loaded."}</p>{onRetry && <Button variant="outline" onClick={onRetry}>Retry details</Button>}</div>}
         </div>
       </DialogContent>
     </Dialog>

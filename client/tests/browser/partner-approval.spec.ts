@@ -1,9 +1,10 @@
+import releases from '../../src/data/releases.json' with { type: 'json' }
 import { test, expect, type Page } from '@playwright/test'
 
 const partnerId = '507f1f77bcf86cd799439011'
 
 async function setup(page: Page, role: string, status: string) {
-  await page.addInitScript(() => localStorage.setItem('gtvets-help-auto-started:v1:qa-user', 'seen'))
+  await page.addInitScript(latest => { localStorage.setItem('gtvets-help-auto-started:v1:qa-user', 'seen'); localStorage.setItem('gtvets-release-read:v1:qa-user', latest) }, releases[0].id)
   let partner = {
     _id: partnerId, name: 'QA workplace', sector: 'Automotive', region: 'Ashanti',
     totalSlots: 10, usedSlots: 0, status: 'Active', approvalStatus: status, approvalVersion: 3,
@@ -37,7 +38,8 @@ async function setup(page: Page, role: string, status: string) {
 test('HQ rejection requires a reason and sends the reviewed version', async ({ page }) => {
   const writes = await setup(page, 'HQManager', 'PendingHQApproval')
   await page.goto('/hq-industry-partners')
-  await page.getByRole('button', { name: 'Reject', exact: true }).click()
+  await page.getByRole('button', { name: 'Actions for QA workplace', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Reject', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Reject Partner' })
   const submit = dialog.getByRole('button', { name: 'Reject Partner' })
   await expect(submit).toBeDisabled()

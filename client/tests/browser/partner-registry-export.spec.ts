@@ -1,3 +1,4 @@
+import releases from '../../src/data/releases.json' with { type: 'json' }
 import { test, expect, type Page, type Download } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 
@@ -16,7 +17,7 @@ async function setup(page: Page, options: { failExport?: boolean; empty?: boolea
     partnerType: 'RegisteredCompany',
     // Legacy partners without approvalStatus are treated as approved.
   }))
-  await page.addInitScript(() => localStorage.setItem('gtvets-help-auto-started:v1:qa-user', 'seen'))
+  await page.addInitScript(latest => { localStorage.setItem('gtvets-help-auto-started:v1:qa-user', 'seen'); localStorage.setItem('gtvets-release-read:v1:qa-user', latest) }, releases[0].id)
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url()), path = url.pathname
     if (path === '/api/auth/me') return route.fulfill({ json: { _id: 'qa-user', name: 'HQ reviewer', role: 'HQManager', status: 'Active', hqScopeType: 'National' } })
@@ -40,7 +41,9 @@ async function setup(page: Page, options: { failExport?: boolean; empty?: boolea
 test('CSV exports every filtered partner with safe spreadsheet cells and escaped contact details', async ({ page }) => {
   const exports = await setup(page)
   await page.getByPlaceholder('Search company, sector, contact...').fill('Export')
-  await page.getByRole('button', { name: 'Approved', exact: true }).click()
+  await expect(page).toHaveURL(/q=Export/)
+  await page.getByRole('combobox', { name: 'Approval', exact: true }).click()
+  await page.getByRole('option', { name: 'Approved', exact: true }).click()
   const button = page.getByRole('button', { name: 'Export CSV', exact: true })
   await expect(button).toBeEnabled()
   const downloadPromise = page.waitForEvent('download')
@@ -54,7 +57,7 @@ test('CSV exports every filtered partner with safe spreadsheet cells and escaped
   expect(csv).toContain('"Ama ""Adwoa"", Mensah\nSupervisor"')
   expect(csv).toContain('"Approved","Active","10","0"')
   expect(exports).toHaveLength(1)
-  expect(Object.fromEntries(exports[0])).toEqual({ includeAll: '1', q: 'Export', approvalStatus: 'Approved' })
+  expect(Object.fromEntries(exports[0])).toEqual({ includeAll: '1', registry: '1', q: 'Export', approvalStatus: 'Approved' })
 })
 
 test('PDF downloads all partners in a multipage report with filters and page numbers', async ({ page }, testInfo) => {

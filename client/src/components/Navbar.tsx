@@ -28,6 +28,7 @@ export function Navbar() {
   const getPageTitle = (pathname: string) => {
     switch(pathname) {
       case '/': return 'Dashboard';
+      case '/hq-industry-partners': return 'Partner Registry';
       case '/learners': return 'Learner Register';
       case '/graduated-learners': return 'Graduated Learners';
       case '/placements': return 'Workplace Placements';
