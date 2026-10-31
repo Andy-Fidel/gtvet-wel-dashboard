@@ -1,5 +1,32 @@
 [
   {
+    "id": "2026-10-31-placement-initiation-dates",
+    "date": "2026-10-31",
+    "title": "See when a placement was initiated",
+    "summary": "Placement initiation dates are now visible separately from scheduled work dates.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Find the placement creation date and time",
+        "body": "Learner profiles show Placement initiated beside the active placement\u2019s start and end dates, in placement history and on the timeline. The placements list and batch details also show the recorded creation timestamp in UTC. Missing timestamps display Not recorded; planned placements display Not initiated.",
+        "audience": "Institution and HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Learner Register",
+          "path": "/learners"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-10-31-learner-register-exports",
     "date": "2026-10-31",
     "title": "Choose which learners to export",

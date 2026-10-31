@@ -1,4 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
+import { PlacementInitiated } from '@/components/PlacementInitiated'
 import type { ColumnDef } from "@tanstack/react-table"
 import { Button } from "@/components/ui/button"
 import { MoreHorizontal, ArrowUpDown, MessageSquare, HeartPulse, Paperclip, Handshake, Archive, CalendarClock } from "lucide-react"
@@ -57,6 +58,7 @@ export type Placement = {
     closedBy?: string | { _id: string; name: string; role?: string } | null
     closureReason?: string
     closureNote?: string
+    createdAt?: string | null
     startDate: string
     endDate: string
     institution?: string
@@ -262,6 +264,11 @@ export const columns: ColumnDef<Placement>[] = [
   {
     accessorKey: "supervisorName",
     header: "Supervisor",
+  },
+  {
+      accessorKey: "createdAt",
+      header: "Placement initiated",
+      cell: ({ row }) => <PlacementInitiated createdAt={row.original.createdAt} hideLabel />,
   },
   {
       accessorKey: "startDate",

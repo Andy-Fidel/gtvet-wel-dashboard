@@ -14905,7 +14905,7 @@ router.get('/placement-requests/:id', async (req, res) => {
             .populate('reviewedByInstitution', 'name role')
             .populate({
                 path: 'convertedPlacementIds',
-                select: 'learner companyName sector location supervisorName supervisorPhone supervisorEmail startDate endDate status placementRegion worksiteMode locationVerificationStatus trackingId closureReason',
+                select: 'learner companyName sector location supervisorName supervisorPhone supervisorEmail startDate endDate status placementRegion worksiteMode locationVerificationStatus trackingId closureReason createdAt',
                 populate: { path: 'learner', select: 'firstName middleName lastName name trackingId indexNumber program year' },
             })
             .lean();

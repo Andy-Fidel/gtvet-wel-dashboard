@@ -1,3 +1,4 @@
+import { PlacementInitiated } from '@/components/PlacementInitiated'
 import { CalendarDays, MapPin, UserRound, UsersRound } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,7 @@ type LearnerSummary = {
 
 type ConvertedPlacement = {
   _id: string
+  createdAt?: string | null
   learner: LearnerSummary
   companyName?: string
   sector?: string
@@ -147,6 +149,7 @@ export function PlacementBatchDetailsDialog({
                     <div className="rounded-2xl bg-slate-50 p-3"><p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Workplace</p><p className="text-sm font-bold text-slate-800">{placement?.companyName || companyName}</p></div>
                     <div className="flex gap-2 rounded-2xl bg-slate-50 p-3"><MapPin className="mt-0.5 h-4 w-4 text-slate-400" /><div><p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Location</p><p className="text-sm font-bold text-slate-800">{placement?.location || details.selfSourcedHost?.location || details.selfSourcedHost?.town || 'Not provided'}</p></div></div>
                   </div>
+                  <div className="mt-3"><PlacementInitiated createdAt={placement?.createdAt} notInitiated={!placement} /></div>
                   {placement?.supervisorName ? <p className="mt-3 text-sm text-slate-600"><span className="font-bold text-slate-800">Supervisor:</span> {placement.supervisorName}{placement.supervisorPhone ? ` · ${placement.supervisorPhone}` : ''}{placement.supervisorEmail ? ` · ${placement.supervisorEmail}` : ''}</p> : null}
                 </article>
               })}

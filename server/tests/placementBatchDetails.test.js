@@ -27,7 +27,7 @@ test('placement batch details retain institution scope and include converted lea
   const record = { _id: 'batch', startDate: new Date('2026-10-01'), endDate: new Date('2026-12-01'), learners: [], convertedPlacementIds: [] };
   t.mock.method(PlacementRequest, 'findOne', filter => {
     observedFilter = filter;
-    return { populate() { return this; }, lean: async () => record };
+    return { populate(options) { if (options?.path === 'convertedPlacementIds') assert.ok(options.select.split(' ').includes('createdAt')); return this; }, lean: async () => record };
   });
   const result = await dispatch();
   assert.equal(result.statusCode, 200);

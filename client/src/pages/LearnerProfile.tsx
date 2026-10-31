@@ -1,3 +1,4 @@
+import { PlacementInitiated } from '@/components/PlacementInitiated'
 import { isHQRole } from '@/lib/rbac'
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
@@ -83,6 +84,7 @@ interface PlacementAgreementSummary {
 
 interface PlacementRecord {
   _id: string
+  createdAt?: string | null
   companyName: string
   partnerName?: string
   sector?: string
@@ -916,6 +918,18 @@ export default function LearnerProfile() {
       </div>
       )}
 
+      {activePlacement ? (
+        <section aria-label="Active placement dates" className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5">
+          <h3 className="font-bold text-indigo-950">Active placement · {activePlacement.companyName}</h3>
+          <p className="mt-1 text-xs text-slate-600">Initiation records when the placement was created in the system. Work dates show the scheduled placement period.</p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <PlacementInitiated createdAt={activePlacement.createdAt} />
+            <dl className="text-sm"><dt className="text-xs font-semibold text-slate-500">Start date</dt><dd className="mt-1 font-semibold">{activePlacement.startDate ? format(new Date(activePlacement.startDate), 'PP') : 'Not set'}</dd></dl>
+            <dl className="text-sm"><dt className="text-xs font-semibold text-slate-500">End date</dt><dd className="mt-1 font-semibold">{activePlacement.endDate ? format(new Date(activePlacement.endDate), 'PP') : 'Not set'}</dd></dl>
+          </div>
+        </section>
+      ) : null}
+
       {activePlacementManagement && (
         <div data-help-id="learner-profile-management" className="bg-white rounded-2xl p-6 shadow-xl border border-gray-100">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
@@ -1103,6 +1117,16 @@ export default function LearnerProfile() {
             )}
           </TabsContent>
           <TabsContent value="timeline" className="mt-6">
+            <section aria-label="Placement initiation timeline" className="mb-6 space-y-3">
+              <h4 className="font-bold text-slate-900">Placement initiation timeline</h4>
+              {placements.length ? [...placements].sort((a, b) => {
+                const time = (value?: string | null) => value && Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0
+                return time(b.createdAt) - time(a.createdAt)
+              }).map(placement => <div key={placement._id} className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                <p className="mb-2 text-sm font-bold text-indigo-950">{placement.companyName}</p>
+                <PlacementInitiated createdAt={placement.createdAt} />
+              </div>) : <p className="text-sm text-slate-500">No placements have been initiated.</p>}
+            </section>
             {progressLoading ? (
               <Skeleton className="h-96 w-full rounded-2xl" />
             ) : progress ? (
@@ -1383,6 +1407,7 @@ export default function LearnerProfile() {
                                     <Clock className="h-3 w-3" /> 
                                     {p.startDate ? format(new Date(p.startDate), 'MMM yyyy') : 'TBD'} - {p.endDate ? format(new Date(p.endDate), 'MMM yyyy') : 'TBD'}
                                 </p>
+                                <div className="mt-3"><PlacementInitiated createdAt={p.createdAt} /></div>
                                 <p className="text-xs text-gray-600 mt-2">{p.location}</p>
                                 {p.closureReason === 'Transferred' && <p className="text-xs text-gray-600 mt-2">Reason for transfer: {p.closureNote}</p>}
                                 {p.sector ? <p className="text-xs text-gray-500 mt-1">Sector: {p.sector}</p> : null}
