@@ -31,7 +31,15 @@ import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import gtvetsLogo from '@/assets/gtvets_logo.png'
 
+export type TableExportRequest<TData> = {
+  format: "csv" | "pdf"
+  currentPage: TData[]
+  headers: string[]
+  values: (rows: TData[]) => string[][]
+}
+
 interface DataTableProps<TData, TValue> {
+  onExportRequest?: (request: TableExportRequest<TData>) => void
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -60,6 +68,7 @@ type ExportableColumnMeta<TData> = {
 export function DataTable<TData, TValue>({
   columns,
   data,
+  onExportRequest,
   meta,
   sorting: externalSorting,
   onSortingChange: setExternalSorting,
@@ -148,6 +157,21 @@ export function DataTable<TData, TValue>({
     (column.columnDef.meta as ExportableColumnMeta<TData> | undefined)?.label ?? (typeof column.columnDef.header === 'string'
       ? column.columnDef.header
       : column.id.replace(/([A-Z])/g, ' $1').replace(/^./, value => value.toUpperCase()))
+
+  const requestExport = (format: "csv" | "pdf") => {
+    if (!onExportRequest) return
+    const visibleColumns = table.getVisibleLeafColumns().filter(col => col.id !== 'actions' && col.id !== 'select')
+    onExportRequest({
+      format,
+      currentPage: table.getRowModel().rows.map(row => row.original),
+      headers: visibleColumns.map(getColumnLabel),
+      values: rows => rows.map((original, index) => visibleColumns.map(col => {
+        const meta = col.columnDef.meta as ExportableColumnMeta<TData> | undefined
+        const value = meta?.exportValue ? meta.exportValue(original) : col.accessorFn?.(original, index)
+        return value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value)
+      })),
+    })
+  }
 
   const downloadCSV = () => {
     if (!data.length || exportDisabled) return;
@@ -283,16 +307,16 @@ export function DataTable<TData, TValue>({
           </div>
           <Button 
             variant="outline" 
-            disabled={exportDisabled || !data.length}
-            onClick={downloadCSV}
+            disabled={exportDisabled || (!onExportRequest && !data.length)}
+            onClick={() => onExportRequest ? requestExport("csv") : downloadCSV()}
             className="w-full sm:w-auto rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
           >
             <Download className="mr-2 h-4 w-4" /> {exportCurrentPage ? "Export page CSV" : "Export CSV"}
           </Button>
           <Button 
             variant="outline" 
-            disabled={exportDisabled || !data.length}
-            onClick={downloadPDF}
+            disabled={exportDisabled || (!onExportRequest && !data.length)}
+            onClick={() => onExportRequest ? requestExport("pdf") : downloadPDF()}
             className="w-full sm:w-auto rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
           >
             <FileText className="mr-2 h-4 w-4" /> {exportCurrentPage ? "Export page PDF" : "Export PDF"}

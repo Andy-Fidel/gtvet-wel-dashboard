@@ -89,6 +89,7 @@ export const columns: ColumnDef<Learner>[] = [
   {
     accessorKey: "academicStatus",
     header: "Academic Status",
+    meta: { exportValue: (learner: Learner) => learner.academicStatus || "Active" },
     cell: ({ row }) => {
       const status = row.original.academicStatus || "Active"
       const color = status === "Graduated"
@@ -118,6 +119,7 @@ export const columns: ColumnDef<Learner>[] = [
   {
     id: "readiness",
     header: "Placement Readiness",
+    meta: { exportValue: (learner: Learner) => !learner.readiness ? "Unknown" : learner.readiness.isReadyForPlacement ? "Ready" : `${learner.readiness.missingFields.length} issue(s)` },
     cell: ({ row }) => {
       const readiness = row.original.readiness
       if (!readiness) return <Badge variant="outline">Unknown</Badge>

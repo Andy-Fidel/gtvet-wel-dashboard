@@ -4,6 +4,8 @@ import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useEffect, useState, useRef } from "react"
 import { type Learner, columns } from "./learners/columns"
+import { LearnerRegisterExportDialog } from "@/components/LearnerRegisterExportDialog"
+import type { LearnerExportRequest } from "@/lib/learnerRegisterExport"
 import { DataTable } from "@/components/ui/data-table"
 import { Button } from "@/components/ui/button"
 import { Plus, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Users, GraduationCap, BookOpen, Search, X, ArrowUpRight, Building2, Database, RefreshCw, Loader2 } from "lucide-react"
@@ -109,6 +111,7 @@ type LearnerRegisterResponse = {
 }
 
 export default function LearnerRegister() {
+  const [exportRequest, setExportRequest] = useState<LearnerExportRequest | null>(null)
   const [data, setData] = useState<Learner[]>([])
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
@@ -150,6 +153,7 @@ export default function LearnerRegister() {
   const welStatusFilter = searchParams.get("status") || ""
   const institutionFilter = searchParams.get("institution") || ""
   const isRegionalOversight = user?.role === "RegionalAdmin"
+  const isHQOversight = isHQRole(user?.role)
   const requestedView = searchParams.get("view")
   const regionalSection: RegionalSection = requestedView === "exceptions" || requestedView === "records" ? requestedView : "overview"
   const effectivePageSize = isRegionalOversight && regionalSection === "exceptions" ? 10 : pageSize
@@ -1021,18 +1025,18 @@ export default function LearnerRegister() {
             </SelectContent>
           </Select>
         </div>
-        {isRegionalOversight ? (
-          <div className={`${showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
-            <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2">Institution</label>
+        {isRegionalOversight || isHQOversight ? (
+          <div className={`${isHQOversight || showMobileFilters ? '' : 'hidden xl:block'} rounded-2xl border border-gray-100 bg-white p-4 shadow-sm`}>
+            <label className="text-xs font-black uppercase tracking-wider text-gray-500 block mb-2" id="learner-school-label">{isHQOversight ? "School" : "Institution"}</label>
             <Select
               value={institutionFilter || ALL_INSTITUTIONS}
               onValueChange={(value) => updateFilterParam("institution", value === ALL_INSTITUTIONS ? "" : value)}
             >
-              <SelectTrigger className="rounded-xl border-gray-200 bg-gray-50">
-                <SelectValue placeholder="All institutions" />
+              <SelectTrigger aria-labelledby="learner-school-label" className="rounded-xl border-gray-200 bg-gray-50">
+                <SelectValue placeholder={isHQOversight ? "All schools" : "All institutions"} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ALL_INSTITUTIONS}>All institutions</SelectItem>
+                <SelectItem value={ALL_INSTITUTIONS}>{isHQOversight ? "All schools" : "All institutions"}</SelectItem>
                 {institutionOptions.map((institution) => (
                   <SelectItem key={institution} value={institution}>{institution}</SelectItem>
                 ))}
@@ -1117,6 +1121,15 @@ export default function LearnerRegister() {
             </div> : null}
             <DataTable 
               exportTitle="Learner Register Export"
+              showNameFilter={false}
+              exportDisabled={loading}
+              onExportRequest={request => {
+                const filters = new URLSearchParams()
+                for (const [key, value] of Object.entries({ academicStatus: academicStatusFilter, intakeAcademicYear: intakeYearFilter, program: programFilter, year: yearFilter, status: welStatusFilter, institution: institutionFilter, search: debouncedSearch })) {
+                  if (value) filters.set(key, value)
+                }
+                setExportRequest({ ...request, filters: filters.toString() })
+              }}
               data={data}
               disablePagination
               columns={canBulkDelete ? selectableLearnerColumns : columns}
@@ -1128,6 +1141,8 @@ export default function LearnerRegister() {
           </div>
       )
       )}
+
+      {exportRequest ? <LearnerRegisterExportDialog request={exportRequest} onClose={() => setExportRequest(null)} /> : null}
 
       <Sheet open={Boolean(viewingLearner)} onOpenChange={(open) => { if (!open) setViewingLearner(null) }}>
         <SheetContent side="right" className="w-full overflow-y-auto border-l border-slate-200 bg-white p-0 sm:max-w-xl">

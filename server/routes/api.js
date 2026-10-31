@@ -7364,8 +7364,9 @@ router.get('/learners', async (req, res) => {
     if (program) query.program = program;
     if (institution && (isHQRole(req.user.role) || req.user.role === 'RegionalAdmin')) {
       const allowedInstitutions = filter.institution?.$in;
-      if (Array.isArray(allowedInstitutions) && !allowedInstitutions.includes(institution)) {
-        return res.status(403).json({ message: 'Institution is outside your assigned region' });
+      if ((Array.isArray(allowedInstitutions) && !allowedInstitutions.includes(institution))
+        || (typeof filter.institution === 'string' && filter.institution !== institution)) {
+        return res.status(403).json({ message: 'Institution is outside your assigned scope' });
       }
       query.institution = institution;
     }

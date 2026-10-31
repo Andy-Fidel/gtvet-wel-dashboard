@@ -1,5 +1,47 @@
 [
   {
+    "id": "2026-10-31-learner-register-exports",
+    "date": "2026-10-31",
+    "title": "Choose which learners to export",
+    "summary": "Export the whole register, filtered results or the current page, and filter HQ learner records by school.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Export learners across all pages",
+        "body": "CSV and PDF exports now ask whether to include the whole register, all results matching the active search and filters, or only the current page. Exports respect your access scope and visible table columns. You can cancel while records load and retry failed exports.",
+        "audience": "Learner register users",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Learner Register",
+          "path": "/learners"
+        }
+      },
+      {
+        "kind": "Improved",
+        "title": "Filter HQ learner records by school",
+        "body": "HQ teams can select a school in the Learner Register on desktop and mobile. The school filter combines with search and other filters, stays selected after a reload, and respects assigned access scope. Learner profiles show the learner’s institution beneath their identity details.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open Learner Register",
+          "path": "/learners"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-10-28-partner-registry-workflow",
     "date": "2026-10-28",
     "title": "Find and review partners more easily",

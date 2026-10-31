@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, MapPin, Phone, Mail, Award, Clock, FileSignature, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Camera, Loader2, Edit2, Activity, ClipboardCheck, AlertTriangle, Archive, ChevronRight, RefreshCw, ExternalLink, XCircle } from "lucide-react"
+import { ArrowLeft, Building2, MapPin, Phone, Mail, Award, Clock, FileSignature, FileText, CheckCircle2, Bookmark, UserCircle2, Plus, Briefcase, Star, User, Camera, Loader2, Edit2, Activity, ClipboardCheck, AlertTriangle, Archive, ChevronRight, RefreshCw, ExternalLink, XCircle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { format } from "date-fns"
@@ -678,7 +678,7 @@ export default function LearnerProfile() {
 
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => navigate('/learners')} className="h-10 w-10 bg-white shadow-sm rounded-full shrink-0">
             <ArrowLeft className="h-5 w-5" />
           </Button>
@@ -718,7 +718,7 @@ export default function LearnerProfile() {
             </div>
           </button>
 
-          <div>
+          <div className="min-w-0">
             <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">
               {learner.name}
             </h2>
@@ -737,6 +737,15 @@ export default function LearnerProfile() {
               <span className="flex items-center gap-1"><Bookmark className="h-4 w-4" /> {learner.program} ({learner.year})</span>
               <span className="flex items-center gap-1 font-mono text-[#FFB800] bg-[#FFB800]/10 px-2 rounded-md">{learner.trackingId}</span>
             </div>
+            <dl className="mt-2 text-sm">
+              <div className="flex items-start gap-2">
+                <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-gray-500" aria-hidden="true" />
+                <div className="min-w-0">
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">Institution</dt>
+                  <dd className="break-words font-semibold text-gray-900">{learner.institution?.trim() || 'Not recorded'}</dd>
+                </div>
+              </div>
+            </dl>
           </div>
         </div>
         
