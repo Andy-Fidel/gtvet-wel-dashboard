@@ -1,3 +1,5 @@
+import { ScopedRegisterExportDialog } from '@/components/LearnerRegisterExportDialog'
+import type { ScopedExportRequest } from '@/lib/learnerRegisterExport'
 import { isHQRole } from '@/lib/rbac'
 
 import {
@@ -48,6 +50,8 @@ const RATING_COLORS = ['#10b981', '#f59e0b', '#ef4444']
 type OversightSection = 'overview' | 'exceptions' | 'records'
 const verificationLabel = (visit: { locationVerified?: string; verificationLocationType?: string }) => visit.locationVerified === 'Verified' && visit.verificationLocationType === 'Town' ? 'Within town radius' : visit.locationVerified || 'No GPS'
 
+const gpsReviewLabel = (status = 'PendingReview') => status === 'PendingReview' ? 'Pending Review' : status === 'ExceptionApproved' ? 'Exception Approved' : status
+
 export type MonitoringVisit = {
     _id: string
     institution?: string
@@ -67,6 +71,7 @@ export type MonitoringVisit = {
     gpsReviewComment?: string
     gpsReviewedAt?: string
     distanceFromSite?: number
+    placement?: { companyName?: string } | null
     learner: {
         _id: string
         name: string
@@ -139,6 +144,10 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
   {
       accessorKey: "visitDate",
       header: "Visit Date",
+      meta: { exportValue: (visit: MonitoringVisit) => {
+        const date = new Date(visit.visitDate)
+        return Number.isFinite(date.getTime()) ? format(date, "PP") : "Not recorded"
+      } },
       cell: ({ row }) => format(new Date(row.getValue("visitDate")), "PP"),
   },
   {
@@ -153,7 +162,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
   {
     accessorKey: "learner.program",
     header: "Program",
-    cell: ({ row }) => row.original.learner.program || "N/A",
+    cell: ({ row }) => row.original.learner?.program || "N/A",
   },
   {
     id: "name",
@@ -161,9 +170,10 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
     header: "Learner Name",
   },
   {
-    accessorKey: "learner.placement.companyName",
+    accessorKey: "placement.companyName",
     header: "Company Name",
-    cell: ({ row }) => row.original.learner.placement?.companyName || "N/A"
+    meta: { exportValue: (visit: MonitoringVisit) => visit.placement?.companyName || "Not recorded" },
+    cell: ({ row }) => row.original.placement?.companyName || "Not recorded"
   },
   {
     accessorKey: "visitType",
@@ -172,6 +182,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
   {
     accessorKey: "attendanceStatus",
     header: "Attendance",
+    meta: { exportValue: (visit: MonitoringVisit) => visit.attendanceStatus ? attendanceLabel(visit.attendanceStatus) : "Not recorded" },
     cell: ({ row }) => {
         const status = row.getValue("attendanceStatus") as string
         const color = ['Present', 'Late'].includes(status) ? 'bg-green-500' : 'bg-red-500';
@@ -181,6 +192,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
   {
     accessorKey: "performanceRating",
     header: "Rating",
+    meta: { exportValue: (visit: MonitoringVisit) => Number.isFinite(visit.performanceRating) ? `${visit.performanceRating}/5` : "Not recorded" },
     cell: ({ row }) => {
         const rating = row.getValue("performanceRating") as number;
         return <div className="font-bold">{rating}/5</div>
@@ -194,6 +206,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
   {
     accessorKey: "locationVerified",
     header: "Verification",
+    meta: { exportValue: (visit: MonitoringVisit) => verificationLabel(visit) },
     cell: ({ row }) => {
       const status = row.original.locationVerified || 'No GPS';
       const dist = row.original.distanceFromSite;
@@ -219,6 +232,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
   {
     accessorKey: "gpsReviewStatus",
     header: "GPS Review",
+    meta: { exportValue: (visit: MonitoringVisit) => gpsReviewLabel(visit.gpsReviewStatus) },
     cell: ({ row }) => {
       const status = row.original.gpsReviewStatus || 'PendingReview'
       const tone = status === 'Verified'
@@ -228,13 +242,14 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
           : status === 'Rejected'
             ? 'bg-rose-100 text-rose-700'
             : 'bg-amber-100 text-amber-700'
-      const label = status === 'PendingReview' ? 'Pending Review' : status === 'ExceptionApproved' ? 'Exception Approved' : status
+      const label = gpsReviewLabel(status)
       return <Badge className={`${tone} border-0 rounded-lg font-bold`}>{label}</Badge>
     }
   },
   {
     id: "delegated",
     header: "Delegation",
+    meta: { exportValue: (visit: MonitoringVisit) => visit.isDelegatedVisit ? visit.delegatedFromInstitution ? `From ${visit.delegatedFromInstitution}` : "Delegated visit" : "Not delegated" },
     cell: ({ row }) => {
       if (!row.original.isDelegatedVisit) return null
       return (
@@ -303,6 +318,7 @@ export const columns: ColumnDef<MonitoringVisit>[] = [
 ]
 
 export default function MonitoringVisits() {
+    const [pdfExport, setPdfExport] = useState<ScopedExportRequest<MonitoringVisit> | null>(null)
     const [data, setData] = useState<MonitoringVisit[]>([])
     const [dueVisits, setDueVisits] = useState<DueVisit[]>([])
     const [dueLoading, setDueLoading] = useState(false)
@@ -392,6 +408,7 @@ export default function MonitoringVisits() {
     const canReviewGps = !isOversightPortal && user?.role === 'Admin'
 
     useEffect(() => {
+        const controller = new AbortController()
         const fetchData = async () => {
             setLoading(true)
             try {
@@ -400,28 +417,31 @@ export default function MonitoringVisits() {
                 if (filterVisitType) params.set('visitType', filterVisitType)
                 if (filterAttendance) params.set('attendanceStatus', filterAttendance)
                 if (filterGpsReview) params.set('gpsReviewStatus', filterGpsReview)
-                const res = await authFetch(`/api/monitoring-visits?${params.toString()}`)
+                const res = await authFetch(`/api/monitoring-visits?${params.toString()}`, { signal: controller.signal })
                 const payload = await res.json().catch(() => null) as MonitoringVisitsResponse | null
                 if (!res.ok) {
                     throw new Error(
                         (payload as { message?: string } | null)?.message || "Failed to load monitoring visits"
                     )
                 }
+                if (controller.signal.aborted) return
                 setData(Array.isArray(payload?.items) ? payload.items : [])
                 setTotalVisits(typeof payload?.total === "number" ? payload.total : 0)
                 setTotalPages(typeof payload?.totalPages === "number" ? payload.totalPages : 0)
                 if (payload?.stats) setStats(payload.stats)
             } catch (err) {
+                if (controller.signal.aborted) return
                 console.error(err)
                 toast.error(err instanceof Error ? err.message : "Failed to load monitoring visits")
                 setData([])
                 setTotalVisits(0)
                 setTotalPages(0)
             } finally {
-                setLoading(false)
+                if (!controller.signal.aborted) setLoading(false)
             }
         }
         fetchData()
+        return () => controller.abort()
     }, [refreshKey, authFetch, isAdmin, page, pageSize, searchParams, filterVisitType, filterAttendance, filterGpsReview])
 
     useEffect(() => {
@@ -1099,6 +1119,24 @@ export default function MonitoringVisits() {
                     </div>
                     <DataTable 
                         exportTitle="Monitoring Visits Export"
+                        showNameFilter={false}
+                        onPdfExportRequest={request => {
+                            const filters = new URLSearchParams()
+                            const search = searchParams.get('search')
+                            if (search) filters.set('search', search)
+                            if (filterVisitType) filters.set('visitType', filterVisitType)
+                            if (filterAttendance) filters.set('attendanceStatus', filterAttendance)
+                            if (filterGpsReview) filters.set('gpsReviewStatus', filterGpsReview)
+                            setPdfExport({
+                                ...request,
+                                filters: filters.toString(),
+                                detailColumns: ['Observations', 'Issues identified', 'Action required'],
+                                headers: [...request.headers, 'Issues identified', 'Action required'],
+                                values: rows => request.values(rows).map((cells, index) => [
+                                    ...cells, rows[index].issuesIdentified || 'Not recorded', rows[index].actionRequired || 'Not recorded',
+                                ]),
+                            })
+                        }}
                         data={data} 
                         disablePagination
                         columns={columns} 
@@ -1115,6 +1153,9 @@ export default function MonitoringVisits() {
                 )}
             </div>
             )}
+
+            {pdfExport && <ScopedRegisterExportDialog request={pdfExport} onClose={() => setPdfExport(null)}
+                endpoint="/api/monitoring-visits" title="Monitoring Visits" filename="monitoring-visits" noun="visits" />}
 
             {/* Anomalies Section (Admin Only) */}
             {isAdmin && !isOversightPortal && anomalies.length > 0 && (
@@ -1175,13 +1216,13 @@ export default function MonitoringVisits() {
                         <div className="p-6 md:p-8">
                             <SheetHeader className="border-b border-gray-100 pb-5 pr-8 text-left">
                                 <SheetTitle className="text-2xl font-black text-gray-900">Monitoring Visit Details</SheetTitle>
-                                <SheetDescription>{viewingVisit.learner.name} · {viewingVisit.learner.trackingId}</SheetDescription>
+                                <SheetDescription>{viewingVisit.learner?.name || "Learner unavailable"} · {viewingVisit.learner?.trackingId}</SheetDescription>
                             </SheetHeader>
                             <div className="mt-6 space-y-5">
                                 <div className="grid grid-cols-2 gap-3">
                                     {[
                                         ['Institution', viewingVisit.institution || 'N/A'],
-                                        ['Program', viewingVisit.learner.program || 'N/A'],
+                                        ['Program', viewingVisit.learner?.program || 'N/A'],
                                         ['Visit date', format(new Date(viewingVisit.visitDate), 'PPP')],
                                         ['Visit type', viewingVisit.visitType],
                                         ['Attendance', attendanceLabel(viewingVisit.attendanceStatus)],

@@ -39,6 +39,7 @@ export type TableExportRequest<TData> = {
 }
 
 interface DataTableProps<TData, TValue> {
+  onPdfExportRequest?: (request: TableExportRequest<TData>) => void
   onExportRequest?: (request: TableExportRequest<TData>) => void
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
@@ -69,6 +70,7 @@ export function DataTable<TData, TValue>({
   columns,
   data,
   onExportRequest,
+  onPdfExportRequest,
   meta,
   sorting: externalSorting,
   onSortingChange: setExternalSorting,
@@ -159,9 +161,10 @@ export function DataTable<TData, TValue>({
       : column.id.replace(/([A-Z])/g, ' $1').replace(/^./, value => value.toUpperCase()))
 
   const requestExport = (format: "csv" | "pdf") => {
-    if (!onExportRequest) return
+    const handler = format === "pdf" ? onPdfExportRequest ?? onExportRequest : onExportRequest
+    if (!handler) return
     const visibleColumns = table.getVisibleLeafColumns().filter(col => col.id !== 'actions' && col.id !== 'select')
-    onExportRequest({
+    handler({
       format,
       currentPage: table.getRowModel().rows.map(row => row.original),
       headers: visibleColumns.map(getColumnLabel),
@@ -315,8 +318,8 @@ export function DataTable<TData, TValue>({
           </Button>
           <Button 
             variant="outline" 
-            disabled={exportDisabled || (!onExportRequest && !data.length)}
-            onClick={() => onExportRequest ? requestExport("pdf") : downloadPDF()}
+            disabled={exportDisabled || (!onPdfExportRequest && !onExportRequest && !data.length)}
+            onClick={() => onPdfExportRequest || onExportRequest ? requestExport("pdf") : downloadPDF()}
             className="w-full sm:w-auto rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
           >
             <FileText className="mr-2 h-4 w-4" /> {exportCurrentPage ? "Export page PDF" : "Export PDF"}

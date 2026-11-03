@@ -4341,7 +4341,7 @@ router.get('/monitoring-visits', async (req, res) => {
       const search = (req.query.search || '').toString().trim();
       let learnerIds = null;
       if (search) {
-        const regex = new RegExp(search, 'i');
+        const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
         const matchingLearners = await Learner.find({
           ...filter.institution ? { institution: filter.institution } : {},
           $or: [{ name: regex }, { trackingId: regex }, { firstName: regex }, { lastName: regex }],
@@ -4357,13 +4357,14 @@ router.get('/monitoring-visits', async (req, res) => {
       if (req.query.gpsReviewStatus) visitFilter.gpsReviewStatus = req.query.gpsReviewStatus;
 
       const visitsQuery = MonitoringVisit.find(visitFilter)
-        .select('visitDate visitType attendanceStatus performanceRating keyObservations issuesIdentified actionRequired locationVerified gpsReviewStatus gpsExceptionReason gpsReviewComment gpsReviewedAt distanceFromSite verificationLocationType verificationRadiusMetres verificationTownName referenceCoordinates learner institution isDelegatedVisit delegatedFromInstitution createdAt updatedAt')
+        .select('visitDate visitType attendanceStatus performanceRating keyObservations issuesIdentified actionRequired locationVerified gpsReviewStatus gpsExceptionReason gpsReviewComment gpsReviewedAt distanceFromSite verificationLocationType verificationRadiusMetres verificationTownName referenceCoordinates learner placement institution isDelegatedVisit delegatedFromInstitution createdAt updatedAt')
         .populate({
             path: 'learner',
             select: 'firstName middleName lastName name trackingId program placement',
             populate: { path: 'placement', select: 'location companyName' }
         })
-        .sort({ visitDate: -1, createdAt: -1 });
+        .populate('placement', 'companyName')
+        .sort({ visitDate: -1, createdAt: -1, _id: -1 });
 
       if (usePagination) {
         visitsQuery.skip((page - 1) * pageSize).limit(pageSize);

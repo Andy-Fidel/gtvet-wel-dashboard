@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/context/AuthContext'
-import type { Learner } from '@/pages/learners/columns'
-import { downloadLearnerRegister, type LearnerExportRequest, type LearnerExportScope } from '@/lib/learnerRegisterExport'
+import { downloadScopedRegister, type ScopedExportRequest, type LearnerExportRequest, type LearnerExportScope } from '@/lib/learnerRegisterExport'
 
-export function LearnerRegisterExportDialog({ request, onClose }: { request: LearnerExportRequest; onClose: () => void }) {
+export function LearnerRegisterExportDialog(props: { request: LearnerExportRequest; onClose: () => void }) {
+  return <ScopedRegisterExportDialog {...props} endpoint="/api/learners" title="Learner Register" filename="learner-register" noun="learners" />
+}
+
+export function ScopedRegisterExportDialog<T>({ request, onClose, endpoint, title, filename, noun }: {
+  request: ScopedExportRequest<T>; onClose: () => void; endpoint: string; title: string; filename: string; noun: string
+}) {
   const { authFetch } = useAuth()
   const hasFilters = Boolean(request.filters)
   const [scope, setScope] = useState<LearnerExportScope>(hasFilters ? 'filtered' : 'all')
@@ -25,15 +30,15 @@ export function LearnerRegisterExportDialog({ request, onClose }: { request: Lea
       if (scope !== 'page') {
         // Omitting page and pageSize uses the API's all-records response, under the same server-side access scope.
         const query = scope === 'filtered' ? request.filters : ''
-        const response = await authFetch(`/api/learners${query ? `?${query}` : ''}`, { signal: current.signal })
+        const response = await authFetch(`${endpoint}${query ? `?${query}` : ''}`, { signal: current.signal })
         const payload = await response.json().catch(() => null)
-        if (!response.ok) throw new Error(payload?.message || 'Unable to load learners for export. Please try again.')
+        if (!response.ok) throw new Error(payload?.message || `Unable to load ${noun} for export. Please try again.`)
         if (!Array.isArray(payload)) throw new Error('The complete register could not be loaded. Please try again.')
-        rows = payload as Learner[]
+        rows = payload as T[]
       }
       current.signal.throwIfAborted()
-      if (!rows.length) throw new Error('No learners match this export scope. Choose another scope or update the filters.')
-      await downloadLearnerRegister(request, rows, scope, current.signal)
+      if (!rows.length) throw new Error(`No ${noun} match this export scope. Choose another scope or update the filters.`)
+      await downloadScopedRegister(request, rows, scope, current.signal, { title, filename, noun })
       if (!current.signal.aborted) onClose()
     } catch (err) {
       if (!current.signal.aborted) setError(err instanceof Error ? err.message : 'Export failed. Please try again.')
@@ -45,15 +50,15 @@ export function LearnerRegisterExportDialog({ request, onClose }: { request: Lea
   return <Dialog open onOpenChange={open => { if (!open) close() }}>
     <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
       <DialogHeader className="text-left">
-        <DialogTitle className="pr-10 text-xl leading-tight sm:text-2xl">Export learner register to {request.format.toUpperCase()}</DialogTitle>
-        <DialogDescription>Choose which learners to include. Every option respects your access scope and uses the visible table columns.</DialogDescription>
+        <DialogTitle className="pr-10 text-xl leading-tight sm:text-2xl">Export {title.toLowerCase()} to {request.format.toUpperCase()}</DialogTitle>
+        <DialogDescription>Choose which {noun} to include. Every option respects your access scope and uses the visible table columns.</DialogDescription>
       </DialogHeader>
       <fieldset disabled={busy} className="space-y-3">
         <legend className="mb-2 text-sm font-semibold">Export scope</legend>
         {([
-          ['all', 'Whole register', 'Every learner you can access, across all pages. Ignores search and register filters.'],
-          ['filtered', 'Filtered results', hasFilters ? `Every matching learner across all pages. ${filters}` : 'No active filters; includes every learner you can access.'],
-          ['page', 'Current page', `${request.currentPage.length} learners currently shown, in their displayed order.`],
+          ['all', 'Whole register', `All ${noun} you can access, across all pages. Ignores search and register filters.`],
+          ['filtered', 'Filtered results', hasFilters ? `All matching ${noun} across all pages. ${filters}` : `No active filters. Includes all ${noun} you can access.`],
+          ['page', 'Current page', `${request.currentPage.length} ${noun} currently shown, in their displayed order.`],
         ] as const).map(([value, title, description]) => <label key={value} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 ${scope === value ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'}`}>
           <input type="radio" name="learner-export-scope" value={value} checked={scope === value} onChange={() => setScope(value)} className="mt-1 accent-indigo-600" />
           <span className="min-w-0"><span className="block text-sm font-semibold">{title}</span><span className="mt-1 block break-words text-sm text-gray-600">{description}</span></span>
