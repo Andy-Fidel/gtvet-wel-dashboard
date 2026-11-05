@@ -154,3 +154,56 @@ test('resolving requires a summary and closed tickets require reopening before r
   assert.equal(res.statusCode, 400);
   assert.equal(ticket.status, 'Open');
 });
+
+test('keyed reply retries return the saved reply without another write or notification', async t => {
+  const requestKey = 'f5630cb0-b801-49b8-a872-764183af4d61';
+  const ticket = new SupportTicket({ _id: ticketId, subject: 'Help', description: 'Issue', requester: requesterId, requesterRole: 'Guardian', institution: 'Home',
+    replies: [{ message: 'More detail', requestKey, createdBy: requesterId, createdByName: 'Parent', createdByRole: 'Guardian' }] });
+  t.mock.method(SupportTicket, 'findOne', async () => ticket);
+  t.mock.method(SupportTicket, 'findById', () => query(ticket));
+  t.mock.method(SupportTicket, 'findOneAndUpdate', () => assert.fail('retry must not write'));
+  t.mock.method(AuditLog, 'create', () => assert.fail('retry must not duplicate audit'));
+  const res = await call('post', '/support-tickets/:id/replies', {
+    user: { _id: requesterId, role: 'Guardian', name: 'Parent' }, body: { message: 'More detail', requestKey },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(ticket.replies.length, 1);
+  const conflict = await call('post', '/support-tickets/:id/replies', {
+    user: { _id: requesterId, role: 'Guardian', name: 'Parent' }, body: { message: 'Different text', requestKey },
+  });
+  assert.equal(conflict.statusCode, 409);
+});
+
+test('new keyed replies use a conditional atomic append and reject a concurrent state change', async t => {
+  const ticket = new SupportTicket({ _id: ticketId, subject: 'Help', description: 'Issue', requester: requesterId, requesterRole: 'Guardian', institution: 'Home' });
+  t.mock.method(SupportTicket, 'findOne', async () => ticket);
+  t.mock.method(SupportTicket, 'findOneAndUpdate', async (filter, update) => {
+    assert.deepEqual(filter.status, { $nin: ['Resolved', 'Closed'] });
+    assert.equal(filter.archivedAt, null);
+    assert.equal(filter.replies.$not.$elemMatch.createdBy, requesterId);
+    assert.equal(filter.replies.$not.$elemMatch.requestKey, update.$push.replies.requestKey);
+    return null;
+  });
+  const res = await call('post', '/support-tickets/:id/replies', {
+    user: { _id: requesterId, role: 'Guardian', name: 'Parent' },
+    body: { message: 'More detail', requestKey: 'f5630cb0-b801-49b8-a872-764183af4d61' },
+  });
+  assert.equal(res.statusCode, 409);
+  assert.equal(ticket.replies.length, 0);
+});
+
+test('status changes append durable activity in the same save', async t => {
+  const ticket = new SupportTicket({ _id: ticketId, subject: 'Help', description: 'Issue', requester: requesterId, requesterRole: 'Guardian', institution: 'Home' });
+  t.mock.method(SupportTicket, 'findOne', async () => ticket);
+  t.mock.method(SupportTicket, 'findById', () => query(ticket));
+  t.mock.method(SupportTicket.prototype, 'save', async function () { await this.validate(); return this; });
+  t.mock.method(AuditLog, 'create', async () => ({}));
+  t.mock.method(User, 'find', () => query([]));
+  const res = await call('put', '/support-tickets/:id/status', {
+    user: { _id: responderId, role: 'Admin', institution: 'Home', name: 'Officer' }, body: { status: 'Resolved', resolutionSummary: 'Access restored' },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(ticket.activity.length, 1);
+  assert.equal(ticket.activity[0].actorName, 'Officer');
+  assert.match(ticket.activity[0].detail, /Access restored/);
+});

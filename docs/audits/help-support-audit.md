@@ -4,6 +4,20 @@ Date: 2026-10-01. Reviewed commit: `12bb648`.
 
 Implementation update: the access checks, routing, notifications, ownership validation, lifecycle rules, retry keys, draft scoping, learner names and queue controls described below have been addressed in the subsequent Help and Support change. The findings remain here as the review baseline. Database pagination remains an improvement to consider after measuring real ticket volume and query latency; the current page still computes some viewer-specific counters from scoped ticket metadata. Mobile and non-SuperAdmin browser sessions remain to be checked with appropriate test accounts.
 
+## Follow-up implementation — 2026-11-05
+
+- All HQ roles now receive the compact HQ presentation. HQ Manager and HQ Staff retain read-only oversight; personal ticket read-state updates are explicitly allowed without opening reply, assignment, escalation, or status permissions.
+- Reduced the header and summary footprint, prioritized next action and responsible person, moved replies before evidence and management controls, and collapsed ownership details. Mobile advanced filters start collapsed; pagination follows the ticket list.
+- Added institution, region, and ticket-type filters, stable priority/oldest/deadline sorting, full ticket-ID lookup, URL-persisted filters and focused tickets, filter summaries, and clear-filter actions. Institution/region filters intersect the authorized scope.
+- Added a bounded, authorized learner/placement context lookup to ticket creation. The form explains priorities, calendar-hour targets, and the post-submission screenshot/document attachment step.
+- Added pending guards to create/reply/read/assignment/escalation/status actions. Reply request keys survive failed requests and browser reloads. Conditional MongoDB appends prevent repeated keyed replies, including concurrent retries; legacy clients without keys remain supported.
+- New assignment, escalation, and status changes append activity to the ticket in the same save. Historical handoffs are not fabricated or backfilled. Existing audit records remain intact.
+- Added searchable FAQs, read-only-role guidance, accurate closure instructions, associated form labels, accessible filter groups, visible focus feedback, restrained local styling, and reduced-motion scrolling.
+
+Validation: production client build and targeted ESLint passed; 25 server checks passed; six Chrome browser checks passed, including a mobile accessibility scan. A separate disposable localhost MongoDB integration test verified concurrent retry deduplication, learner/placement isolation, literal search, institution/region/type filtering, and priority ordering. Browser fixtures were fictional; no production tickets were created or modified.
+
+The existing metadata-based queue pagination remains unchanged. No database migration is needed for the additive optional reply/activity fields. Deployment is a separate step.
+
 ## Scope and evidence
 
 Reviewed the live SuperAdmin Help and Support page, queue, ticket cards and new-ticket dialog; traced the React UI, API handlers, ticket schema, notifications, attachment authorization, HQ permissions and draft storage. Other roles were assessed from source, not authenticated browser sessions. No production tickets were created, answered, assigned or changed. Findings below distinguish observed UI behavior from source-level defects; exploit attempts and load tests were not performed.

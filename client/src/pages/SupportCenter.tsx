@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "@/lib/toast"
 import { useAuth } from "@/context/AuthContext"
-import { AlertTriangle, ArrowUpRight, BookOpen, ChevronDown, CircleHelp, Headset, LifeBuoy, MessageSquarePlus, SendHorizonal, ShieldAlert, Ticket, UserPlus } from "lucide-react"
+import { AlertTriangle, ArrowUpRight, BookOpen, ChevronDown, CircleHelp, Headset, LifeBuoy, MessageSquarePlus, SendHorizonal, Ticket, UserPlus } from "lucide-react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -16,6 +16,7 @@ import { DocumentList } from "@/components/DocumentList"
 import { DocumentUpload } from "@/components/DocumentUpload"
 import { clearDraft, loadDraft, saveDraft } from "@/lib/offlineDrafts"
 import { clearOfflineConflictBridge, getOfflineConflictBridge } from "@/lib/offlineConflictBridge"
+import "./support-center.css"
 import { GuideCatalog } from "@/components/HelpWizard"
 
 type RoleKey = "SuperAdmin" | "HQManager" | "HQStaff" | "RegionalAdmin" | "Admin" | "Manager" | "Staff" | "IndustryPartner" | "Guardian"
@@ -42,6 +43,9 @@ interface SupportTicket {
   incidentDate?: string
   status: TicketStatus
   createdAt: string
+  firstRespondedAt?: string
+  archivedAt?: string
+  activity?: Array<{ _id: string; actorName: string; detail: string; createdAt: string }>
   updatedAt: string
   requesterRole: string
   institution?: string
@@ -118,6 +122,7 @@ interface SupportTicketStats {
   escalated: number
   unread: number
   ownedByMe: number
+  awaitingMe?: number
 }
 
 interface SupportQueueStats {
@@ -170,10 +175,10 @@ const ROLE_GUIDES: Record<RoleKey, Array<{ title: string; summary: string; steps
 }
 
 const FAQS = [
-  { question: "Who can see my support tickets?", answer: "Institution users see tickets for their institution, regional admins see tickets in their region, superadmins see all tickets, and industry partners see their own company-linked tickets." },
+  { question: "Who can see my support tickets?", answer: "Institution users see tickets for their institution, regional admins see tickets in their region, HQ access follows the user’s national, regional, or institution scope, and industry partners see their own company-linked tickets." },
   { question: "When should I use a support ticket instead of a notification?", answer: "Use notifications for awareness. Use support tickets when you need action, investigation, or a back-and-forth response thread." },
   { question: "What should I include in a good ticket?", answer: "Describe the page, the action you tried, the learner or partner involved, the exact error if any, and what outcome you expected." },
-  { question: "Can I close a ticket myself?", answer: "Yes. The requester can close a ticket when the issue is resolved, even if the resolution came from a reply." },
+  { question: "Can I close a ticket myself?", answer: "Once support marks a ticket Resolved, the requester can confirm closure. Reopen a resolved or closed ticket if the issue persists." },
   { question: "How do I get faster help?", answer: "Choose the right category, set the correct priority, and avoid duplicate tickets for the same issue." },
 ]
 
@@ -185,7 +190,7 @@ export default function SupportCenter() {
   const ticketRequestSequence = useRef(0)
   const [assignees, setAssignees] = useState<SupportAssignee[]>([])
   const [loading, setLoading] = useState(true)
-  const [ticketPage, setTicketPage] = useState(1)
+  const [ticketPage, setTicketPage] = useState(() => Math.max(1, Number.parseInt(searchParams.get("page") || "1", 10) || 1))
   const [ticketPageSize] = useState(10)
   const [ticketTotal, setTicketTotal] = useState(0)
   const [ticketTotalPages, setTicketTotalPages] = useState(1)
@@ -212,19 +217,34 @@ export default function SupportCenter() {
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({})
   const [escalationDrafts, setEscalationDrafts] = useState<Record<string, { escalatedTo: string; escalationLevel: "None" | "Regional" | "HQ"; escalationReason: string }>>({})
-  const [statusFilter, setStatusFilter] = useState("")
-  const [queueView, setQueueView] = useState("")
-  const [search, setSearch] = useState("")
-  const [debouncedSearch, setDebouncedSearch] = useState("")
-  const [priorityFilter, setPriorityFilter] = useState("")
-  const [categoryFilter, setCategoryFilter] = useState("")
-  const [slaFilter, setSlaFilter] = useState("")
+  const [statusFilter, setStatusFilter] = useState(searchParams.get("status") || "")
+  const [queueView, setQueueView] = useState(searchParams.get("queueView") || "")
+  const [search, setSearch] = useState(searchParams.get("search") || "")
+  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get("search") || "")
+  const [priorityFilter, setPriorityFilter] = useState(searchParams.get("priority") || "")
+  const [categoryFilter, setCategoryFilter] = useState(searchParams.get("category") || "")
+  const [slaFilter, setSlaFilter] = useState(searchParams.get("sla") || "")
+  const [institutionFilter, setInstitutionFilter] = useState(searchParams.get("institution") || "")
+  const [regionFilter, setRegionFilter] = useState(searchParams.get("region") || "")
+  const [typeFilter, setTypeFilter] = useState(searchParams.get("ticketType") || "")
+  const [sort, setSort] = useState(searchParams.get("sort") || "recent")
+  const [institutions, setInstitutions] = useState<Array<{ name: string; region: string }>>([])
+  const [faqSearch, setFaqSearch] = useState("")
+  const [filtersOpen, setFiltersOpen] = useState(() => window.innerWidth >= 768)
+  const pendingActions = useRef(new Set<string>())
+  const [pending, setPending] = useState<Record<string, boolean>>({})
+  const [learnerSearch, setLearnerSearch] = useState("")
+  const [contextOptions, setContextOptions] = useState<Array<{ _id: string; name: string; trackingId: string; institution: string }>>([])
+  const [placementOptions, setPlacementOptions] = useState<Array<{ _id: string; companyName: string; status: string }>>([])
+  const [contextLoading, setContextLoading] = useState(false)
+  const [contextError, setContextError] = useState("")
+  const replyAttempts = useRef<Record<string, { message: string; requestKey: string }>>({})
   const [savingTicket, setSavingTicket] = useState(false)
   const [draftLoadedOwner, setDraftLoadedOwner] = useState("")
   const [resolutionTicketId, setResolutionTicketId] = useState<string | null>(null)
   const [resolutionSummary, setResolutionSummary] = useState("")
   const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null)
-  const [newTicket, setNewTicket] = useState<{ subject: string; category: TicketCategory; priority: TicketPriority; description: string; requestKey: string }>({
+  const [newTicket, setNewTicket] = useState<{ subject: string; category: TicketCategory; priority: TicketPriority; description: string; requestKey: string; learnerId?: string; learnerLabel?: string; placementId?: string }>({
     subject: "",
     category: "Technical" as TicketCategory,
     priority: "Medium" as TicketPriority,
@@ -243,7 +263,80 @@ export default function SupportCenter() {
   const role = (user?.role || "Staff") as RoleKey
   const canManageTickets = role === "SuperAdmin" || role === "RegionalAdmin" || role === "Admin"
   const canWriteSupport = role !== "HQManager" && role !== "HQStaff"
-  const isHQ = role === "SuperAdmin"
+  const isHQ = ["SuperAdmin", "HQManager", "HQStaff"].includes(role)
+  const canChooseContext = ["SuperAdmin", "RegionalAdmin", "Admin", "Manager", "Staff"].includes(role)
+  const canFilterInstitutions = isHQ || role === "RegionalAdmin"
+  const beginAction = (key: string) => {
+    if (pendingActions.current.has(key)) return false
+    pendingActions.current.add(key)
+    setPending(current => ({ ...current, [key]: true }))
+    return true
+  }
+  const endAction = (key: string) => {
+    pendingActions.current.delete(key)
+    setPending(current => ({ ...current, [key]: false }))
+  }
+  const filterValues = { status: statusFilter, queueView, search: debouncedSearch, priority: priorityFilter, category: categoryFilter, sla: slaFilter, institution: institutionFilter, region: regionFilter, ticketType: typeFilter, sort }
+  const filterSignature = JSON.stringify(filterValues)
+  const previousFilters = useRef(filterSignature)
+  useEffect(() => {
+    const values = JSON.parse(filterSignature) as Record<string, string>
+    const next = new URLSearchParams(searchParams)
+    Object.entries(values).forEach(([key, value]) => { if (value && !(key === "sort" && value === "recent")) next.set(key, value); else next.delete(key) })
+    const changed = previousFilters.current !== filterSignature
+    previousFilters.current = filterSignature
+    if (changed) setTicketPage(1)
+    const page = changed ? 1 : ticketPage
+    if (page > 1) next.set("page", String(page)); else next.delete("page")
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true })
+  }, [filterSignature, ticketPage, searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (!canFilterInstitutions) return
+    let cancelled = false
+    authFetch("/api/institutions").then(async res => {
+      if (!res.ok) throw new Error("Unable to load institution filters")
+      const data = await res.json()
+      if (!cancelled) setInstitutions(Array.isArray(data) ? data : [])
+    }).catch(() => { if (!cancelled) toast.error("Institution filters could not be loaded. Refresh to retry.") })
+    return () => { cancelled = true }
+  }, [authFetch, canFilterInstitutions])
+
+  useEffect(() => {
+    if (!ticketOpen || !canChooseContext) return
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      setContextLoading(true)
+      setContextError("")
+      try {
+        const params = new URLSearchParams({ search: learnerSearch })
+        if (newTicket.learnerId) params.set("learnerId", newTicket.learnerId)
+        const res = await authFetch(`/api/support-context?${params}`, { signal: controller.signal })
+        if (!res.ok) throw new Error("Unable to load learner context. Try searching again.")
+        const data = await res.json()
+        if (!controller.signal.aborted) { setContextOptions(data.learners); setPlacementOptions(data.placements) }
+      } catch (error) {
+        if (!controller.signal.aborted) setContextError(error instanceof Error ? error.message : "Unable to load context")
+      } finally { if (!controller.signal.aborted) setContextLoading(false) }
+    }, 300)
+    return () => { controller.abort(); window.clearTimeout(timer) }
+  }, [authFetch, canChooseContext, ticketOpen, learnerSearch, newTicket.learnerId])
+
+  const clearFilters = () => {
+    setSearch(""); setQueueView(""); setStatusFilter(""); setPriorityFilter(""); setCategoryFilter(""); setSlaFilter(""); setInstitutionFilter(""); setRegionFilter(""); setTypeFilter(""); setTicketPage(1)
+  }
+  const activeFilters = Object.entries({ status: statusFilter, queue: queueView, search, priority: priorityFilter, category: categoryFilter, SLA: slaFilter, institution: institutionFilter, region: regionFilter, type: typeFilter }).filter(([, value]) => value)
+  const nextAction = (ticket: SupportTicket) => ["Resolved", "Closed"].includes(ticket.status)
+    ? ticket.status === "Resolved" ? ticket.requester._id === user?._id && canWriteSupport ? "Review the resolution and confirm closure, or reopen." : "Resolved · awaiting requester confirmation" : "Closed"
+    : ticket.awaitingParty === "Requester" ? ticket.requester._id === user?._id ? "Your reply is needed" : "Awaiting the requester’s reply"
+    : `Awaiting support · ${ticket.escalatedTo?.name || ticket.assignedTo?.name || "Waiting for assignment"}`
+  const deadlineLabel = (ticket: SupportTicket) => {
+    if (["Resolved", "Closed"].includes(ticket.status)) return ""
+    const due = !ticket.firstRespondedAt ? ticket.firstResponseDueAt : ticket.resolutionDueAt
+    if (!due) return "Deadline not recorded"
+    const hours = Math.floor(Math.abs(new Date(due).getTime() - Date.now()) / 3600000)
+    return `${!ticket.firstRespondedAt ? "Response" : "Resolution"} ${new Date(due).getTime() < Date.now() ? "overdue by" : "due in"} ${hours < 1 ? "less than 1h" : `${hours}h`}`
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 300)
@@ -255,12 +348,14 @@ export default function SupportCenter() {
     if (!newTicketDraftKey) return
     const draft = loadDraft<typeof newTicket>(newTicketDraftKey)
     setReplyDrafts({})
+    replyAttempts.current = {}
     setNewTicket(draft ? {
         subject: draft.subject || "",
         category: draft.category || "Technical",
         priority: draft.priority || "Medium",
         description: draft.description || "",
         requestKey: draft.requestKey || crypto.randomUUID(),
+        learnerId: draft.learnerId, learnerLabel: draft.learnerLabel, placementId: draft.placementId,
       } : { subject: "", category: "Technical", priority: "Medium", description: "", requestKey: crypto.randomUUID() })
     setDraftLoadedOwner(draftOwner)
   }, [draftOwner, newTicketDraftKey])
@@ -294,6 +389,10 @@ export default function SupportCenter() {
       if (categoryFilter) params.set("category", categoryFilter)
       if (slaFilter) params.set("sla", slaFilter)
       if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim())
+      if (institutionFilter) params.set("institution", institutionFilter)
+      if (regionFilter) params.set("region", regionFilter)
+      if (typeFilter) params.set("ticketType", typeFilter)
+      params.set("sort", sort)
       if (queueView) params.set("queueView", queueView)
       params.set("page", String(ticketPage))
       params.set("pageSize", String(ticketPageSize))
@@ -332,7 +431,7 @@ export default function SupportCenter() {
     } finally {
       if (requestSequence === ticketRequestSequence.current) setLoading(false)
     }
-  }, [authFetch, categoryFilter, debouncedSearch, deepLinkedTicketId, priorityFilter, queueView, slaFilter, statusFilter, ticketPage, ticketPageSize])
+  }, [authFetch, categoryFilter, debouncedSearch, deepLinkedTicketId, priorityFilter, queueView, slaFilter, statusFilter, ticketPage, ticketPageSize, institutionFilter, regionFilter, typeFilter, sort])
 
   useEffect(() => {
     fetchTickets()
@@ -405,6 +504,9 @@ export default function SupportCenter() {
   }, [draftOwner, tickets])
 
   const visibleGuides = ROLE_GUIDES[role] || ROLE_GUIDES.Staff
+  const faqs = FAQS.map(faq => faq.question === "Can I close a ticket myself?" && !canWriteSupport
+    ? { ...faq, answer: "Your HQ role provides read-only oversight. Ask the responsible administrator to resolve or reopen a ticket. The requester can confirm closure after resolution." }
+    : faq)
 
   const visibleTickets = useMemo(() => {
     if (!focusedTicket) return tickets
@@ -424,7 +526,7 @@ export default function SupportCenter() {
     const frame = window.requestAnimationFrame(() => {
       const element = document.getElementById(`support-ticket-${deepLinkedTicketId}`)
       if (element) {
-        element.scrollIntoView({ behavior: "smooth", block: "start" })
+        element.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" })
       }
     })
 
@@ -459,22 +561,19 @@ export default function SupportCenter() {
     return incidentType ? labels[incidentType] || incidentType : ""
   }
 
-  useEffect(() => {
-    setTicketPage(1)
-  }, [categoryFilter, debouncedSearch, priorityFilter, queueView, slaFilter, statusFilter])
-
   const handleCreateTicket = async () => {
     if (savingTicket) return
     if (!newTicket.subject.trim() || !newTicket.description.trim()) {
       toast.error("Enter a subject and description")
       return
     }
+    if (!beginAction("create")) return
     setSavingTicket(true)
     try {
       const res = await authFetch("/api/support-tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newTicket),
+        body: JSON.stringify({ ...newTicket, learnerLabel: undefined }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to create support ticket")
@@ -494,34 +593,37 @@ export default function SupportCenter() {
       }
       setActiveTab("tickets")
       setExpandedTicketId(data._id || null)
-      setQueueView("")
-      setStatusFilter("")
-      setPriorityFilter("")
-      setCategoryFilter("")
-      setSlaFilter("")
-      setSearch("")
-      if (data._id) setSearchParams({ ticket: data._id }, { replace: true })
-      toast.success("Support ticket submitted")
+      clearFilters()
+      if (data._id) { const next = new URLSearchParams(); next.set("ticket", data._id); setSearchParams(next, { replace: true }) }
+      toast.success(`Ticket #${String(data._id).slice(-8).toUpperCase()} submitted. You can now attach screenshots below.`)
     } catch (error) {
       console.error("Error creating support ticket:", error)
       toast.error(error instanceof Error ? error.message : "Failed to create support ticket")
     } finally {
       setSavingTicket(false)
+      endAction("create")
     }
   }
 
   const handleReply = async (ticketId: string) => {
     const message = replyDrafts[ticketId]?.trim()
-    if (!message) return
+    if (!message || !beginAction(`reply:${ticketId}`)) return
+    const attemptKey = draftOwner ? supportDraftKey(draftOwner, `reply-attempt:${ticketId}`) : ""
+    const savedAttempt = replyAttempts.current[ticketId] || (attemptKey ? loadDraft<{ message: string; requestKey: string }>(attemptKey) : null)
+    const attempt = savedAttempt?.message === message ? savedAttempt : { message, requestKey: crypto.randomUUID() }
+    replyAttempts.current[ticketId] = attempt
     try {
+      if (attemptKey) saveDraft(attemptKey, attempt)
       const res = await authFetch(`/api/support-tickets/${ticketId}/replies`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify(attempt),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.message || "Failed to post reply")
-      setReplyDrafts((drafts) => ({ ...drafts, [ticketId]: "" }))
+      delete replyAttempts.current[ticketId]
+      if (attemptKey) clearDraft(attemptKey)
+      setReplyDrafts((drafts) => ({ ...drafts, [ticketId]: drafts[ticketId]?.trim() === message ? "" : drafts[ticketId] }))
       if (draftOwner) clearDraft(supportDraftKey(draftOwner, `reply:${ticketId}`))
       clearOfflineConflictBridge()
       if (replyOfflineReview) {
@@ -538,6 +640,8 @@ export default function SupportCenter() {
     } catch (error) {
       console.error("Error adding support reply:", error)
       toast.error(error instanceof Error ? error.message : "Failed to add reply")
+    } finally {
+      endAction(`reply:${ticketId}`)
     }
   }
 
@@ -546,6 +650,7 @@ export default function SupportCenter() {
       setResolutionTicketId(ticketId)
       return
     }
+    if (!beginAction(`status:${ticketId}`)) return
     try {
       const res = await authFetch(`/api/support-tickets/${ticketId}/status`, {
         method: "PUT",
@@ -561,10 +666,13 @@ export default function SupportCenter() {
     } catch (error) {
       console.error("Error updating ticket status:", error)
       toast.error(error instanceof Error ? error.message : "Failed to update ticket status")
+    } finally {
+      endAction(`status:${ticketId}`)
     }
   }
 
   const handleAssignment = async (ticketId: string) => {
+    if (!beginAction(`assignment:${ticketId}`)) return
     try {
       const res = await authFetch(`/api/support-tickets/${ticketId}/assignment`, {
         method: "PUT",
@@ -577,10 +685,13 @@ export default function SupportCenter() {
     } catch (error) {
       console.error("Error updating assignment:", error)
       toast.error(error instanceof Error ? error.message : "Failed to update assignment")
+    } finally {
+      endAction(`assignment:${ticketId}`)
     }
   }
 
   const handleEscalation = async (ticketId: string) => {
+    if (!beginAction(`escalation:${ticketId}`)) return
     try {
       const ticket = tickets.find((entry) => entry._id === ticketId)
       const draft = escalationDrafts[ticketId] || { escalatedTo: ticket?.escalatedTo?._id || "", escalationLevel: ticket?.escalationLevel || "None" as const, escalationReason: ticket?.escalationReason || "" }
@@ -599,10 +710,13 @@ export default function SupportCenter() {
     } catch (error) {
       console.error("Error updating escalation:", error)
       toast.error(error instanceof Error ? error.message : "Failed to update escalation")
+    } finally {
+      endAction(`escalation:${ticketId}`)
     }
   }
 
   const handleMarkSeen = async (ticketId: string) => {
+    if (!beginAction(`read:${ticketId}`)) return
     try {
       const res = await authFetch(`/api/support-tickets/${ticketId}/read`, {
         method: "PUT",
@@ -613,17 +727,19 @@ export default function SupportCenter() {
     } catch (error) {
       console.error("Error marking ticket as seen:", error)
       toast.error(error instanceof Error ? error.message : "Failed to mark ticket as seen")
+    } finally {
+      endAction(`read:${ticketId}`)
     }
   }
 
   return (
-    <div className="flex-1 space-y-8 p-8 max-w-7xl mx-auto w-full">
+    <div className="support-center flex-1 space-y-5 p-4 sm:p-6 max-w-7xl mx-auto w-full">
       <Dialog open={Boolean(resolutionTicketId)} onOpenChange={(open) => { if (!open) { setResolutionTicketId(null); setResolutionSummary("") } }}>
         <DialogContent className="bg-white">
           <DialogHeader><DialogTitle>Resolve ticket</DialogTitle><DialogDescription>Summarize what was done so the requester can review the outcome.</DialogDescription></DialogHeader>
           <label htmlFor="support-resolution" className="text-sm font-medium">Resolution summary</label>
           <Textarea id="support-resolution" value={resolutionSummary} onChange={(event) => setResolutionSummary(event.target.value)} />
-          <Button disabled={!resolutionSummary.trim()} onClick={() => { if (resolutionTicketId) void handleStatusChange(resolutionTicketId, "Resolved", resolutionSummary) }}>Resolve ticket</Button>
+          <Button disabled={!resolutionSummary.trim() || Boolean(resolutionTicketId && pending[`status:${resolutionTicketId}`])} onClick={() => { if (resolutionTicketId) void handleStatusChange(resolutionTicketId, "Resolved", resolutionSummary) }}>{resolutionTicketId && pending[`status:${resolutionTicketId}`] ? "Resolving…" : "Resolve ticket"}</Button>
         </DialogContent>
       </Dialog>
       <Dialog open={ticketOpen} onOpenChange={(next) => {
@@ -647,14 +763,15 @@ export default function SupportCenter() {
             <label htmlFor="support-subject" className="block text-sm font-medium">Subject</label>
             <Input
               id="support-subject"
-              placeholder="Subject"
+              maxLength={180}
+              placeholder="For example: placement approval is blocked"
               value={newTicket.subject}
               onChange={(e) => setNewTicket((ticket) => ({ ...ticket, subject: e.target.value }))}
             />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div><label className="mb-2 block text-sm font-medium">Category</label>
+              <div><label htmlFor="support-category" className="mb-2 block text-sm font-medium">Category</label>
               <Select value={newTicket.category} onValueChange={(value) => setNewTicket((ticket) => ({ ...ticket, category: value as TicketCategory }))}>
-                <SelectTrigger className="rounded-xl bg-gray-50 border-gray-200">
+                <SelectTrigger id="support-category" aria-label="Ticket category" className="rounded-xl bg-gray-50 border-gray-200">
                   <SelectValue placeholder="Category" />
                 </SelectTrigger>
                 <SelectContent>
@@ -667,9 +784,9 @@ export default function SupportCenter() {
                 </SelectContent>
               </Select>
               </div>
-              <div><label className="mb-2 block text-sm font-medium">Priority</label>
+              <div><label htmlFor="support-priority" className="mb-2 block text-sm font-medium">Priority</label>
               <Select value={newTicket.priority} onValueChange={(value) => setNewTicket((ticket) => ({ ...ticket, priority: value as TicketPriority }))}>
-                <SelectTrigger className="rounded-xl bg-gray-50 border-gray-200">
+                <SelectTrigger id="support-priority" aria-label="Ticket priority" className="rounded-xl bg-gray-50 border-gray-200">
                   <SelectValue placeholder="Priority" />
                 </SelectTrigger>
                 <SelectContent>
@@ -681,13 +798,32 @@ export default function SupportCenter() {
               </Select>
               </div>
             </div>
+            <p className="text-sm text-slate-500">Low: general question · Medium: normal assistance · High: work blocked · Urgent: critical disruption or safety issue. Targets use elapsed calendar hours.</p>
+            {canChooseContext ? <fieldset className="space-y-3 rounded-xl border border-slate-200 p-4">
+              <legend className="px-1 text-sm font-semibold">Learner and placement (optional)</legend>
+              <label htmlFor="support-learner-search" className="block text-sm">Find learner by name or tracking ID</label>
+              <Input id="support-learner-search" value={learnerSearch} onChange={event => setLearnerSearch(event.target.value)} placeholder="Search authorized learners" />
+              <label htmlFor="support-learner" className="block text-sm">Related learner</label>
+              <select id="support-learner" className="h-11 w-full rounded-xl border bg-white px-3 text-sm" value={newTicket.learnerId || ""} onChange={event => { const option = contextOptions.find(item => item._id === event.target.value); setPlacementOptions([]); setNewTicket(current => ({ ...current, learnerId: event.target.value, learnerLabel: option ? `${option.name} · ${option.trackingId}` : "", placementId: "" })) }}>
+                <option value="">No learner linked</option>
+                {newTicket.learnerId && !contextOptions.some(item => item._id === newTicket.learnerId) ? <option value={newTicket.learnerId}>{newTicket.learnerLabel || "Previously selected learner"}</option> : null}
+                {contextOptions.map(option => <option key={option._id} value={option._id}>{option.name} · {option.trackingId} · {option.institution}</option>)}
+              </select>
+              {newTicket.learnerId ? <><label htmlFor="support-placement" className="block text-sm">Related placement</label><select id="support-placement" disabled={contextLoading} className="h-11 w-full rounded-xl border bg-white px-3 text-sm" value={newTicket.placementId || ""} onChange={event => setNewTicket(current => ({ ...current, placementId: event.target.value }))}>
+                <option value="">No placement linked</option>
+                {placementOptions.map(option => <option key={option._id} value={option._id}>{option.companyName} · {option.status}</option>)}
+              </select></> : null}
+              <p role="status" className="text-xs text-slate-500">{contextLoading ? "Loading learner context…" : contextError || "Showing up to 25 matches. Refine the search to find another learner."}</p>
+            </fieldset> : null}
             <label htmlFor="support-description" className="block text-sm font-medium">Description</label>
             <Textarea
               id="support-description"
+              maxLength={10000}
               placeholder="Explain what happened, where it happened, and what result you expected."
               value={newTicket.description}
               onChange={(e) => setNewTicket((ticket) => ({ ...ticket, description: e.target.value }))}
             />
+            <p className="text-sm text-slate-500">After submission, attach screenshots or documents in the ticket’s Evidence & Attachments section. Attachments require a connection.</p>
             <Button disabled={savingTicket || !newTicket.subject.trim() || !newTicket.description.trim()} className="w-full rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={handleCreateTicket}>
               <MessageSquarePlus className="h-4 w-4 mr-2" />
               {savingTicket ? "Submitting…" : "Submit Ticket"}
@@ -696,58 +832,11 @@ export default function SupportCenter() {
         </DialogContent>
       </Dialog>
 
-      {isHQ ? (
-        <div className="rounded-[2rem] border border-slate-800 bg-[radial-gradient(circle_at_top_left,_rgba(251,191,36,0.22),_transparent_35%),linear-gradient(135deg,_#0f172a_0%,_#111827_55%,_#1e293b_100%)] p-6 md:p-8 text-white shadow-2xl">
-          <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
-            <div className="max-w-3xl">
-              <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-4 py-1 text-[11px] font-black uppercase tracking-[0.3em] text-amber-200">
-                <ShieldAlert className="h-3.5 w-3.5" />
-                HQ Admin Center
-              </div>
-              <h2 className="mt-4 text-3xl md:text-4xl font-black tracking-tight flex items-center gap-3">
-                <LifeBuoy className="h-7 w-7 md:h-9 md:w-9 text-amber-300" />
-                Support Command Queue
-              </h2>
-              <p className="mt-3 text-sm md:text-base font-medium text-slate-200">
-                Triage escalations, watch SLA exposure, and keep the national support queue moving. This workspace is framed for the team that receives and governs tickets, not the teams raising them.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Button variant="outline" className="rounded-xl border-white/30 text-white bg-white/10 hover:bg-white/20" onClick={() => document.getElementById("support-ticket-list")?.scrollIntoView({ behavior: "smooth" })}>View tickets</Button>
-              <Button className="rounded-xl bg-amber-300 hover:bg-amber-400 text-slate-950" onClick={() => setTicketOpen(true)}>
-                <MessageSquarePlus className="h-4 w-4 mr-2" />
-                Open HQ Ticket
-              </Button>
-            </div>
-          </div>
-          <div className="mt-5 flex flex-wrap gap-2 text-sm">
-            {[
-              ["Awaiting support", hqQueueStats.awaitingSupport],
-              ["Urgent", hqQueueStats.urgent],
-              ["Unassigned", hqQueueStats.unassigned],
-              ["SLA breaches", ticketStats.breached],
-              ["New activity", ticketStats.unread],
-              ["Incidents", hqQueueStats.incidents],
-            ].map(([label, count]) => <span key={label} className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5"><strong>{count}</strong> {label}</span>)}
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight flex items-center gap-3">
-              <LifeBuoy className="h-6 w-6 md:h-8 md:w-8 text-[#FFB800]" />
-              Help & Support Center
-            </h2>
-            <p className="text-muted-foreground mt-1 font-medium">
-              Role-specific guides, common answers, and support tickets in one place.
-            </p>
-          </div>
-          {canWriteSupport ? <Button data-help-id="support-new-ticket" className="rounded-xl bg-[#FFB800] hover:bg-[#e5a600] text-gray-900" onClick={() => setTicketOpen(true)}>
-            <MessageSquarePlus className="h-4 w-4 mr-2" />
-            New Ticket
-          </Button> : null}
-        </div>
-      )}
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div><h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-slate-900"><LifeBuoy className="h-6 w-6 text-amber-600" />{isHQ ? "Help & Support · HQ" : "Help & Support"}</h2>
+        <p className="mt-1 text-sm text-slate-500">{isHQ ? "Review institution requests, ownership, and response deadlines." : "Get help, follow your institution’s requests, and find workflow guides."}</p></div>
+        {canWriteSupport ? <Button data-help-id="support-new-ticket" className="rounded-xl bg-[#FFB800] text-gray-900 hover:bg-[#e5a600]" onClick={() => setTicketOpen(true)}><MessageSquarePlus className="h-4 w-4" />New ticket</Button> : <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">Read-only oversight · contact the ticket owner for action</span>}
+      </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="bg-gray-100/70 p-1 rounded-2xl inline-flex h-auto">
@@ -768,13 +857,13 @@ export default function SupportCenter() {
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-4">
                   <Input
-                    placeholder="Search walkthroughs by page or workflow..."
+                    aria-label="Search walkthroughs" placeholder="Search walkthroughs by page or workflow..."
                     value={guideSearch}
                     onChange={(e) => setGuideSearch(e.target.value)}
                     className="rounded-xl border-amber-200 bg-white"
                   />
                   <Select value={guideCategory} onValueChange={setGuideCategory}>
-                    <SelectTrigger className="rounded-xl border-amber-200 bg-white">
+                    <SelectTrigger aria-label="Walkthrough category" className="rounded-xl border-amber-200 bg-white">
                       <SelectValue placeholder="All categories" />
                     </SelectTrigger>
                     <SelectContent>
@@ -901,7 +990,10 @@ export default function SupportCenter() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {FAQS.map((faq, index) => {
+              <Input aria-label="Search frequently asked questions" placeholder="Search questions and answers" value={faqSearch} onChange={event => setFaqSearch(event.target.value)} />
+              {!faqs.some(faq => `${faq.question} ${faq.answer}`.toLowerCase().includes(faqSearch.toLowerCase())) ? <p className="text-sm text-slate-500">No answers match. Try another term or open a support ticket.</p> : null}
+              {faqs.map((faq, index) => {
+                if (!`${faq.question} ${faq.answer}`.toLowerCase().includes(faqSearch.toLowerCase())) return null
                 const expanded = expandedFaq === index
                 return (
                   <button
@@ -916,9 +1008,7 @@ export default function SupportCenter() {
                       <h3 className="font-black text-gray-900">{faq.question}</h3>
                       <ChevronDown className={`h-5 w-5 text-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`} />
                     </div>
-                    {expanded && (
-                      <p id={`support-faq-${index}`} className="text-sm text-gray-600 mt-3 leading-relaxed">{faq.answer}</p>
-                    )}
+                    <p id={`support-faq-${index}`} hidden={!expanded} className="text-sm text-gray-600 mt-3 leading-relaxed">{faq.answer}</p>
                   </button>
                 )
               })}
@@ -927,30 +1017,29 @@ export default function SupportCenter() {
         </TabsContent>
 
         <TabsContent value="tickets" className="mt-6 space-y-6">
-          {isHQ ? null : loading ? (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              {[...Array(4)].map((_, index) => <Skeleton key={index} className="h-28 rounded-[2rem]" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-4 xl:grid-cols-8 gap-6">
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Matching Tickets</p><p className="text-3xl font-black text-gray-900">{ticketStats.total}</p></CardContent></Card>
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Open</p><p className="text-3xl font-black text-amber-600">{ticketStats.open}</p></CardContent></Card>
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">In Progress</p><p className="text-3xl font-black text-blue-600">{ticketStats.inProgress}</p></CardContent></Card>
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Resolved</p><p className="text-3xl font-black text-emerald-600">{ticketStats.resolved}</p></CardContent></Card>
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">New Activity</p><p className="text-3xl font-black text-indigo-600">{ticketStats.unread}</p></CardContent></Card>
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Owned by Me</p><p className="text-3xl font-black text-sky-600">{ticketStats.ownedByMe}</p></CardContent></Card>
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">SLA Breaches</p><p className="text-3xl font-black text-red-600">{ticketStats.breached}</p></CardContent></Card>
-              <Card className="bg-white border-none shadow-xl rounded-[2rem]"><CardContent className="p-6"><p className="text-sm text-gray-500">Escalated</p><p className="text-3xl font-black text-fuchsia-600">{ticketStats.escalated}</p></CardContent></Card>
-            </div>
-          )}
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" aria-label="Queue summary">
+            {[
+              { label: canWriteSupport ? "Awaiting my response" : "Awaiting support", count: canWriteSupport ? ticketStats.awaitingMe || 0 : hqQueueStats.awaitingSupport, view: canWriteSupport ? "awaiting" : "support" },
+              { label: "Unassigned active", count: hqQueueStats.unassigned, view: "unassigned" },
+              { label: "New activity", count: ticketStats.unread, view: "new" },
+              { label: "Owned by me", count: ticketStats.ownedByMe, view: "owned" },
+            ].map(item => <button key={item.label} type="button" onClick={() => setQueueView(queueView === item.view ? "" : item.view)} aria-pressed={queueView === item.view} className={`rounded-xl border p-3 text-left ${queueView === item.view ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"}`}><span className="block text-xs text-slate-500">{item.label}</span><strong className="text-xl tabular-nums text-slate-900">{loading ? "…" : item.count}</strong></button>)}
+          </div>
+
 
           <Card className="bg-white border-none shadow-xl rounded-[2rem]">
-            <CardContent className="p-6">
+            <CardContent className="p-4 sm:p-6">
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
-                  <Input aria-label="Search tickets" placeholder="Search subject, description or institution" value={search} onChange={(event) => setSearch(event.target.value)} />
-                  <Button variant="outline" onClick={() => void fetchTickets()}>Refresh</Button>
+                  <Input aria-label="Search tickets" placeholder="Search subject, institution or full ticket ID" value={search} onChange={(event) => setSearch(event.target.value)} />
+                  <Button variant="outline" disabled={loading} onClick={() => void fetchTickets()}>{loading ? "Refreshing…" : "Refresh"}</Button>
                 </div>
+                <Button variant="ghost" size="sm" aria-expanded={filtersOpen} aria-controls="support-advanced-filters" onClick={() => setFiltersOpen(current => !current)}>{filtersOpen ? "Hide filters" : "Filters and sorting"}{activeFilters.length ? ` (${activeFilters.length})` : ""}<ChevronDown className={`h-4 w-4 ${filtersOpen ? "rotate-180" : ""}`} /></Button>
+                <div id="support-advanced-filters" hidden={!filtersOpen} className="space-y-3">
+                {canFilterInstitutions ? <div className="grid gap-3 sm:grid-cols-2">
+                  <div><label htmlFor="support-region-filter" className="mb-1 block text-xs font-medium">Region</label><select id="support-region-filter" className="h-11 w-full rounded-xl border bg-white px-3 text-sm" value={regionFilter} onChange={event => { setRegionFilter(event.target.value); setInstitutionFilter("") }}><option value="">All authorized regions</option>{[...new Set(institutions.map(item => item.region))].filter(Boolean).sort().map(region => <option key={region}>{region}</option>)}</select></div>
+                  <div><label htmlFor="support-institution-filter" className="mb-1 block text-xs font-medium">Institution</label><select id="support-institution-filter" className="h-11 w-full rounded-xl border bg-white px-3 text-sm" value={institutionFilter} onChange={event => setInstitutionFilter(event.target.value)}><option value="">All authorized institutions</option>{institutions.filter(item => !regionFilter || item.region === regionFilter).map(item => <option key={item.name}>{item.name}</option>)}</select></div>
+                </div> : null}
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
                   <Select value={queueView || ALL_QUEUE_VIEWS} onValueChange={(value) => setQueueView(value === ALL_QUEUE_VIEWS ? "" : value)}>
                     <SelectTrigger aria-label="Queue view" className="rounded-xl bg-gray-50 border-gray-200">
@@ -960,7 +1049,7 @@ export default function SupportCenter() {
                       <SelectItem value={ALL_QUEUE_VIEWS}>All tickets</SelectItem>
                       <SelectItem value="new">New activity</SelectItem>
                       <SelectItem value="owned">Owned by me</SelectItem>
-                      <SelectItem value="awaiting">Awaiting my response</SelectItem>
+                      {canWriteSupport ? <SelectItem value="awaiting">Awaiting my response</SelectItem> : <SelectItem value="support">Awaiting support</SelectItem>}
                       <SelectItem value="unassigned">Unassigned active</SelectItem>
                     </SelectContent>
                   </Select>
@@ -989,41 +1078,19 @@ export default function SupportCenter() {
                     <SelectContent><SelectItem value="__all_sla">All SLA states</SelectItem><SelectItem value="breached">Breached</SelectItem><SelectItem value="on-track">On track</SelectItem></SelectContent>
                   </Select>
                 </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div><label htmlFor="support-type-filter" className="mb-1 block text-xs font-medium">Ticket type</label><select id="support-type-filter" className="h-11 rounded-xl border bg-white px-3 text-sm" value={typeFilter} onChange={event => setTypeFilter(event.target.value)}><option value="">All types</option><option value="Support">Support</option><option value="Incident">Incident</option></select></div>
+            <div><label htmlFor="support-sort" className="mb-1 block text-xs font-medium">Sort by</label><select id="support-sort" className="h-11 rounded-xl border bg-white px-3 text-sm" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Latest activity</option><option value="oldest">Oldest first</option><option value="deadline">Resolution deadline</option><option value="priority">Highest priority</option></select></div>
+
+          </div>
+                </div>
               </div>
             </CardContent>
           </Card>
 
-          {!loading ? (
-            <div className="flex flex-col gap-3 rounded-[2rem] border border-gray-100 bg-white px-6 py-4 shadow-sm md:flex-row md:items-center md:justify-between">
-              <p className="text-sm font-medium text-gray-500">
-                Showing {ticketTotal === 0 ? 0 : (ticketPage - 1) * ticketPageSize + 1}-
-                {Math.min(ticketPage * ticketPageSize, ticketTotal)} of {ticketTotal} tickets
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  className="rounded-xl"
-                  disabled={ticketPage <= 1}
-                  onClick={() => setTicketPage((current) => Math.max(current - 1, 1))}
-                >
-                  Previous
-                </Button>
-                <span className="min-w-[96px] text-center text-sm font-medium text-gray-600">
-                  Page {ticketTotal === 0 ? 0 : ticketPage} of {ticketTotalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  className="rounded-xl"
-                  disabled={ticketPage >= ticketTotalPages || ticketTotal === 0}
-                  onClick={() => setTicketPage((current) => Math.min(current + 1, ticketTotalPages))}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          <div id="support-ticket-list" className="space-y-4 scroll-mt-6">
+          <div className="flex flex-wrap items-center gap-2">{activeFilters.length ? <Button variant="ghost" onClick={clearFilters}>Clear filters ({activeFilters.length})</Button> : null}
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Active filters">{activeFilters.map(([key, value]) => <span key={key} className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">{key}: {value}</span>)}</div></div>
+          <div id="support-ticket-list" aria-busy={loading} className="space-y-4 scroll-mt-6">
             {loading ? (
               [...Array(3)].map((_, index) => <Skeleton key={index} className="h-52 rounded-[2rem]" />)
             ) : ticketError ? (
@@ -1032,7 +1099,7 @@ export default function SupportCenter() {
               <Card className="bg-white border-none shadow-xl rounded-[2rem]">
                 <CardContent className="p-12 text-center">
                   <Ticket className="h-16 w-16 text-gray-200 mx-auto mb-4" />
-                  <p className="font-medium text-gray-500">No support tickets match this queue view</p>
+                  <p className="font-medium text-gray-700">{activeFilters.length ? "No tickets match these filters" : "No support tickets yet"}</p><p className="mt-1 text-sm text-gray-500">{activeFilters.length ? "Clear filters to see more requests." : "Open a ticket when you need help. Replies and progress will appear here."}</p>{activeFilters.length ? <Button variant="outline" className="mt-3" onClick={clearFilters}>Clear filters</Button> : canWriteSupport ? <Button className="mt-3" onClick={() => setTicketOpen(true)}>New ticket</Button> : null}
                 </CardContent>
               </Card>
             ) : (
@@ -1051,8 +1118,10 @@ export default function SupportCenter() {
                   <CardHeader className="border-b border-gray-100">
                     <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
                       <div>
-                        <CardTitle className="text-lg font-black text-gray-900">{ticket.subject}</CardTitle>
+                        <h3 className="break-words text-lg font-semibold text-gray-900">{ticket.subject}</h3>
                         <p className="text-xs text-gray-500">Ticket #{ticket._id.slice(-8).toUpperCase()} · {ticket.institution || "Support"}</p>
+                        <p className="mt-2 text-sm font-medium text-slate-700">{nextAction(ticket)}</p>
+                        <p className={`mt-1 text-xs ${ticket.slaStatus?.hasBreach ? "font-medium text-red-700" : "text-slate-500"}`}>{deadlineLabel(ticket)}</p>
                         <p className="text-sm text-gray-500 mt-1">
                           Opened by {ticket.requester.name} on {new Date(ticket.createdAt).toLocaleString()}
                         </p>
@@ -1060,7 +1129,7 @@ export default function SupportCenter() {
                       <div className="flex flex-wrap gap-2">
                         {getPriorityBadge(ticket.priority)}
                         {ticket._id === deepLinkedTicketId ? (
-                          <Badge className="bg-amber-100 text-amber-800 border-amber-200">Opened from notification</Badge>
+                          <Badge className="bg-amber-100 text-amber-800 border-amber-200">Focused ticket</Badge>
                         ) : null}
                         {ticket.hasUnreadChanges ? (
                           <Badge className="bg-blue-100 text-blue-700 border-blue-200">New Activity</Badge>
@@ -1071,21 +1140,12 @@ export default function SupportCenter() {
                         {ticket.ticketType === "Incident" ? (
                           <Badge className="bg-red-100 text-red-700 border-red-200">Incident</Badge>
                         ) : null}
-                        <Badge className="bg-slate-100 text-slate-700 border-slate-200">{ticket.category}</Badge>
+
                         {getStatusBadge(ticket.status)}
-                        {ticket.awaitingParty && ticket.awaitingParty !== "None" ? (
-                          <Badge className="bg-blue-100 text-blue-700 border-blue-200">Awaiting: {ticket.awaitingParty}</Badge>
-                        ) : null}
-                        {ticket.escalationLevel && ticket.escalationLevel !== "None" ? (
-                          <Badge className="bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200">Escalated: {ticket.escalationLevel}</Badge>
-                        ) : null}
-                        {ticket.slaStatus?.hasBreach ? (
-                          <Badge className="bg-red-100 text-red-700 border-red-200">SLA Breach</Badge>
-                        ) : null}
-                        <Button variant="outline" size="sm" aria-expanded={expandedTicketId === ticket._id} onClick={() => setExpandedTicketId((current) => current === ticket._id ? null : ticket._id)}>{expandedTicketId === ticket._id ? "Hide details" : "View details"}</Button>
-                        {ticket.hasUnreadChanges ? (
-                          <Button variant="outline" size="sm" className="rounded-xl" onClick={() => handleMarkSeen(ticket._id)}>
-                            Mark seen
+                        <Button variant="outline" size="sm" aria-expanded={expandedTicketId === ticket._id} onClick={() => { const next = new URLSearchParams(searchParams); if (expandedTicketId === ticket._id) { setExpandedTicketId(null); next.delete("ticket") } else { setExpandedTicketId(ticket._id); next.set("ticket", ticket._id) } setSearchParams(next, { replace: true }) }}>{expandedTicketId === ticket._id ? "Hide details" : "View details"}</Button>
+                        {ticket.hasUnreadChanges && !ticket.archivedAt ? (
+                          <Button variant="outline" size="sm" className="rounded-xl" disabled={pending[`read:${ticket._id}`]} onClick={() => handleMarkSeen(ticket._id)}>
+                            {pending[`read:${ticket._id}`] ? "Saving…" : "Mark seen"}
                           </Button>
                         ) : ticket._id === deepLinkedTicketId ? (
                           <Button
@@ -1105,8 +1165,9 @@ export default function SupportCenter() {
                     </div>
                   </CardHeader>
                   {expandedTicketId === ticket._id ? <CardContent className="p-6 space-y-5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500"><span>Category: {ticket.category} · {ticket.region || "Region not recorded"}</span><Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(`${window.location.origin}/support-center?ticket=${ticket._id}`).then(() => toast.success("Ticket link copied")).catch(() => toast.error("Could not copy link"))}>Copy ticket link</Button></div>
                     <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">
-                      <p className="text-sm text-gray-700 leading-relaxed">{ticket.description}</p>
+                      <p className="whitespace-pre-wrap break-words text-sm text-gray-700 leading-relaxed">{ticket.description}</p>
                       {ticket.ticketType === "Incident" ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {ticket.incidentType ? (
@@ -1147,6 +1208,42 @@ export default function SupportCenter() {
                       ) : null}
                     </div>
 
+                    <div className="space-y-3">
+                      <h4 className="font-black text-gray-900">Replies</h4>
+                      {ticket.resolutionSummary ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"><strong>{["Open", "InProgress"].includes(ticket.status) ? "Previous resolution:" : "Resolution:"}</strong> {ticket.resolutionSummary}</div> : null}
+                      {ticket.replies.length === 0 ? (
+                        <p className="text-sm text-gray-500">No replies yet.</p>
+                      ) : (
+                        ticket.replies.map((reply) => (
+                          <div key={reply._id} className="rounded-2xl border border-gray-100 p-4 bg-white">
+                            <div className="flex items-center justify-between gap-4">
+                              <div className="font-bold text-gray-900">{reply.createdByName}</div>
+                              <div className="text-xs text-gray-400 font-medium">
+                                {reply.createdByRole} · {new Date(reply.createdAt).toLocaleString()}
+                              </div>
+                            </div>
+                            <p className="whitespace-pre-wrap break-words text-sm text-gray-600 mt-2 leading-relaxed">{reply.message}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {canWriteSupport && !ticket.archivedAt && !["Resolved", "Closed"].includes(ticket.status) ? <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 space-y-3">
+                      <label htmlFor={`support-reply-${ticket._id}`} className="text-sm font-medium">Reply</label>
+                            <Textarea
+                                disabled={pending[`reply:${ticket._id}`]}
+                                maxLength={10000}
+                                id={`support-reply-${ticket._id}`}
+                                placeholder="Add a reply or follow-up note..."
+                                value={replyDrafts[ticket._id] || ""}
+                                onChange={(e) => setReplyDrafts((drafts) => ({ ...drafts, [ticket._id]: e.target.value }))}
+                                className="bg-white"
+                              />
+                      <Button disabled={!replyDrafts[ticket._id]?.trim() || pending[`reply:${ticket._id}`]} className="rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white" onClick={() => handleReply(ticket._id)}>
+                        <SendHorizonal className="h-4 w-4 mr-2" />
+                        {pending[`reply:${ticket._id}`] ? "Sending…" : "Send reply"}
+                      </Button>
+                    </div> : null}
                     <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>
@@ -1154,8 +1251,8 @@ export default function SupportCenter() {
                           <p className="text-sm text-gray-600 mt-1">Upload supporting files for this ticket thread.</p>
                         </div>
                       </div>
-                      <DocumentList documents={ticket.documents || []} onDelete={canWriteSupport && !["Resolved", "Closed"].includes(ticket.status) ? fetchTickets : undefined} />
-                      {canWriteSupport && !["Resolved", "Closed"].includes(ticket.status) ? <DocumentUpload
+                      <DocumentList documents={ticket.documents || []} onDelete={canWriteSupport && !ticket.archivedAt && !["Resolved", "Closed"].includes(ticket.status) ? fetchTickets : undefined} />
+                      {canWriteSupport && !ticket.archivedAt && !["Resolved", "Closed"].includes(ticket.status) ? <DocumentUpload
                         supportTicketId={ticket._id}
                         placementId={ticket.placement?._id}
                         learnerId={ticket.learner?._id}
@@ -1165,11 +1262,12 @@ export default function SupportCenter() {
                       /> : null}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <details className="rounded-xl border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-semibold">Ownership, escalation & response targets</summary>
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-2">
                         <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Assignment</p>
                         <p className="text-sm font-bold text-gray-900">{ticket.assignedTo ? `${ticket.assignedTo.name} (${ticket.assignedTo.role})` : "Unassigned"}</p>
-                        {canManageTickets ? (
+                        {canManageTickets && !ticket.archivedAt && !["Resolved", "Closed"].includes(ticket.status) ? (
                           <div className="flex flex-col md:flex-row gap-2">
                             <Select value={assignmentDrafts[ticket._id] ?? ticket.assignedTo?._id ?? "__unassigned"} onValueChange={(value) => setAssignmentDrafts((current) => ({ ...current, [ticket._id]: value === "__unassigned" ? "" : value }))}>
                               <SelectTrigger aria-label="Assign responder" className="rounded-xl bg-white border-gray-200">
@@ -1182,17 +1280,17 @@ export default function SupportCenter() {
                                 ))}
                               </SelectContent>
                             </Select>
-                            <Button variant="outline" className="rounded-xl" disabled={assignmentDrafts[ticket._id] === undefined || assignmentDrafts[ticket._id] === (ticket.assignedTo?._id || "")} onClick={() => handleAssignment(ticket._id)}>
+                            <Button variant="outline" className="rounded-xl" disabled={pending[`assignment:${ticket._id}`] || assignmentDrafts[ticket._id] === undefined || assignmentDrafts[ticket._id] === (ticket.assignedTo?._id || "")} onClick={() => handleAssignment(ticket._id)}>
                               <UserPlus className="h-4 w-4 mr-2" />
-                              Assign
+                              {pending[`assignment:${ticket._id}`] ? "Saving…" : "Save assignment"}
                             </Button>
                           </div>
                         ) : null}
                       </div>
 
                       <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-4 space-y-2">
-                        <p className="text-xs font-black text-gray-400 uppercase tracking-wider">SLA Timers</p>
-                        <p className="text-sm text-gray-700">First response due: {ticket.firstResponseDueAt ? new Date(ticket.firstResponseDueAt).toLocaleString() : "N/A"}</p>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Response targets · calendar hours</p>
+                        <p className="text-sm text-gray-700">{ticket.firstRespondedAt ? `First response sent: ${new Date(ticket.firstRespondedAt).toLocaleString()}` : `First response due: ${ticket.firstResponseDueAt ? new Date(ticket.firstResponseDueAt).toLocaleString() : "Not recorded"}`}</p>
                         <p className="text-sm text-gray-700">Resolution due: {ticket.resolutionDueAt ? new Date(ticket.resolutionDueAt).toLocaleString() : "N/A"}</p>
                         {ticket.slaStatus?.firstResponseBreached ? <p className="text-sm font-bold text-red-600">First response SLA breached</p> : null}
                         {ticket.slaStatus?.resolutionBreached ? <p className="text-sm font-bold text-red-600">Resolution SLA breached</p> : null}
@@ -1208,7 +1306,7 @@ export default function SupportCenter() {
                         Current owner: {ticket.escalatedTo ? `${ticket.escalatedTo.name} (${ticket.escalatedTo.role})` : "Not escalated"}
                       </p>
                       {ticket.escalationReason ? <p className="text-sm text-gray-600">Reason: {ticket.escalationReason}</p> : null}
-                      {canManageTickets ? (
+                      {canManageTickets && !ticket.archivedAt && !["Resolved", "Closed"].includes(ticket.status) ? (
                         <>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <Select value={escalationDrafts[ticket._id]?.escalatedTo ?? ticket.escalatedTo?._id ?? "__none"} onValueChange={(value) => setEscalationDrafts((current) => ({ ...current, [ticket._id]: { escalatedTo: value === "__none" ? "" : value, escalationLevel: value === "__none" ? "None" : assignees.find((assignee) => assignee._id === value)?.role === "SuperAdmin" ? "HQ" : "Regional", escalationReason: current[ticket._id]?.escalationReason ?? ticket.escalationReason ?? "" } }))}>
@@ -1240,14 +1338,15 @@ export default function SupportCenter() {
                             onChange={(e) => setEscalationDrafts((current) => ({ ...current, [ticket._id]: { escalatedTo: current[ticket._id]?.escalatedTo ?? ticket.escalatedTo?._id ?? "", escalationLevel: current[ticket._id]?.escalationLevel ?? ticket.escalationLevel ?? "None", escalationReason: e.target.value } }))}
                             className="bg-white"
                           />
-                          <Button variant="outline" className="rounded-xl border-fuchsia-200 text-fuchsia-700 hover:bg-fuchsia-50" disabled={!escalationDrafts[ticket._id]} onClick={() => handleEscalation(ticket._id)}>
-                            Update Escalation
+                          <Button variant="outline" className="rounded-xl border-fuchsia-200 text-fuchsia-700 hover:bg-fuchsia-50" disabled={pending[`escalation:${ticket._id}`] || !escalationDrafts[ticket._id]} onClick={() => handleEscalation(ticket._id)}>
+                            {pending[`escalation:${ticket._id}`] ? "Saving…" : "Update escalation"}
                           </Button>
                         </>
                       ) : null}
                     </div>
 
-                    {(canManageTickets || ticket.assignedTo?._id === user?._id || ticket.requester._id === user?._id) && (
+                    </details>
+                    {canWriteSupport && !ticket.archivedAt && (canManageTickets || ticket.assignedTo?._id === user?._id || ticket.requester._id === user?._id) && (
                       <div className="flex flex-wrap items-center gap-2">
                         {(ticket.requester._id === user?._id && !canManageTickets && ticket.assignedTo?._id !== user?._id
                           ? (["Resolved", "Closed"].includes(ticket.status) ? ([ticket.status === "Resolved" ? "Closed" : "Open", "Open"] as TicketStatus[]) : [] as TicketStatus[])
@@ -1256,53 +1355,53 @@ export default function SupportCenter() {
                             key={status}
                             variant={ticket.status === status ? "default" : "outline"}
                             className={`rounded-xl ${ticket.status === status ? "bg-[#FFB800] text-gray-900 hover:bg-[#e5a600]" : ""}`}
+                            disabled={pending[`status:${ticket._id}`]}
                             onClick={() => handleStatusChange(ticket._id, status)}
                           >
-                            {status === "InProgress" ? "In Progress" : status}
+                            {pending[`status:${ticket._id}`] ? "Saving…" : status === "InProgress" ? "Start work" : status === "Open" ? ["Resolved", "Closed"].includes(ticket.status) ? "Reopen ticket" : "Mark open" : status === "Resolved" ? "Resolve ticket" : "Confirm closure"}
                           </Button>
                         ))}
                       </div>
                     )}
 
-                    <div className="space-y-3">
-                      <h4 className="font-black text-gray-900">Replies</h4>
-                      {ticket.resolutionSummary ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"><strong>Resolution:</strong> {ticket.resolutionSummary}</div> : null}
-                      {ticket.replies.length === 0 ? (
-                        <p className="text-sm text-gray-500">No replies yet.</p>
-                      ) : (
-                        ticket.replies.map((reply) => (
-                          <div key={reply._id} className="rounded-2xl border border-gray-100 p-4 bg-white">
-                            <div className="flex items-center justify-between gap-4">
-                              <div className="font-bold text-gray-900">{reply.createdByName}</div>
-                              <div className="text-xs text-gray-400 font-medium">
-                                {reply.createdByRole} · {new Date(reply.createdAt).toLocaleString()}
-                              </div>
-                            </div>
-                            <p className="text-sm text-gray-600 mt-2 leading-relaxed">{reply.message}</p>
-                          </div>
-                        ))
-                      )}
-                    </div>
+                    <details className="rounded-xl border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-semibold">Ticket activity</summary><ol className="mt-3 space-y-3 text-sm"><li><time className="text-xs text-slate-500">{new Date(ticket.createdAt).toLocaleString()}</time><p>Ticket opened by {ticket.requester.name}</p></li>{ticket.activity?.map(event => <li key={event._id}><time className="text-xs text-slate-500">{new Date(event.createdAt).toLocaleString()}</time><p><strong>{event.actorName}</strong> · {event.detail}</p></li>)}</ol><p className="mt-3 text-xs text-slate-500">Earlier handoffs may not have been recorded. Replies are shown in the conversation above.</p></details>
 
-                    {canWriteSupport && !["Resolved", "Closed"].includes(ticket.status) ? <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 space-y-3">
-                      <label htmlFor={`support-reply-${ticket._id}`} className="text-sm font-medium">Reply</label>
-                            <Textarea
-                                id={`support-reply-${ticket._id}`}
-                                placeholder="Add a reply or follow-up note..."
-                                value={replyDrafts[ticket._id] || ""}
-                                onChange={(e) => setReplyDrafts((drafts) => ({ ...drafts, [ticket._id]: e.target.value }))}
-                                className="bg-white"
-                              />
-                      <Button className="rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white" onClick={() => handleReply(ticket._id)}>
-                        <SendHorizonal className="h-4 w-4 mr-2" />
-                        Post Reply
-                      </Button>
-                    </div> : null}
                   </CardContent> : null}
                 </Card>
               ))
             )}
           </div>
+          {!loading ? (
+            <div className="flex flex-col gap-3 rounded-[2rem] border border-gray-100 bg-white px-6 py-4 shadow-sm md:flex-row md:items-center md:justify-between">
+              <p className="text-sm font-medium text-gray-500">
+                Showing {ticketTotal === 0 ? 0 : (ticketPage - 1) * ticketPageSize + 1}-
+                {Math.min(ticketPage * ticketPageSize, ticketTotal)} of {ticketTotal} tickets
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="rounded-xl"
+                  disabled={ticketPage <= 1}
+                  onClick={() => setTicketPage((current) => Math.max(current - 1, 1))}
+                >
+                  Previous
+                </Button>
+                <span className="min-w-[96px] text-center text-sm font-medium text-gray-600">
+                  Page {ticketTotal === 0 ? 0 : ticketPage} of {ticketTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  className="rounded-xl"
+                  disabled={ticketPage >= ticketTotalPages || ticketTotal === 0}
+                  onClick={() => setTicketPage((current) => Math.min(current + 1, ticketTotalPages))}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+
         </TabsContent>
       </Tabs>
     </div>

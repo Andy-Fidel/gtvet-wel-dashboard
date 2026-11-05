@@ -1,0 +1,11 @@
+/* Keep repeated support work visually quiet and responsive. */
+.support-center .shadow-xl, .support-center .shadow-2xl { box-shadow: none; border: 1px solid #e2e8f0; }
+.support-center .rounded-\[2rem\] { border-radius: 1rem; }
+.support-center .font-black { font-weight: 600; }
+.support-center button { transition-property: background-color, color, border-color, opacity, transform; transition-duration: 150ms; }
+.support-center button:active:not(:disabled):not(:focus-visible) { transform: scale(.98); }
+.support-center button:focus-visible, .support-center select:focus-visible, .support-center summary:focus-visible { outline: 2px solid #b77900; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  .support-center *, .support-center *::before, .support-center *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .support-center button:active:not(:disabled):not(:focus-visible) { transform: none; }
+}

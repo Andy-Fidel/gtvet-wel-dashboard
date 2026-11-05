@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 
 const supportReplySchema = new mongoose.Schema({
   message: { type: String, required: true },
+  requestKey: { type: String, default: undefined },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   createdByName: { type: String, required: true },
   createdByRole: { type: String, required: true },
@@ -72,6 +73,12 @@ const supportTicketSchema = new mongoose.Schema({
   resolvedAt: { type: Date },
   resolutionSummary: { type: String, default: '', trim: true },
   resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  activity: { type: [{
+    action: { type: String, enum: ['Status', 'Assignment', 'Escalation'], required: true },
+    actorName: { type: String, required: true },
+    detail: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+  }], default: [] },
   replies: { type: [supportReplySchema], default: [] },
   readStates: { type: [supportReadStateSchema], default: [] },
   archivedAt: { type: Date, default: null },

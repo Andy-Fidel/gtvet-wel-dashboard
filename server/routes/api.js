@@ -1018,9 +1018,10 @@ const supportTicketAwaitsCurrentUser = (ticket, user) => {
 };
 
 const matchesSupportQueueView = (ticket, queueView, user) => {
+  if (queueView === 'support') return !['Resolved', 'Closed'].includes(ticket.status) && ticket.awaitingParty === 'Support';
   if (queueView === 'new') return ticket.hasUnreadChanges;
   if (queueView === 'owned') return ticket.isOwnedByCurrentUser;
-  if (queueView === 'awaiting') return supportTicketAwaitsCurrentUser(ticket, user);
+  if (queueView === 'awaiting') return !['Resolved', 'Closed'].includes(ticket.status) && supportTicketAwaitsCurrentUser(ticket, user);
   if (queueView === 'unassigned') return !['Resolved', 'Closed'].includes(ticket.status) && !ticket.assignedTo;
   return true;
 };
@@ -3022,6 +3023,28 @@ router.get('/settings/archive-summary', requireRole('SuperAdmin'), async (req, r
 
 // ==================== SUPPORT CENTER ====================
 
+// Bounded context lookup; both learner and placement queries retain actor scope.
+router.get('/support-context', requireRole('SuperAdmin', 'HQManager', 'HQStaff', 'RegionalAdmin', 'Admin', 'Manager', 'Staff'), async (req, res) => {
+    try {
+        const scope = await getFilter(req.user);
+        const search = typeof req.query.search === 'string' ? escapeRegex(req.query.search.trim().slice(0, 120)) : '';
+        const learners = await Learner.find({ $and: [scope, { archivedAt: null }, ...(search ? [{ $or: ['firstName', 'middleName', 'lastName', 'trackingId'].map(field => ({ [field]: { $regex: search, $options: 'i' } })) }] : [])] })
+            .select('firstName middleName lastName trackingId institution').sort({ lastName: 1, firstName: 1, _id: 1 }).limit(25).lean();
+        let placements = [];
+        if (req.query.learnerId) {
+            if (!mongoose.isValidObjectId(req.query.learnerId)) return res.status(400).json({ message: 'Invalid learner' });
+            const learner = await Learner.findOne({ $and: [scope, { _id: req.query.learnerId, archivedAt: null }] }).select('_id').lean();
+            if (!learner) return res.status(404).json({ message: 'Learner not found or unauthorized' });
+            placements = await Placement.find({ $and: [await getPlacementScope(req.user), { learner: learner._id, archivedAt: null }] })
+                .select('companyName status').sort({ createdAt: -1, _id: -1 }).limit(50).lean();
+        }
+        res.json({ learners: learners.map(learner => ({ ...learner, name: buildLearnerDisplayName(learner) })), placements });
+    } catch (error) {
+        console.error('Error loading support context:', error);
+        res.status(500).json({ message: 'Unable to load learner context' });
+    }
+});
+
 router.get('/support-tickets', async (req, res) => {
     try {
         const archivedOnly = req.query.archived === 'true';
@@ -3036,9 +3059,18 @@ router.get('/support-tickets', async (req, res) => {
         if (status) query.status = status;
         if (category) query.category = category;
         if (priority) query.priority = priority;
+        // Keep user-selected filters inside the authorized scope.
+        if (req.query.institution) query.$and = [...(query.$and || []), { institution: String(req.query.institution) }];
+        if (req.query.region) query.$and = [...(query.$and || []), { region: String(req.query.region) }];
+        if (['Support', 'Incident'].includes(req.query.ticketType)) query.ticketType = req.query.ticketType;
+        const sort = req.query.sort === 'oldest' ? { createdAt: 1, _id: 1 }
+            : req.query.sort === 'deadline' ? { resolutionDueAt: 1, _id: 1 }
+            : { lastActivityAt: -1, createdAt: -1, _id: -1 };
         if (typeof req.query.search === 'string' && req.query.search.trim()) {
             const search = escapeRegex(req.query.search.trim().slice(0, 120));
-            query.$or = [{ subject: { $regex: search, $options: 'i' } }, { description: { $regex: search, $options: 'i' } }, { institution: { $regex: search, $options: 'i' } }];
+            const alternatives = [{ subject: { $regex: search, $options: 'i' } }, { description: { $regex: search, $options: 'i' } }, { institution: { $regex: search, $options: 'i' } }];
+            if (/^[a-f\d]{24}$/i.test(req.query.search.trim())) alternatives.push({ _id: req.query.search.trim() });
+            query.$and = [...(query.$and || []), { $or: alternatives }];
         }
         if (learnerId) query.learner = learnerId;
         if (placementId) query.placement = placementId;
@@ -3051,7 +3083,7 @@ router.get('/support-tickets', async (req, res) => {
                 .populate('assignedTo', 'name email role institution')
                 .populate('escalatedTo', 'name email role institution')
                 .populate('replies.createdBy', 'name role')
-                .sort({ lastActivityAt: -1, createdAt: -1 });
+                .sort(sort);
 
             const ticketIds = tickets.map((ticket) => ticket._id);
             const documents = await Document.find({ supportTicket: { $in: ticketIds } })
@@ -3077,7 +3109,7 @@ router.get('/support-tickets', async (req, res) => {
             .populate('requester', '_id')
             .populate('assignedTo', '_id')
             .populate('escalatedTo', '_id')
-            .sort({ lastActivityAt: -1, createdAt: -1 })
+            .sort(sort)
             .lean();
 
         const scopedTickets = ticketMeta.map((ticket) => withSupportTicketViewerMeta(ticket, req.user));
@@ -3090,9 +3122,10 @@ router.get('/support-tickets', async (req, res) => {
             escalated: scopedTickets.filter((ticket) => ticket.escalationLevel && ticket.escalationLevel !== 'None').length,
             unread: scopedTickets.filter((ticket) => ticket.hasUnreadChanges).length,
             ownedByMe: scopedTickets.filter((ticket) => ticket.isOwnedByCurrentUser).length,
+            awaitingMe: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && supportTicketAwaitsCurrentUser(ticket, req.user)).length,
         };
         const hqQueueStats = {
-            awaitingSupport: scopedTickets.filter((ticket) => ticket.awaitingParty === 'Support').length,
+            awaitingSupport: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && ticket.awaitingParty === 'Support').length,
             urgent: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && ticket.priority === 'Urgent').length,
             unassigned: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && !ticket.assignedTo?._id).length,
             incidents: scopedTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status) && ticket.ticketType === 'Incident').length,
@@ -3100,6 +3133,10 @@ router.get('/support-tickets', async (req, res) => {
 
         const queueFilteredTickets = scopedTickets.filter((ticket) => matchesSupportQueueView(ticket, queueView, req.user)
             && (req.query.sla === 'breached' ? ticket.slaStatus?.hasBreach : req.query.sla === 'on-track' ? !ticket.slaStatus?.hasBreach : true));
+        if (req.query.sort === 'priority') {
+            const rank = { Urgent: 0, High: 1, Medium: 2, Low: 3 };
+            queueFilteredTickets.sort((a, b) => rank[a.priority] - rank[b.priority]);
+        }
         const total = queueFilteredTickets.length;
         const totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
         const safePage = Math.min(page, totalPages);
@@ -3176,7 +3213,7 @@ router.get('/support-tickets', async (req, res) => {
             page: safePage,
             pageSize,
             totalPages,
-            stats,
+            stats: { ...stats, total },
             hqQueueStats,
             focusedTicket,
         });
@@ -3701,7 +3738,7 @@ router.post('/support-tickets', userAssignmentMutation(async (req, res) => {
 router.post('/support-tickets/:id/replies', async (req, res) => {
     try {
         const scope = await getSupportTicketScope(req.user, { includeArchived: true });
-        const ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
+        let ticket = await SupportTicket.findOne({ _id: req.params.id, ...scope });
         if (!ticket) {
             return res.status(404).json({ message: 'Support ticket not found or unauthorized' });
         }
@@ -3709,26 +3746,44 @@ router.post('/support-tickets/:id/replies', async (req, res) => {
             return res.status(409).json({ message: 'Archived support tickets cannot receive replies.' });
         }
 
-        const { message } = req.body;
+        const { message, requestKey } = req.body;
         if (typeof message !== 'string' || !message.trim()) {
             return res.status(400).json({ message: 'Reply message is required' });
         }
-        if (['Resolved', 'Closed'].includes(ticket.status)) return res.status(409).json({ message: 'Reopen this ticket before replying' });
-
-        ticket.replies.push({
-            message: message.trim(),
-            createdBy: req.user._id,
-            createdByName: req.user.name,
-            createdByRole: req.user.role,
-        });
-        if (!ticket.firstRespondedAt && ticket.requester?.toString() !== req.user._id.toString() && isSupportResponder(req.user, ticket)) {
-            ticket.firstRespondedAt = new Date();
+        if (message.length > 10000) return res.status(400).json({ message: 'Reply must be at most 10,000 characters' });
+        if (requestKey && (typeof requestKey !== 'string' || !/^[0-9a-f-]{36}$/i.test(requestKey))) return res.status(400).json({ message: 'Invalid reply request key' });
+        const previous = requestKey && ticket.replies.find(reply => reply.requestKey === requestKey && reply.createdBy.toString() === req.user._id.toString());
+        if (previous) {
+            if (previous.message !== message.trim()) return res.status(409).json({ message: 'This reply key was already used for different text' });
+            const populated = await SupportTicket.findById(ticket._id)
+                .populate('requester', 'name email role institution').populate('learner', 'firstName middleName lastName trackingId')
+                .populate('placement', 'companyName status').populate('assignedTo', 'name role').populate('escalatedTo', 'name role');
+            return res.json(withSupportTicketViewerMeta(populated, req.user));
         }
-        ticket.awaitingParty = getReplyAwaitingParty(ticket, req.user);
-        ticket.lastActivityBy = req.user._id;
-        ticket.lastActivityAt = new Date();
-        markSupportTicketReadForUser(ticket, req.user._id);
-        await ticket.save();
+        if (['Resolved', 'Closed'].includes(ticket.status)) return res.status(409).json({ message: 'Reopen this ticket before replying' });
+        const reply = { message: message.trim(), createdBy: req.user._id, createdByName: req.user.name, createdByRole: req.user.role, ...(requestKey ? { requestKey } : {}) };
+        const firstResponse = !ticket.firstRespondedAt && ticket.requester?.toString() !== req.user._id.toString() && isSupportResponder(req.user, ticket);
+        if (requestKey) {
+            // The conditional push makes concurrent retries one database write.
+            const updated = await SupportTicket.findOneAndUpdate({
+                _id: ticket._id, archivedAt: null, status: { $nin: ['Resolved', 'Closed'] },
+                replies: { $not: { $elemMatch: { requestKey, createdBy: req.user._id } } },
+            }, {
+                $push: { replies: reply },
+                $set: { awaitingParty: getReplyAwaitingParty(ticket, req.user), lastActivityBy: req.user._id, lastActivityAt: new Date() },
+            }, { returnDocument: 'after', runValidators: true });
+            if (!updated) return res.status(409).json({ message: 'Ticket changed. Refresh and retry this reply.' });
+            ticket = updated;
+            if (firstResponse) await SupportTicket.updateOne({ _id: ticket._id, firstRespondedAt: null }, { $set: { firstRespondedAt: new Date() } });
+        } else {
+            ticket.replies.push(reply);
+            if (firstResponse) ticket.firstRespondedAt = new Date();
+            ticket.awaitingParty = getReplyAwaitingParty(ticket, req.user);
+            ticket.lastActivityBy = req.user._id;
+            ticket.lastActivityAt = new Date();
+            markSupportTicketReadForUser(ticket, req.user._id);
+            await ticket.save();
+        }
 
         await logAuditEvent({
             req,
@@ -3828,6 +3883,7 @@ router.put('/support-tickets/:id/status', userAssignmentMutation(async (req, res
         ticket.lastActivityBy = req.user._id;
         ticket.lastActivityAt = new Date();
         markSupportTicketReadForUser(ticket, req.user._id);
+        ticket.activity.push({ action: 'Status', actorName: req.user.name, detail: `Status changed from ${before.status} to ${status}${status === 'Resolved' ? ': ' + resolutionSummary : ''}` });
         await ticket.save();
 
         await logAuditEvent({
@@ -3887,7 +3943,8 @@ router.put('/support-tickets/:id/assignment', userAssignmentMutation(async (req,
         }
 
         const { assignedTo } = req.body;
-        if (assignedTo && !(await getEligibleSupportTarget(req.user, ticket, assignedTo))) return res.status(400).json({ message: 'Choose an active responder who can access this ticket' });
+        const assignmentTarget = assignedTo ? await getEligibleSupportTarget(req.user, ticket, assignedTo) : null;
+        if (assignedTo && !assignmentTarget) return res.status(400).json({ message: 'Choose an active responder who can access this ticket' });
         if (['Resolved', 'Closed'].includes(ticket.status)) return res.status(409).json({ message: 'Reopen the ticket before changing ownership' });
         if ((ticket.assignedTo?.toString() || '') === (assignedTo || '')) return res.json(withSupportTicketViewerMeta(ticket, req.user));
         const before = ticket.toObject();
@@ -3901,6 +3958,7 @@ router.put('/support-tickets/:id/assignment', userAssignmentMutation(async (req,
         ticket.lastActivityBy = req.user._id;
         ticket.lastActivityAt = new Date();
         markSupportTicketReadForUser(ticket, req.user._id);
+        ticket.activity.push({ action: 'Assignment', actorName: req.user.name, detail: assignedTo ? `Assigned to ${assignmentTarget.name}` : 'Assignment removed' });
         await ticket.save();
 
         await logAuditEvent({
@@ -3981,6 +4039,7 @@ router.put('/support-tickets/:id/escalation', userAssignmentMutation(async (req,
         ticket.lastActivityBy = req.user._id;
         ticket.lastActivityAt = new Date();
         markSupportTicketReadForUser(ticket, req.user._id);
+        ticket.activity.push({ action: 'Escalation', actorName: req.user.name, detail: escalatedTo ? `Escalated to ${escalationLevel}: ${ticket.escalationReason}` : 'Escalation removed' });
         await ticket.save();
 
         await logAuditEvent({

@@ -15,6 +15,7 @@ export const canHQRequest = (role, method, path) => {
   if (!isScopedHQRole(role)) return true;
   if (/^\/(users|access-approvals|settings\/system|settings\/rollover|settings\/archive-summary)(\/|$)/i.test(path)) return false;
   if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+  if (method === 'PUT' && /^\/support-tickets\/[a-f\d]{24}\/read$/i.test(path)) return true;
   // Personal notification state remains editable for read-only users.
   if (method === 'PUT' && /^\/notifications\/(read-all|[^/]+\/(read|unread|dismiss|restore))$/.test(path)) return true;
   if (method === 'POST' && /^\/push\/(subscribe|test)$/.test(path)) return true;

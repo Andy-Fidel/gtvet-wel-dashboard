@@ -182,3 +182,12 @@ test('SuperAdmin remains unrestricted and HQ guard precedes every API endpoint',
   assert.equal(canHQRequest('SuperAdmin', 'PUT', '/settings/system'), true);
   assert.equal(router.stack[1].handle, enforceHQAccess);
 });
+
+test('HQ oversight can update personal support read state without gaining ticket mutation access', () => {
+  for (const role of ['HQManager', 'HQStaff']) {
+    assert.equal(canHQRequest(role, 'PUT', '/support-tickets/507f1f77bcf86cd799439013/read'), true);
+    assert.equal(canHQRequest(role, 'PUT', '/support-tickets/507f1f77bcf86cd799439013/status'), false);
+    assert.equal(canHQRequest(role, 'POST', '/support-tickets/507f1f77bcf86cd799439013/replies'), false);
+    assert.equal(canHQRequest(role, 'POST', '/support-tickets'), false);
+  }
+});
