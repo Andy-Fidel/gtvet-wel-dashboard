@@ -1,11 +1,9 @@
-export function cohortCsvCell(value: unknown) {
-  const text = String(value ?? '')
-  const safe = /^[\s]*[=+@-]/.test(text) ? `'${text}` : text
-  return `"${safe.replace(/"/g, '""')}"`
-}
+import { csvCell, encodeCsv } from './csv'
+
+export const cohortCsvCell = csvCell
 
 export function exportCohortCsv(rows: unknown[][]) {
-  const csv = '\uFEFF' + rows.map(row => row.map(cohortCsvCell).join(',')).join('\r\n')
+  const csv = encodeCsv(rows)
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
   const link = document.createElement('a')
   link.href = url

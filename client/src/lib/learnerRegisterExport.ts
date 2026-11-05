@@ -1,3 +1,4 @@
+import { encodeCsv } from './csv'
 import type { Learner } from '@/pages/learners/columns'
 import type { TableExportRequest } from '@/components/ui/data-table'
 
@@ -11,11 +12,7 @@ export async function downloadScopedRegister<T>(request: ScopedExportRequest<T>,
   const filename = `${report.filename}-${scope}-${new Date().toISOString().slice(0, 10)}`
   const values = request.values(rows)
   if (request.format === 'csv') {
-    const cell = (value: string) => {
-      const safe = /^[\s]*[=+@\-\t\r]/.test(value) ? `'${value}` : value
-      return `"${safe.replace(/"/g, '""')}"`
-    }
-    const csv = '\uFEFF' + [request.headers, ...values].map(row => row.map(cell).join(',')).join('\r\n')
+    const csv = encodeCsv([request.headers, ...values])
     signal.throwIfAborted()
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
     const link = document.createElement('a')

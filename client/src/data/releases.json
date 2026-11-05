@@ -1,5 +1,50 @@
 [
   {
+    "id": "2026-11-05-hq-action-centre",
+    "date": "2026-11-05",
+    "title": "A more reliable HQ Action Centre",
+    "summary": "Find the complete action queue, follow the right records and keep your work during refresh.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "See and follow the full queue",
+        "body": "Critical actions stay ahead of lower-priority work. Category totals cover the full queue, with pagination and links to the matching reports, deadlines and operational exceptions. Returning to the Action Centre restores your category and page.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open Action Centre",
+          "path": "/system-overview"
+        }
+      },
+      {
+        "kind": "Improved",
+        "title": "Trust the timing and next step",
+        "body": "Reporting deadlines respect institution calendars and year groups. Review age follows recorded stage entry, support actions show response deadlines and ownership, and quality checks use activity from the current placement. Guidance reflects your permissions.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ]
+      },
+      {
+        "kind": "Improved",
+        "title": "Work without refresh interruptions",
+        "body": "Background refresh keeps open forms and the last successful snapshot available. Workspace navigation is easier to reach on phones, queue text is clearer, and institution and regional CSV exports use readable columns and safe cell encoding.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ]
+      }
+    ]
+  },
+  {
     "id": "2026-11-05-help-support-workflows",
     "date": "2026-11-05",
     "title": "Follow support requests more easily",

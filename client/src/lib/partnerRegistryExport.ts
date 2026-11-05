@@ -1,16 +1,10 @@
+import { csvCell } from './csv'
 import type { HQPartnerRecord } from '@/components/HQPartnerDetailsDialog'
 
 const approvalLabel = (partner: HQPartnerRecord) => partner.approvalStatus === 'PendingHQApproval'
   ? 'Pending HQ Approval' : partner.approvalStatus || 'Approved'
 const typeLabel = (partner: HQPartnerRecord) => partner.partnerType === 'MasterCraftPerson'
   ? 'Master Craft Person' : (partner.partnerType || 'RegisteredCompany').replace(/([a-z])([A-Z])/g, '$1 $2')
-
-function csvCell(value: unknown) {
-  const text = String(value ?? '')
-  // Prevent partner-supplied values from becoming spreadsheet formulas.
-  const safe = /^[\s]*[=+@-]/.test(text) ? `'${text}` : text
-  return `"${safe.replace(/"/g, '""')}"`
-}
 
 export function partnerRegistryCsv(partners: HQPartnerRecord[]) {
   const rows = [

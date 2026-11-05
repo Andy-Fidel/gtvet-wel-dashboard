@@ -1,3 +1,4 @@
+import { ExceptionFilterNotice } from '@/components/ExceptionFilterNotice'
 import { intakeLabel } from '@/lib/cohorts'
 import { isHQRole } from '@/lib/rbac'
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table'
@@ -146,6 +147,7 @@ export default function LearnerRegister() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { authFetch, user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+  const exceptionFilter = searchParams.get("exception") || ""
   const academicStatusFilter = searchParams.get("academicStatus") || ""
   const intakeYearFilter = searchParams.get("intakeAcademicYear") || ""
   const programFilter = searchParams.get("program") || ""
@@ -197,6 +199,7 @@ export default function LearnerRegister() {
         if (welStatusFilter) params.set("status", welStatusFilter)
         if (institutionFilter) params.set("institution", institutionFilter)
         if (debouncedSearch) params.set("search", debouncedSearch)
+        if (exceptionFilter) params.set("exception", exceptionFilter)
         params.set("page", String(page))
         params.set("pageSize", String(effectivePageSize))
         const query = params.toString()
@@ -229,11 +232,11 @@ export default function LearnerRegister() {
       }
     };
     fetchLearners();
-  }, [refreshKey, authFetch, academicStatusFilter, intakeYearFilter, programFilter, yearFilter, welStatusFilter, institutionFilter, debouncedSearch, page, effectivePageSize])
+  }, [refreshKey, authFetch, academicStatusFilter, intakeYearFilter, programFilter, yearFilter, welStatusFilter, institutionFilter, exceptionFilter, debouncedSearch, page, effectivePageSize])
 
   useEffect(() => {
     setPage(1)
-  }, [academicStatusFilter, intakeYearFilter, programFilter, yearFilter, welStatusFilter, institutionFilter, debouncedSearch])
+  }, [academicStatusFilter, intakeYearFilter, programFilter, yearFilter, welStatusFilter, institutionFilter, exceptionFilter, debouncedSearch])
 
   useEffect(() => {
     if (!canSyncIdms) return
@@ -281,6 +284,7 @@ export default function LearnerRegister() {
   const clearAllFilters = () => {
     setSearchInput("")
     const next = new URLSearchParams()
+    for (const key of ['from', 'returnTo']) { const value = searchParams.get(key); if (value) next.set(key, value) }
     if (isRegionalOversight) {
       next.set("view", regionalSection)
       if (regionalSection === "exceptions") next.set("status", "Pending")
@@ -1119,13 +1123,14 @@ export default function LearnerRegister() {
               <span className="text-sm text-gray-600">{selectedLearners.length} selected on this page</span>
               {selectedLearners.length > 0 ? <Button variant="outline" disabled={bulkDeleteBusy} onClick={() => setRowSelection({})}>Clear selection</Button> : null}
             </div> : null}
+            <ExceptionFilterNotice />
             <DataTable 
               exportTitle="Learner Register Export"
               showNameFilter={false}
               exportDisabled={loading}
               onExportRequest={request => {
                 const filters = new URLSearchParams()
-                for (const [key, value] of Object.entries({ academicStatus: academicStatusFilter, intakeAcademicYear: intakeYearFilter, program: programFilter, year: yearFilter, status: welStatusFilter, institution: institutionFilter, search: debouncedSearch })) {
+                for (const [key, value] of Object.entries({ academicStatus: academicStatusFilter, intakeAcademicYear: intakeYearFilter, program: programFilter, year: yearFilter, status: welStatusFilter, institution: institutionFilter, search: debouncedSearch, exception: exceptionFilter })) {
                   if (value) filters.set(key, value)
                 }
                 setExportRequest({ ...request, filters: filters.toString() })

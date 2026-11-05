@@ -1,0 +1,9 @@
+.hq-actions button { transition: background-color 150ms ease-out, color 150ms ease-out; }
+.hq-actions button:focus-visible, .hq-workspaces button:focus-visible { outline: 2px solid #4338ca; outline-offset: 3px; }
+@media (hover: hover) and (pointer: fine) {
+  .hq-action-row:active:not(:focus-visible) { transform: scale(.995); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hq-actions *, .hq-workspaces * { transition: none !important; animation: none !important; }
+  .hq-action-row:active { transform: none !important; }
+}

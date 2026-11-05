@@ -1,3 +1,4 @@
+import { ExceptionFilterNotice } from '@/components/ExceptionFilterNotice'
 import { isHQRole } from '@/lib/rbac'
 import {
   type SortingState,
@@ -150,7 +151,8 @@ export default function Placements() {
     // Search & filter state
     const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") || "")
     const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get("search") || "")
-    const [statusFilter, setStatusFilter] = useState<'' | 'Active' | 'Completed' | 'Terminated'>('')
+    const [statusFilter, setStatusFilter] = useState<'' | 'Active' | 'Completed' | 'Terminated'>(() => ['Active', 'Completed', 'Terminated'].includes(searchParams.get('status') || '') ? searchParams.get('status') as 'Active' | 'Completed' | 'Terminated' : '')
+    const exceptionFilter = searchParams.get('exception') || ''
     const [missingCoordinates, setMissingCoordinates] = useState(false)
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -234,7 +236,7 @@ export default function Placements() {
     // Reset page on status filter change
     useEffect(() => {
         setPlacementsPage(1)
-    }, [statusFilter, missingCoordinates])
+    }, [statusFilter, missingCoordinates, exceptionFilter])
 
     useEffect(() => {
         setActiveTab(delegatedView ? "delegated" : "all")
@@ -264,6 +266,7 @@ export default function Placements() {
                 if (debouncedSearch) placementParams.set('search', debouncedSearch)
                 if (statusFilter) placementParams.set('status', statusFilter)
                 if (missingCoordinates) placementParams.set('missingCoordinates', '1')
+                if (exceptionFilter) placementParams.set('exception', exceptionFilter)
 
                 const [placementsRes, requestsRes, delegatedRes] = await Promise.all([
                     authFetch(`/api/placements?${placementParams.toString()}`),
@@ -315,7 +318,7 @@ export default function Placements() {
             }
         }
         fetchData()
-    }, [refreshKey, authFetch, authLoading, user, placementsPage, placementsPageSize, debouncedSearch, statusFilter, missingCoordinates])
+    }, [refreshKey, authFetch, authLoading, user, placementsPage, placementsPageSize, debouncedSearch, statusFilter, missingCoordinates, exceptionFilter])
 
     const handleEditSuccess = () => {
         setEditOpen(false)
@@ -651,6 +654,7 @@ export default function Placements() {
 
     return (
         <div className="h-full flex-1 flex-col space-y-4 md:space-y-6 pt-12 md:pt-16 pb-4 md:pb-8 flex w-full relative z-0">
+            <ExceptionFilterNotice />
             <Dialog open={!!delegatedLearner} onOpenChange={open => { if (!open) setDelegatedLearner(null) }}>
                 <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[800px]">
                     <DialogHeader>

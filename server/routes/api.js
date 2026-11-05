@@ -1,3 +1,4 @@
+import { actionCentreResponse, buildHqActions, buildDeadlineRisk, reviewStartedAt, deadlineDueAt, latestPlacementActivity, placementActivityByPlacement, missingSupervisorFilter, stalePendingFilter, overdueSignOffFilter, unvisitedPlacementPipeline } from '../utils/hqActionCentre.js';
 import { intakeKey, intakeFilter, buildCohortComparison, learnerAttentionReasons } from '../utils/cohortComparison.js';
 import { isHQRole, isScopedHQRole, enforceHQAccess } from '../utils/hqAccess.js';
 import { canLogMonitoringVisit, monitoringScope } from '../utils/monitoringAccess.js';
@@ -19,7 +20,7 @@ import { PlacementOperation } from '../models/PlacementOperation.js';
 import { placementError, placementErrorStatus, placementInput, placementLearnerIds, validatePlacementDates, placementOperationKey, runPlacementOperation } from '../utils/placementWorkflow.js';
 import { MonitoringVisit } from '../models/MonitoringVisit.js';
 import { SemesterReport } from '../models/SemesterReport.js';
-import { UNRESOLVED_REPORT_STATUSES, learnerYearAt, learnerAcademicStatusAt, learnerProgramAt, placementOverlapsPeriod, isReportSubmittedForDeadline } from '../utils/termClosure.js';
+import { UNRESOLVED_REPORT_STATUSES, learnerYearAt, learnerAcademicStatusAt, learnerProgramAt, placementOverlapsPeriod } from '../utils/termClosure.js';
 import { User } from '../models/User.js';
 import { AuthSession } from '../models/AuthSession.js';
 import { serializeManagedUser, userInput, userManagementMutation, userAssignmentMutation } from '../utils/userManagement.js';
@@ -107,6 +108,7 @@ const dashboardCache = new LRUCache({ max: 500, ttl: DASHBOARD_CACHE_TTL_MS });
 const getScopedCacheKey = (prefix, user, extras = '') => [
   prefix,
   user?.role || 'unknown',
+  user?.hqScopeType || '',
   user?.institution || '',
   user?.region || '',
   getPartnerId(user)?.toString?.() || getPartnerId(user) || '',
@@ -4538,34 +4540,25 @@ router.get('/monitoring-visits/due', async (req, res) => {
       const settings = await getOrCreateSystemSettings();
       const now = new Date();
 
-      const activePlacements = await Placement.find({ ...filter, status: 'Active' })
-        .select('_id learner companyName location startDate endDate institution')
+      const activePlacements = await Placement.find({ ...filter, status: 'Active', archivedAt: null })
+        .select('_id learner companyName location startDate endDate createdAt institution')
         .populate('learner', 'firstName middleName lastName name trackingId program year')
         .sort({ startDate: 1 })
         .lean();
 
-      const learnerIds = activePlacements.map((placement) => placement.learner?._id).filter(Boolean);
-      const visits = learnerIds.length
-        ? await MonitoringVisit.find({ learner: { $in: learnerIds } }).select('learner visitDate visitType performanceRating').sort({ visitDate: -1 }).lean()
-        : [];
-
-      const latestVisitByLearner = new Map();
-      visits.forEach((visit) => {
-        const key = visit.learner?.toString();
-        if (!key) return;
-        const current = latestVisitByLearner.get(key);
-        if (!current || new Date(visit.visitDate) > new Date(current.visitDate)) {
-          latestVisitByLearner.set(key, visit);
-        }
-      });
+      const placementIds = activePlacements.map(placement => placement._id);
+      const visits = placementIds.length ? await MonitoringVisit.find({ placement: { $in: placementIds } }).select('placement visitDate visitType performanceRating').lean() : [];
+      const latestVisitByPlacement = latestPlacementActivity(activePlacements, visits, 'visitDate', { now });
+      const unvisitedIds = req.query.exception === 'unvisited-placement'
+        ? new Set((await Placement.aggregate([...unvisitedPlacementPipeline(filter, now), { $project: { _id: 1 } }])).map(row => String(row._id))) : null;
 
       const cadenceDays = settings.monitoringVisitCadenceDays || 30;
       const cadenceMs = cadenceDays * 24 * 60 * 60 * 1000;
       const dueVisits = activePlacements
         .map((placement) => {
           const learnerId = placement.learner?._id?.toString();
-          const latestVisit = learnerId ? latestVisitByLearner.get(learnerId) : null;
-          const baseline = latestVisit?.visitDate || placement.startDate;
+          const latestVisit = latestVisitByPlacement.get(String(placement._id));
+          const baseline = latestVisit?.visitDate || placement.startDate || placement.createdAt;
           const dueAt = baseline ? new Date(new Date(baseline).getTime() + cadenceMs) : null;
           const overdueDays = dueAt ? Math.max(0, Math.floor((now.getTime() - dueAt.getTime()) / (24 * 60 * 60 * 1000))) : 0;
           return {
@@ -4587,7 +4580,7 @@ router.get('/monitoring-visits/due', async (req, res) => {
             overdueDays,
           };
         })
-        .filter((item) => item.overdue)
+        .filter((item) => unvisitedIds ? unvisitedIds.has(String(item.placementId)) : item.overdue)
         .sort((a, b) => b.overdueDays - a.overdueDays);
 
       res.json({ items: dueVisits, total: dueVisits.length, cadenceDays });
@@ -6712,10 +6705,31 @@ router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMEN
     try {
         const scopeFilter = await getFilter(req.user);
         let filter = { ...scopeFilter };
-        const { status, institution, academicYear, page: requestedPage, pageSize: requestedPageSize } = req.query;
+        const { status, institution, academicYear, semester, yearGroup, page: requestedPage, pageSize: requestedPageSize } = req.query;
         if (status) filter.status = status;
         if (institution) filter = { $and: [filter, { institution }] };
         if (academicYear) filter.academicYear = academicYear;
+        if (semester) filter.semester = semester;
+        if (yearGroup && yearGroup !== 'All') filter.$and = [...(filter.$and || []), { $or: [{ yearGroup }, { yearGroup: 'All' }, { yearGroup: { $exists: false } }] }];
+        const cycleFilter = { $and: [scopeFilter, ...(institution ? [{ institution }] : []), ...(academicYear ? [{ academicYear }] : []), ...(semester ? [{ semester }] : []), ...(yearGroup && yearGroup !== 'All' ? [{ $or: [{ yearGroup }, { yearGroup: 'All' }, { yearGroup: { $exists: false } }] }] : [])] };
+        const cycleReportCount = req.query.deadlineView ? await SemesterReport.countDocuments(cycleFilter) : null;
+        let deadlineRiskActive = false;
+        if (['overdue', 'at-risk'].includes(req.query.deadlineView)) {
+            if (req.query.deadlineId && !mongoose.isValidObjectId(req.query.deadlineId)) return res.status(400).json({ message: 'Invalid deadline identifier' });
+            const schoolScope = Object.keys(scopeFilter).length ? { name: scopeFilter.institution } : {};
+            const schools = await Institution.find({ $and: [schoolScope, ...(institution ? [{ name: institution }] : [])] }).select('_id name region code calendarType').lean();
+            const events = await AcademicCalendar.find({ isActive: true, eventType: 'Deadline', ...(academicYear ? { academicYear } : {}), ...(semester ? { semester } : {}), ...(req.query.deadlineId ? { _id: req.query.deadlineId } : {}) }).lean();
+            const allCycleReports = await SemesterReport.find({ institution: { $in: schools.map(school => school.name) } }).select('institution semester academicYear yearGroup status').lean();
+            const risk = buildDeadlineRisk(events, schools, allCycleReports);
+            const obligations = (req.query.deadlineView === 'overdue' ? risk.overdueInstitutionSubmissions : risk.atRiskInstitutions)
+                .filter(item => !yearGroup || yearGroup === 'All' || item.yearGroup === 'All' || item.yearGroup === yearGroup);
+            deadlineRiskActive = obligations.length > 0;
+            const clauses = obligations.map(item => ({ institution: item.institution, semester: item.semester, academicYear: item.academicYear,
+                ...(item.yearGroup !== 'All' ? { $or: [{ yearGroup: item.yearGroup }, { yearGroup: 'All' }, { yearGroup: { $exists: false } }] } : {}),
+            }));
+            filter.$and = [...(filter.$and || []), clauses.length ? { $or: clauses } : { _id: { $in: [] } }];
+            filter.$and.push({ status: { $nin: ['Submitted', 'Regional_Approved', 'HQ_Approved'] } });
+        }
 
         const parsedPage = Number.parseInt(String(requestedPage || ''), 10);
         const parsedPageSize = Number.parseInt(String(requestedPageSize || ''), 10);
@@ -6768,6 +6782,7 @@ router.get('/semester-reports', requireRole('HQManager', 'HQStaff', ...MANAGEMEN
             const lifecycle = lifecycleTotals?.[0] || { currentEnrolled: 0, graduated: 0 };
             const safeTotal = total || 0;
             return res.json({
+                cycleReportCount, deadlineRiskActive,
                 items: reports,
                 total: safeTotal,
                 page,
@@ -6941,6 +6956,8 @@ router.put('/semester-reports/:id/submit', requireRole(...INSTITUTION_MANAGEMENT
             return res.status(409).json({ message: 'Reporting windows changed. Refresh metrics and certify again before submission.' });
         }
         report.status = 'Submitted';
+        report.submittedAt = new Date();
+        report.hqReviewStartedAt = undefined;
         await report.save();
         await logAuditEvent({
             req,
@@ -6983,6 +7000,7 @@ router.put('/semester-reports/:id/regional-approve', requireRole('RegionalAdmin'
         }
         const before = report.toObject();
         report.status = 'Regional_Approved';
+        report.hqReviewStartedAt = new Date();
         report.reviewedByRegional = req.user._id;
         report.regionalComment = req.body.comment || '';
         report.reviewHistory.push({ stage: 'Regional', decision: 'Approved', reviewer: req.user._id, comment: report.regionalComment, reviewedAt: new Date() });
@@ -7417,6 +7435,7 @@ router.get('/learners', async (req, res) => {
       search,
     } = req.query;
 
+    if (req.query.exception === 'stale-pending') query.$and = [...(query.$and || []), stalePendingFilter(new Date())];
     if (status) query.status = status;
     if (academicStatus === 'CurrentEnrolled') query.academicStatus = { $in: ['Active', 'Graduating'] };
     else if (academicStatus) query.academicStatus = academicStatus;
@@ -9433,6 +9452,7 @@ router.get('/placements', async (req, res) => {
       ? Math.min(parsedPageSize, 100)
       : 25;
 
+    if (req.query.exception === 'missing-supervisor') filter.$and = [...(filter.$and || []), { status: 'Active', archivedAt: null }, missingSupervisorFilter];
     // Status filter
     if (req.query.missingCoordinates === '1') {
       filter.$and = [...(filter.$and || []), {
@@ -10525,6 +10545,7 @@ router.get('/attendance-logs', async (req, res) => {
         const { learnerId, placementId, status, entryType } = req.query;
         const query = { ...scope };
 
+        if (req.query.exception === 'unsigned-overdue') query.$and = [...(query.$and || []), overdueSignOffFilter(new Date())];
         if (learnerId) query.learner = learnerId;
         if (placementId) query.placement = placementId;
         if (status) query.status = status;
@@ -12066,7 +12087,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         if (req.query.refresh !== 'true') {
             const cached = readScopedCache(cacheKey);
             if (cached) {
-                return res.json(cached);
+                return res.json(actionCentreResponse(cached, req.query));
             }
         }
 
@@ -12078,10 +12099,6 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         const attendanceScope = await buildAttendanceScope(req.user);
         const sevenDaysAgo = new Date();
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-        const fourteenDaysAgo = new Date();
-        fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
-        const threeDaysAgo = new Date();
-        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
         const now = new Date();
         const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const getSemesterNumber = (date) => (date.getMonth() < 6 ? 1 : 2);
@@ -12350,13 +12367,9 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             ? { ...reportFilter, status: 'Submitted' }
             : { ...reportFilter, status: 'Regional_Approved' };
         const approvalQueue = await SemesterReport.find(approvalQueueFilter)
-            .sort({ createdAt: 1 })
-            .limit(6)
-            .select('institution semester academicYear status createdAt');
-        const overdueApprovals = await SemesterReport.countDocuments({
-            ...approvalQueueFilter,
-            createdAt: { $lte: sevenDaysAgo },
-        });
+            .sort({ createdAt: 1, _id: 1 })
+            .select('institution semester academicYear yearGroup status createdAt submittedAt hqReviewStartedAt reviewHistory');
+        const overdueApprovals = approvalQueue.filter(report => { const since = reviewStartedAt(report, req.user.role); return since && since <= sevenDaysAgo; }).length;
         const recentRejectedReports = await SemesterReport.find({ ...reportFilter, status: 'Rejected' })
             .sort({ updatedAt: -1 })
             .limit(5)
@@ -12408,9 +12421,8 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                 .populate('requester', 'name')
                 .populate('assignedTo', 'name role')
                 .populate('escalatedTo', 'name role')
-                .sort({ updatedAt: 1, createdAt: 1 })
-                .limit(6)
-                .select('subject priority status institution region createdAt updatedAt replies requester assignedTo escalatedTo escalationLevel firstResponseDueAt resolutionDueAt'),
+                .sort({ lastActivityAt: 1, createdAt: 1, _id: 1 })
+                .select('subject priority status institution region createdAt updatedAt lastActivityAt awaitingParty firstRespondedAt replies requester assignedTo escalatedTo escalationLevel firstResponseDueAt resolutionDueAt'),
         ]);
         const oldestOpenTicket = await SupportTicket.findOne(unresolvedSupportFilter)
             .sort({ createdAt: 1 })
@@ -12460,145 +12472,17 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         ]);
 
         const [stalePendingLearners, placementsMissingSupervisor, pendingAttendanceSignOff, activePlacementsWithoutVisits] = await Promise.all([
-            Learner.countDocuments({
-                ...filter,
-                status: 'Pending',
-                createdAt: { $lte: fourteenDaysAgo },
-            }),
-            Placement.countDocuments({
-                ...filter,
-                status: 'Active',
-                $or: [
-                    { supervisorName: { $exists: false } },
-                    { supervisorName: '' },
-                    { supervisorEmail: { $exists: false } },
-                    { supervisorEmail: '' },
-                ],
-            }),
-            AttendanceLog.countDocuments({
-                ...attendanceScope,
-                status: 'Pending',
-                createdAt: { $lte: threeDaysAgo },
-            }),
-            Placement.aggregate([
-                {
-                    $match: {
-                        ...filter,
-                        status: 'Active',
-                        startDate: { $lte: fourteenDaysAgo },
-                    },
-                },
-                {
-                    $lookup: {
-                        from: 'monitoringvisits',
-                        localField: 'learner',
-                        foreignField: 'learner',
-                        as: 'visits',
-                    },
-                },
-                { $match: { visits: { $eq: [] } } },
-                { $count: 'count' },
-            ]),
+            Learner.countDocuments({ $and: [filter, stalePendingFilter(now)] }),
+            Placement.countDocuments({ $and: [filter, { status: 'Active', archivedAt: null }, missingSupervisorFilter] }),
+            AttendanceLog.countDocuments({ $and: [attendanceScope, overdueSignOffFilter(now)] }),
+            Placement.aggregate([...unvisitedPlacementPipeline(filter, now), { $count: 'count' }]),
         ]);
 
-        const calendarScope = req.user.role === 'RegionalAdmin'
-            ? { region: req.user.region }
-            : {};
         const activeCalendarEvents = await AcademicCalendar.find({ isActive: true }).sort({ startDate: 1 });
-        const upcomingDeadlines = activeCalendarEvents
-            .filter((event) => event.eventType === 'Deadline' && event.endDate >= now)
-            .slice(0, 5)
-            .map((event) => ({
-                _id: event._id,
-                title: event.title,
-                startDate: event.startDate,
-                endDate: event.endDate,
-                semester: event.semester || '',
-                academicYear: event.academicYear || '',
-                description: event.description || '',
-                daysRemaining: Math.max(0, Math.ceil((event.endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))),
-            }));
-
-        const cycleDeadlines = activeCalendarEvents
-            .filter((event) => event.eventType === 'Deadline' && event.semester && event.academicYear)
-            .sort((a, b) => a.endDate.getTime() - b.endDate.getTime());
-        const currentCycleDeadline = cycleDeadlines.find((event) => event.endDate >= now)
-            || [...cycleDeadlines].reverse().find((event) => event.endDate < now)
-            || null;
-
-        let deadlineRisk = {
-            currentCycle: null,
-            overdueInstitutionSubmissions: [],
-            atRiskInstitutions: [],
-        };
-
-        if (currentCycleDeadline) {
-            const cycleReports = await SemesterReport.find({
-                institution: { $in: institutions.map((institution) => institution.name) },
-                semester: currentCycleDeadline.semester,
-                academicYear: currentCycleDeadline.academicYear,
-            }).select('institution yearGroup status updatedAt');
-
-            const reportByInstitution = cycleReports.reduce((acc, report) => {
-                (acc[report.institution] ||= []).push(report);
-                return acc;
-            }, {});
-
-            const isSubmittedForCycle = (reports) => isReportSubmittedForDeadline(reports || [], currentCycleDeadline.targetYearGroup);
-            const displayCycleStatus = (reports) => {
-                if (!reports?.length) return null;
-                return reports.find(report => ['Rejected', 'Generated', 'Draft', 'Certified'].includes(report.status))?.status || 'Incomplete';
-            };
-            const daysUntilDeadline = Math.ceil((currentCycleDeadline.endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-            const overdueInstitutionSubmissions = institutions
-                .filter((institution) => {
-                    const reports = reportByInstitution[institution.name];
-                    return currentCycleDeadline.endDate < now && !isSubmittedForCycle(reports);
-                })
-                .map((institution) => {
-                    const reports = reportByInstitution[institution.name];
-                    return {
-                        _id: institution._id,
-                        institution: institution.name,
-                        region: institution.region,
-                        status: displayCycleStatus(reports) || 'Missing',
-                        code: institution.code,
-                    };
-                })
-                .slice(0, 8);
-
-            const atRiskInstitutions = institutions
-                .filter((institution) => {
-                    const reports = reportByInstitution[institution.name];
-                    return currentCycleDeadline.endDate >= now && daysUntilDeadline <= 14 && !isSubmittedForCycle(reports);
-                })
-                .map((institution) => {
-                    const reports = reportByInstitution[institution.name];
-                    return {
-                        _id: institution._id,
-                        institution: institution.name,
-                        region: institution.region,
-                        status: displayCycleStatus(reports) || 'Not started',
-                        code: institution.code,
-                        daysRemaining: Math.max(0, daysUntilDeadline),
-                    };
-                })
-                .slice(0, 8);
-
-            deadlineRisk = {
-                currentCycle: {
-                    title: currentCycleDeadline.title,
-                    semester: currentCycleDeadline.semester,
-                    academicYear: currentCycleDeadline.academicYear,
-                    endDate: currentCycleDeadline.endDate,
-                    daysRemaining: Math.max(daysUntilDeadline, 0),
-                    isOverdue: currentCycleDeadline.endDate < now,
-                },
-                overdueInstitutionSubmissions,
-                atRiskInstitutions,
-            };
-        }
+        const upcomingDeadlines = activeCalendarEvents.filter(event => event.eventType === 'Deadline' && deadlineDueAt(event) >= now)
+            .sort((a, b) => deadlineDueAt(a) - deadlineDueAt(b)).slice(0, 5).map(event => ({ ...event.toObject(), endDate: deadlineDueAt(event), daysRemaining: Math.max(0, Math.ceil((deadlineDueAt(event) - now) / 86400000)) }));
+        const deadlineReports = await SemesterReport.find(reportFilter).select('institution semester academicYear yearGroup status updatedAt').lean();
+        const deadlineRisk = buildDeadlineRisk(activeCalendarEvents, institutions, deadlineReports, now);
 
         const [
             academicActiveLearners,
@@ -12721,7 +12605,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             Learner.find(filter)
                 .select('firstName lastName middleName trackingId status academicStatus program year intakeAcademicYear institution owner createdAt')
                 .populate('owner', 'name role institution'),
-            Placement.find({ ...filter, status: 'Active' }).select('_id learner startDate endDate'),
+            Placement.find({ ...filter, status: 'Active', archivedAt: null }).select('_id learner partner startDate endDate createdAt closedAt'),
         ]);
 
         const learnerIdsForProgress = learnersForProgress.map((learner) => learner._id);
@@ -12797,9 +12681,9 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                 evaluationsForQuality,
             ] = await Promise.all([
                 AttendanceLog.find({ placement: { $in: activePlacementIdsForQuality } }).select('placement periodEnd status'),
-                MonitoringVisit.find({ learner: { $in: activeLearnerIdsForQuality } }).select('learner visitDate performanceRating locationVerified gpsReviewStatus'),
-                CompetencyAssessment.find({ learner: { $in: activeLearnerIdsForQuality } }).select('learner assessmentDate overallScore'),
-                EmployerEvaluation.find({ learner: { $in: activeLearnerIdsForQuality } }).select('learner evaluationDate overallScore wouldHire'),
+                MonitoringVisit.find({ placement: { $in: activePlacementIdsForQuality } }).select('learner placement visitDate performanceRating locationVerified gpsReviewStatus'),
+                CompetencyAssessment.find({ placement: { $in: activePlacementIdsForQuality } }).select('learner placement assessmentDate overallScore'),
+                EmployerEvaluation.find({ learner: { $in: activeLearnerIdsForQuality } }).select('learner partner isCurrent evaluationDate overallScore wouldHire'),
             ]);
 
             const latestAttendanceByPlacement = new Map();
@@ -12812,35 +12696,9 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                 }
             });
 
-            const latestVisitByLearner = new Map();
-            visitsForQuality.forEach((visit) => {
-                const key = visit.learner?.toString();
-                if (!key) return;
-                const current = latestVisitByLearner.get(key);
-                if (!current || new Date(visit.visitDate) > new Date(current.visitDate)) {
-                    latestVisitByLearner.set(key, visit);
-                }
-            });
-
-            const latestAssessmentByLearner = new Map();
-            assessmentsForQuality.forEach((assessment) => {
-                const key = assessment.learner?.toString();
-                if (!key) return;
-                const current = latestAssessmentByLearner.get(key);
-                if (!current || new Date(assessment.assessmentDate) > new Date(current.assessmentDate)) {
-                    latestAssessmentByLearner.set(key, assessment);
-                }
-            });
-
-            const latestEvaluationByLearner = new Map();
-            evaluationsForQuality.forEach((evaluation) => {
-                const key = evaluation.learner?.toString();
-                if (!key) return;
-                const current = latestEvaluationByLearner.get(key);
-                if (!current || new Date(evaluation.evaluationDate) > new Date(current.evaluationDate)) {
-                    latestEvaluationByLearner.set(key, evaluation);
-                }
-            });
+            const latestVisitByPlacement = latestPlacementActivity(activePlacementsForQuality, visitsForQuality, 'visitDate', { now });
+            const latestAssessmentByPlacement = latestPlacementActivity(activePlacementsForQuality, assessmentsForQuality, 'assessmentDate', { now });
+            const latestEvaluationByPlacement = latestPlacementActivity(activePlacementsForQuality, evaluationsForQuality, 'evaluationDate', { employer: true, now });
 
             const nowTime = Date.now();
             let overdueAttendanceCount = 0;
@@ -12861,9 +12719,9 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                 if (!learnerId) return;
 
                 const latestAttendance = latestAttendanceByPlacement.get(placement._id.toString());
-                const latestVisit = latestVisitByLearner.get(learnerId);
-                const latestAssessment = latestAssessmentByLearner.get(learnerId);
-                const latestEvaluation = latestEvaluationByLearner.get(learnerId);
+                const latestVisit = latestVisitByPlacement.get(placement._id.toString());
+                const latestAssessment = latestAssessmentByPlacement.get(placement._id.toString());
+                const latestEvaluation = latestEvaluationByPlacement.get(placement._id.toString());
 
                 const attendanceDueAt = latestAttendance
                     ? new Date(new Date(latestAttendance.periodEnd).getTime() + systemSettings.attendanceCadenceDays * 24 * 60 * 60 * 1000)
@@ -12877,7 +12735,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                         : null;
 
                 if (attendanceDueAt && attendanceDueAt.getTime() < nowTime) overdueAttendanceCount += 1;
-                if (!monitoringDueAt || monitoringDueAt.getTime() >= nowTime) monitoringCoveredCount += 1;
+                if (latestVisit && monitoringDueAt && monitoringDueAt.getTime() >= nowTime) monitoringCoveredCount += 1;
                 if (latestVisit && ['Verified', 'ExceptionApproved'].includes(latestVisit.gpsReviewStatus || '')) gpsVerifiedCount += 1;
                 if (typeof latestVisit?.performanceRating === 'number') {
                     visitRatingTotal += latestVisit.performanceRating;
@@ -12933,9 +12791,9 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                 employerEvaluationCoverageRate: Math.round((evaluationCompleteCount / activePlacementsForQuality.length) * 100),
                 avgEmployerScore: evaluationScoreCount > 0 ? Math.round((evaluationScoreTotal / evaluationScoreCount) * 10) / 10 : 0,
                 wouldHireRate: evaluationCompleteCount > 0 ? Math.round((wouldHirePositiveCount / evaluationCompleteCount) * 100) : 0,
-                assessmentScoreTrend: buildMonthlyTrend(assessmentsForQuality, 'assessmentDate', 'overallScore'),
+                assessmentScoreTrend: buildMonthlyTrend([...placementActivityByPlacement(activePlacementsForQuality, assessmentsForQuality, 'assessmentDate', { now }).values()].flat(), 'assessmentDate', 'overallScore'),
                 employerOutcomeTrend: buildMonthlyTrend(
-                    evaluationsForQuality,
+                    [...new Set([...placementActivityByPlacement(activePlacementsForQuality, evaluationsForQuality, 'evaluationDate', { employer: true, now }).values()].flat())],
                     'evaluationDate',
                     'overallScore',
                     (monthItems) => ({
@@ -12980,7 +12838,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                 region: institution.region,
                 code: institution.code,
             }))
-            .slice(0, 8);
+;
 
         const privilegedUserAnomalies = Object.values(governedUsers.reduce((acc, user) => {
             if (!user.institution || !['Admin', 'Manager'].includes(user.role)) {
@@ -13007,7 +12865,6 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
         }, {}))
             .filter((entry) => entry.activePrivilegedCount > 3 || entry.adminCount > 1)
             .sort((a, b) => b.activePrivilegedCount - a.activePrivilegedCount)
-            .slice(0, 8)
             .map((entry) => ({
                 ...entry,
                 reasons: [
@@ -13017,6 +12874,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             }));
 
         const response = {
+            generatedAt: now.toISOString(),
             totalUsers,
             totalLearners,
             totalPlacements,
@@ -13049,8 +12907,10 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                     institution: report.institution,
                     title: `${report.semester} ${report.academicYear}`,
                     status: report.status,
-                    createdAt: report.createdAt,
-                    ageDays: Math.max(0, Math.floor((Date.now() - report.createdAt.getTime()) / (1000 * 60 * 60 * 24))),
+                    createdAt: report.createdAt, semester: report.semester, academicYear: report.academicYear, yearGroup: report.yearGroup,
+                    submittedAt: report.submittedAt, hqReviewStartedAt: report.hqReviewStartedAt, reviewHistory: report.reviewHistory,
+                    reviewStartedAt: reviewStartedAt(report, req.user.role),
+                    ageDays: reviewStartedAt(report, req.user.role) ? Math.max(0, Math.floor((now - reviewStartedAt(report, req.user.role)) / 86400000)) : null,
                 })),
                 recentRejected: recentRejectedReports.map((report) => ({
                     _id: report._id,
@@ -13086,6 +12946,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
                         role: ticket.escalatedTo.role,
                     } : null,
                     escalationLevel: ticket.escalationLevel || 'None',
+                    awaitingParty: ticket.awaitingParty, firstRespondedAt: ticket.firstRespondedAt, lastActivityAt: ticket.lastActivityAt,
                     firstResponseDueAt: ticket.firstResponseDueAt || null,
                     resolutionDueAt: ticket.resolutionDueAt || null,
                     createdAt: ticket.createdAt,
@@ -13131,8 +12992,14 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
             },
         };
 
+        response.actionCentre = { items: buildHqActions(response, req.user.role, now) };
+        response.approvalInbox.queue.sort((a, b) => (new Date(a.reviewStartedAt || '9999-01-01') - new Date(b.reviewStartedAt || '9999-01-01')) || String(a._id).localeCompare(String(b._id)));
+        response.approvalInbox.queue = response.approvalInbox.queue.slice(0, 6);
+        const supportOrder = new Map(response.actionCentre.items.filter(item => item.category === 'Support').map((item, index) => [item.id.slice(8), index]));
+        response.supportSummary.queue.sort((a, b) => supportOrder.get(String(a._id)) - supportOrder.get(String(b._id)));
+        response.supportSummary.queue = response.supportSummary.queue.slice(0, 6);
         writeScopedCache(cacheKey, response);
-        res.json(response);
+        res.json(actionCentreResponse(response, req.query));
     } catch (error) {
         console.error('Error fetching admin overview:', error);
         res.status(500).json({ message: 'Server Error', error });
@@ -13141,7 +13008,7 @@ router.get('/admin/overview', requireRole('HQManager', 'HQStaff', 'SuperAdmin', 
 
 router.post('/admin/deadline-risk/notify', requireRole('SuperAdmin', 'RegionalAdmin'), async (req, res) => {
     try {
-        const { institution, riskType, semester, academicYear, deadlineTitle } = req.body;
+        const { institution, riskType, semester, academicYear, deadlineId } = req.body;
         if (!institution || !['overdue', 'at-risk'].includes(riskType)) {
             return res.status(400).json({ message: 'Institution and valid risk type are required' });
         }
@@ -13152,6 +13019,16 @@ router.post('/admin/deadline-risk/notify', requireRole('SuperAdmin', 'RegionalAd
                 return res.status(403).json({ message: 'Institution is outside your region' });
             }
         }
+
+        if (!semester || !academicYear || (deadlineId && !mongoose.isValidObjectId(deadlineId))) return res.status(400).json({ message: 'Choose a valid reporting deadline' });
+        const school = await Institution.findOne({ name: institution }).select('_id name region code calendarType').lean();
+        if (!school) return res.status(404).json({ message: 'Institution not found' });
+        const events = await AcademicCalendar.find({ isActive: true, eventType: 'Deadline', semester, academicYear, ...(deadlineId ? { _id: deadlineId } : {}) }).lean();
+        const reports = await SemesterReport.find({ institution, semester, academicYear }).select('institution semester academicYear yearGroup status').lean();
+        const risk = buildDeadlineRisk(events, [school], reports);
+        const obligation = (riskType === 'overdue' ? risk.overdueInstitutionSubmissions : risk.atRiskInstitutions)[0];
+        if (!obligation) return res.status(409).json({ message: 'This institution no longer has the selected deadline risk. Refresh the action centre.' });
+        const deadlineTitle = obligation.title;
 
         const admins = await User.find({
             institution,
@@ -13170,26 +13047,27 @@ router.post('/admin/deadline-risk/notify', requireRole('SuperAdmin', 'RegionalAd
             ? `${institution} has an overdue ${semester || ''} ${academicYear || ''} semester report${deadlineTitle ? ` for ${deadlineTitle}` : ''}. Please submit or update the report.`
             : `${institution} is at risk of missing the ${semester || ''} ${academicYear || ''} semester report deadline${deadlineTitle ? ` for ${deadlineTitle}` : ''}. Please review the current report status.`;
 
-        await notifyUsers({
+        const delivery = await notifyUsers({
             recipientIds: admins.map((admin) => admin._id),
             sender: req.user._id,
             type: 'report',
             title,
             message,
             link: `/semester-reports?institution=${encodeURIComponent(institution)}&semester=${encodeURIComponent(semester || '')}&academicYear=${encodeURIComponent(academicYear || '')}`,
-            dedupeKey: `deadline-risk:${riskType}:${institution}:${semester || ''}:${academicYear || ''}`,
+            dedupeKey: `deadline-risk:${riskType}:${institution}:${obligation.deadlineId}:${obligation.yearGroup}`,
         });
 
+        if (delivery.error) return res.status(503).json({ message: 'Reminder dispatch failed. Refresh and retry.' });
         await logAuditEvent({
             req,
-            action: 'NOTIFY',
+            action: delivery.created ? 'CREATE' : 'UPDATE',
             entityType: 'Institution',
             entityId: institution,
-            summary: `Notified ${admins.length} admin(s) for ${riskType} deadline risk at ${institution}`,
-            metadata: { institution, riskType, semester, academicYear },
+            summary: `Created ${delivery.created} reminder(s) for ${riskType} deadline risk at ${institution}`,
+            metadata: { institution, riskType, semester, academicYear, deadlineId: obligation.deadlineId, created: delivery.created, skipped: Math.max(0, admins.length - delivery.created) },
         });
 
-        res.json({ notifiedCount: admins.length });
+        res.json({ notifiedCount: delivery.created, eligibleCount: admins.length, skippedCount: Math.max(0, admins.length - delivery.created) });
     } catch (error) {
         console.error('Error notifying institution admins about deadline risk:', error);
         res.status(500).json({ message: 'Error notifying institution admins' });

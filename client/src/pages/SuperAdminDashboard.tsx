@@ -1,6 +1,11 @@
+import { HQActionQueue, type ActionCentrePage, type HqActionCategory } from '@/components/dashboard/HQActionQueue';
+import { withActionReturn } from '@/lib/hqActionNavigation';
+import { encodeCsv } from '@/lib/csv';
+import { overviewExportTable } from '@/lib/hqOverviewExport';
+import './hq-overview.css';
 import { LearnerOversight, type LearnerOversightData } from '@/components/dashboard/LearnerOversight';
 import { ReportApprovalPipeline } from '@/components/dashboard/ReportApprovalPipeline';
-import { useEffect, useMemo, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { formatDistanceToNow } from "date-fns"
 import {
   Card,
@@ -14,7 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/context/AuthContext"
-import { Shield, Users, Building2, Download, Briefcase, FileText, AlertTriangle, CheckCircle2, LifeBuoy, ShieldCheck, ArrowRight, TrendingUp, TrendingDown, Minus, RefreshCw, Bell, Upload, Clock3, UserRoundCheck } from "lucide-react"
+import { Shield, Users, Building2, Download, Briefcase, FileText, AlertTriangle, CheckCircle2, LifeBuoy, ShieldCheck, ArrowRight, TrendingUp, TrendingDown, Minus, RefreshCw, Bell, Upload } from "lucide-react"
 import { Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts"
 import { InstitutionForm, type InstitutionFormValues } from "./InstitutionForm"
 import { GeolocatedMonitoringMap } from "@/components/dashboard/GeolocatedMonitoringMap"
@@ -30,7 +35,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "@/lib/toast"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { canAccessHQPage, getHQScopeLabel, hasHQPermission } from "@/lib/rbac"
+import { getHQScopeLabel, hasHQPermission } from "@/lib/rbac"
 
 interface InstitutionStat {
   _id: string;
@@ -86,28 +91,15 @@ interface RegionalStat {
   sparkline: { period: string; count: number }[];
 }
 
-type HqActionCategory = "Reports" | "Support" | "Deadlines" | "Governance" | "Data quality";
-type HqActionPriority = "Critical" | "High" | "Medium";
 type HqDashboardView = "learners" | "operations" | "performance" | "governance" | "registries";
 
 const GENDER_CHART_COLORS = ['#4f46e5', '#ec4899', '#8b5cf6', '#6b7280'];
 const PROGRAM_CHART_COLORS = ['#FFB800', '#4f46e5', '#10b981', '#ec4899', '#f97316', '#8b5cf6', '#06b6d4'];
 const INSTITUTION_BREAKDOWN_PAGE_SIZE = 8;
 
-interface HqActionItem {
-  id: string;
-  category: HqActionCategory;
-  priority: HqActionPriority;
-  title: string;
-  institution: string;
-  owner: string;
-  timing: string;
-  nextAction: string;
-  target: string;
-  score: number;
-}
-
 interface OverviewData extends LearnerOversightData {
+  generatedAt?: string;
+  actionCentre?: ActionCentrePage;
   reportPipeline?: { status: string; count: number }[];
   totalUsers: number;
   totalLearners: number;
@@ -127,7 +119,7 @@ interface OverviewData extends LearnerOversightData {
     pendingCount: number;
     overdueCount: number;
     recentRejectedCount: number;
-    queue: { _id: string; institution: string; title: string; status: string; createdAt: string; ageDays: number }[];
+    queue: { _id: string; institution: string; title: string; status: string; createdAt: string; ageDays: number | null; reviewStartedAt?: string }[];
     recentRejected: { _id: string; institution: string; title: string; updatedAt: string }[];
   };
   supportSummary: {
@@ -218,6 +210,7 @@ interface OverviewData extends LearnerOversightData {
       region: string;
       status: string;
       code: string;
+      deadlineId: string; semester: string; academicYear: string; yearGroup: string; endDate: string; title: string;
     }[];
     atRiskInstitutions: {
       _id: string;
@@ -225,6 +218,7 @@ interface OverviewData extends LearnerOversightData {
       region: string;
       status: string;
       code: string;
+      deadlineId: string; semester: string; academicYear: string; yearGroup: string; endDate: string; title: string;
       daysRemaining: number;
     }[];
   };
@@ -239,6 +233,9 @@ const formatSemesterPeriod = (period = '') => {
 export default function SuperAdminDashboard() {
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const hasData = useRef(false);
+  const lastRefreshKey = useRef(0);
   const [loadError, setLoadError] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -252,8 +249,10 @@ export default function SuperAdminDashboard() {
   const [notifyingDeadlineKeys, setNotifyingDeadlineKeys] = useState<string[]>([]);
   const [expandedRegions, setExpandedRegions] = useState<string[]>([]);
   const [regionalSortBy, setRegionalSortBy] = useState<"placementRate" | "completionRate" | "semesterOverSemesterPercent">("placementRate");
-  const [actionFilter, setActionFilter] = useState<"All" | HqActionCategory>("All");
   const { authFetch, user } = useAuth();
+  const viewerKey = JSON.stringify([user?._id, user?.role, user?.hqScopeType, user?.institution, user?.region]);
+  const previousViewerKey = useRef(viewerKey);
+  const [dataViewerKey, setDataViewerKey] = useState('');
   const canManageUsers = hasHQPermission(user?.role, 'users:manage');
   const canManageSystem = hasHQPermission(user?.role, 'system:manage');
   const canNotifyInstitutions = canManageSystem;
@@ -261,35 +260,56 @@ export default function SuperAdminDashboard() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedDashboardView = searchParams.get("view");
+  const actionFilter = searchParams.get('actionCategory') || 'All';
+  const actionPage = searchParams.get('actionPage') || '1';
+  const changeActionPage = (page: number, category = actionFilter) => {
+    const next = new URLSearchParams(searchParams);
+    if (category === 'All') next.delete('actionCategory'); else next.set('actionCategory', category);
+    if (page <= 1) next.delete('actionPage'); else next.set('actionPage', String(page));
+    setSearchParams(next, { replace: true });
+  };
+  const openHqAction = (target: string) => navigate(withActionReturn(target, `/system-overview?${searchParams}`));
+
   const dashboardView: HqDashboardView = requestedDashboardView === "learners" || requestedDashboardView === "performance" || requestedDashboardView === "governance" || requestedDashboardView === "registries"
     ? requestedDashboardView
     : "operations";
 
   useEffect(() => {
-    setLoading(true);
+    const controller = new AbortController();
+    if (previousViewerKey.current !== viewerKey) {
+      previousViewerKey.current = viewerKey;
+      hasData.current = false;
+      setData(null);
+      setInstOpen(false);
+      setEditingInstitution(null);
+      setLastRefreshedAt(null);
+    }
+    const force = refreshKey !== lastRefreshKey.current;
+    lastRefreshKey.current = refreshKey;
+    setLoading(!hasData.current);
+    setRefreshing(true);
     setLoadError('');
-    authFetch(`/api/admin/overview${refreshKey > 0 ? '?refresh=true' : ''}`)
-      .then(async res => {
-        if (!res.ok) {
-          const errorBody = await res.json().catch(() => ({}));
-          throw new Error(errorBody.message || `Server returned ${res.status}`);
-        }
-        return res.json();
-      })
-      .then(d => {
-        setData(d);
-        setLastRefreshedAt(new Date());
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Error fetching overview:", err);
-        const message = err instanceof Error ? err.message : "Failed to load overview data";
-        setLoadError(message);
-        setData(null);
-        setLoading(false);
-        toast.error(message);
-      });
-  }, [authFetch, refreshKey]);
+    const params = new URLSearchParams({ actionCategory: actionFilter, actionPage });
+    if (force) params.set('refresh', 'true');
+    void (async () => {
+      try {
+        const response = await authFetch(`/api/admin/overview?${params}`, { signal: controller.signal });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.message || `Server returned ${response.status}`);
+        if (controller.signal.aborted) return;
+        setData(payload);
+        setDataViewerKey(viewerKey);
+        hasData.current = true;
+        setLastRefreshedAt(payload.generatedAt ? new Date(payload.generatedAt) : new Date());
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setLoadError(error instanceof Error ? error.message : 'Unable to refresh overview');
+      } finally {
+        if (!controller.signal.aborted) { setLoading(false); setRefreshing(false); }
+      }
+    })();
+    return () => controller.abort();
+  }, [authFetch, refreshKey, actionFilter, actionPage, viewerKey]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -333,7 +353,7 @@ export default function SuperAdminDashboard() {
   };
 
   const notifyDeadlineInstitution = async (
-    item: { _id: string; institution: string },
+    item: { _id: string; institution: string; deadlineId: string; semester: string; academicYear: string; title: string },
     riskType: 'overdue' | 'at-risk'
   ) => {
     const notifyKey = `${riskType}:${item._id}`;
@@ -345,14 +365,15 @@ export default function SuperAdminDashboard() {
         body: JSON.stringify({
           institution: item.institution,
           riskType,
-          semester: data?.deadlineRisk?.currentCycle?.semester || '',
-          academicYear: data?.deadlineRisk?.currentCycle?.academicYear || '',
-          deadlineTitle: data?.deadlineRisk?.currentCycle?.title || '',
+          semester: item.semester,
+          academicYear: item.academicYear,
+          deadlineId: item.deadlineId,
         }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.message || 'Failed to notify institution admins');
-      toast.success(`Notified ${result.notifiedCount || 0} institution admin${result.notifiedCount === 1 ? '' : 's'}`);
+      if (result.notifiedCount) toast.success(`Created ${result.notifiedCount} administrator reminder${result.notifiedCount === 1 ? '' : 's'}`);
+      else toast.warning('No new reminders created. Recipients may already have been notified or have disabled these notifications.');
     } catch (error) {
       console.error('Error notifying institution admins:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to notify institution admins');
@@ -371,20 +392,17 @@ export default function SuperAdminDashboard() {
 
   const downloadCSV = <T extends object>(dataset: T[], filename: string) => {
     if (!dataset.length) return;
-    const headers = Object.keys(dataset[0]).join(",");
-    const rows = dataset.map(item => {
-      return Object.values(item).map(val => {
-        const str = String(val);
-        return str.includes(",") ? `"${str.replace(/"/g, '""')}"` : str;
-      }).join(",");
-    });
-    const csv = [headers, ...rows].join("\n");
+    const table = overviewExportTable(dataset, filename);
+    const csv = encodeCsv([table.headers, ...table.values]);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
     link.setAttribute("download", `${filename}-${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
     link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const downloadPDF = async <T extends object>(dataset: T[], filename: string) => {
@@ -411,15 +429,10 @@ export default function SuperAdminDashboard() {
       console.warn("Could not load logo for PDF", e);
     }
     
-    const rawHeaders = Object.keys(dataset[0]);
-    const headers = rawHeaders.map(h => h.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()));
-    
-    const rows = dataset.map(item => Object.values(item).map(val => {
-        if (val === null || val === undefined) return '';
-        if (typeof val === 'object') return JSON.stringify(val);
-        return String(val);
-    }));
-    
+    const table = overviewExportTable(dataset, filename);
+    const headers = table.headers;
+    const rows = table.values.map(row => row.map(value => String(value ?? '')));
+
     autoTable(doc, {
       startY: 40,
       head: [headers],
@@ -432,9 +445,9 @@ export default function SuperAdminDashboard() {
     doc.save(`${filename}-${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
-  if (loading) {
+  if ((loading && !data) || (data && dataViewerKey !== viewerKey)) {
     return (
-      <div className="flex-1 space-y-6 p-8 pt-6">
+      <div className="hq-overview flex-1 space-y-5 p-4 sm:p-6">
         <div className="flex items-center gap-4">
           <Skeleton className="h-14 w-14 rounded-2xl" />
           <div className="space-y-2">
@@ -474,154 +487,41 @@ export default function SuperAdminDashboard() {
       label: "Pending learners older than 14 days",
       count: data.dataQualityAlerts?.stalePendingLearners || 0,
       tone: "text-amber-700 bg-amber-50",
-      target: "/learners",
+      target: "/learners?exception=stale-pending",
     },
     {
       label: "Active placements missing supervisor details",
       count: data.dataQualityAlerts?.placementsMissingSupervisor || 0,
       tone: "text-red-700 bg-red-50",
-      target: "/placements",
+      target: "/placements?exception=missing-supervisor&status=Active",
     },
     {
       label: "Attendance logs pending sign-off for 3+ days",
       count: data.dataQualityAlerts?.pendingAttendanceSignOff || 0,
       tone: "text-indigo-700 bg-indigo-50",
-      target: "/attendance-logs",
+      target: "/attendance-logs?exception=unsigned-overdue&status=Pending",
     },
     {
       label: "Active placements without monitoring visits",
       count: data.dataQualityAlerts?.activePlacementsWithoutVisits || 0,
       tone: "text-orange-700 bg-orange-50",
-      target: "/monitoring-visits",
+      target: "/monitoring-visits?view=exceptions&exception=unvisited-placement",
     },
   ];
   const dataQualityAlertTotal = qualityAlertItems.reduce((sum, alert) => sum + alert.count, 0);
   const orphanedInstitutionCount = data.userGovernance?.institutionsWithoutActiveAdmins?.length || 0;
   const overdueReportCount = data.approvalInbox?.overdueCount || 0;
   const urgentSupportCount = data.supportSummary?.urgentOpen || 0;
-  const overdueDeadlineCount = (data.deadlineRisk?.overdueInstitutionSubmissions?.length || 0) + (data.deadlineRisk?.currentCycle?.isOverdue ? 1 : 0);
+  const overdueDeadlineCount = (data.deadlineRisk?.overdueInstitutionSubmissions?.length || 0);
   const pendingApprovalCount = data.approvalInbox?.pendingCount || 0;
   const notificationCount = pendingApprovalCount + urgentSupportCount + overdueDeadlineCount;
-  const now = Date.now();
-  const currentCycleQuery = `semester=${encodeURIComponent(data.deadlineRisk?.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(data.deadlineRisk?.currentCycle?.academicYear || '')}`;
-  const hqActionItems: HqActionItem[] = [
-    ...(data.approvalInbox?.queue || []).map((report) => ({
-      id: `report:${report._id}`,
-      category: "Reports" as const,
-      priority: (report.ageDays >= 7 ? "Critical" : "High") as HqActionPriority,
-      title: `${report.title} report awaiting HQ review`,
-      institution: report.institution,
-      owner: "HQ Reporting Team",
-      timing: `${report.ageDays} day${report.ageDays === 1 ? '' : 's'} waiting`,
-      nextAction: "Review and approve or return",
-      target: `/semester-reports/${report._id}?from=hq-action-centre`,
-      score: report.ageDays >= 7 ? 110 + report.ageDays : 90 + report.ageDays,
-    })),
-    ...(data.supportSummary?.queue || []).map((ticket) => {
-      const dueTime = ticket.resolutionDueAt ? new Date(ticket.resolutionDueAt).getTime() : null;
-      const isOverdue = dueTime !== null && !Number.isNaN(dueTime) && dueTime < now;
-      const owner = ticket.escalatedTo || ticket.assignedTo;
-      return {
-        id: `support:${ticket._id}`,
-        category: "Support" as const,
-        priority: (isOverdue ? "Critical" : ticket.priority === "Urgent" ? "High" : "Medium") as HqActionPriority,
-        title: ticket.subject,
-        institution: ticket.institution || ticket.region || "Cross-institution",
-        owner: owner ? `${owner.name} (${owner.role})` : "Unassigned",
-        timing: ticket.resolutionDueAt
-          ? `Resolution due ${formatDistanceToNow(new Date(ticket.resolutionDueAt), { addSuffix: true })}`
-          : `Updated ${formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })}`,
-        nextAction: owner ? "Resolve or update escalation" : "Assign an owner",
-        target: `/support-center?ticket=${ticket._id}&from=hq-action-centre`,
-        score: isOverdue ? 120 : ticket.priority === "Urgent" ? 100 : ticket.priority === "High" ? 75 : 55,
-      };
-    }),
-    ...(data.deadlineRisk?.overdueInstitutionSubmissions || []).map((item) => ({
-      id: `deadline-overdue:${item._id}`,
-      category: "Deadlines" as const,
-      priority: "Critical" as const,
-      title: "Reporting submission overdue",
-      institution: item.institution,
-      owner: "HQ Reporting Team",
-      timing: `Current state: ${item.status}`,
-      nextAction: "Open report and follow up",
-      target: `/semester-reports?deadlineView=overdue&institution=${encodeURIComponent(item.institution)}&${currentCycleQuery}&from=hq-action-centre`,
-      score: 115,
-    })),
-    ...(data.deadlineRisk?.atRiskInstitutions || []).map((item) => ({
-      id: `deadline-risk:${item._id}`,
-      category: "Deadlines" as const,
-      priority: "High" as const,
-      title: "Institution at risk of missing deadline",
-      institution: item.institution,
-      owner: "HQ Reporting Team",
-      timing: `${item.daysRemaining} day${item.daysRemaining === 1 ? '' : 's'} remaining`,
-      nextAction: "Review progress and notify institution",
-      target: `/semester-reports?deadlineView=at-risk&institution=${encodeURIComponent(item.institution)}&${currentCycleQuery}&from=hq-action-centre`,
-      score: 92 - item.daysRemaining,
-    })),
-    ...(data.userGovernance?.institutionsWithoutActiveAdmins || []).map((institution) => ({
-      id: `orphaned:${institution._id}`,
-      category: "Governance" as const,
-      priority: "High" as const,
-      title: "No active institution administrator",
-      institution: institution.name,
-      owner: "HQ User Governance",
-      timing: `${institution.region} · ${institution.code}`,
-      nextAction: "Assign an active administrator",
-      target: `/users?governance=orphaned-institutions&institution=${encodeURIComponent(institution.name)}&role=Admin&status=Active&from=hq-action-centre`,
-      score: 88,
-    })),
-    ...(data.userGovernance?.privilegedUserAnomalies || []).map((entry) => ({
-      id: `privileged:${entry.institution}`,
-      category: "Governance" as const,
-      priority: "High" as const,
-      title: entry.reasons.join(" · ") || "Privileged access anomaly",
-      institution: entry.institution,
-      owner: "HQ User Governance",
-      timing: `${entry.activePrivilegedCount} active privileged users`,
-      nextAction: "Review and correct access",
-      target: `/users?governance=privileged-anomalies&institution=${encodeURIComponent(entry.institution)}&from=hq-action-centre`,
-      score: 82 + entry.activePrivilegedCount,
-    })),
-    ...qualityAlertItems.filter((alert) => alert.count > 0).map((alert) => ({
-      id: `quality:${alert.label}`,
-      category: "Data quality" as const,
-      priority: (alert.label.includes("missing supervisor") ? "High" : "Medium") as HqActionPriority,
-      title: alert.label,
-      institution: "Multiple institutions",
-      owner: "HQ Operational Oversight",
-      timing: `${alert.count} record${alert.count === 1 ? '' : 's'} affected`,
-      nextAction: "Open workspace and resolve exceptions",
-      target: `${alert.target}${alert.target.includes('?') ? '&' : '?'}from=hq-action-centre`,
-      score: alert.label.includes("missing supervisor") ? 78 + alert.count : 50 + Math.min(alert.count, 20),
-    })),
-    ...(data.userGovernance?.pendingPasswordResets > 0 ? [{
-      id: "governance:password-resets",
-      category: "Governance" as const,
-      priority: "Medium" as const,
-      title: "Password resets awaiting completion",
-      institution: "Multiple institutions",
-      owner: "HQ User Governance",
-      timing: `${data.userGovernance.pendingPasswordResets} account${data.userGovernance.pendingPasswordResets === 1 ? '' : 's'}`,
-      nextAction: "Review account recovery status",
-      target: "/users?governance=password-reset-pending&from=hq-action-centre",
-      score: 58 + Math.min(data.userGovernance.pendingPasswordResets, 20),
-    }] : []),
-  ]
-    .filter((item) => canAccessHQPage(user?.role, item.target.split('?')[0]))
-    .sort((a, b) => b.score - a.score);
-  const actionCategories: Array<"All" | HqActionCategory> = ["All", "Reports", "Support", "Deadlines", "Governance", "Data quality"];
-  const filteredActionItems = (actionFilter === "All" ? hqActionItems : hqActionItems.filter((item) => item.category === actionFilter)).slice(0, 10);
-  const criticalActionCount = hqActionItems.filter((item) => item.priority === "Critical").length;
-  const unassignedActionCount = hqActionItems.filter((item) => item.owner === "Unassigned").length;
   const healthScore = Math.max(0, 100
     - Math.min(40, urgentSupportCount * 25)
     - Math.min(25, overdueReportCount * 15)
     - Math.min(25, Math.ceil(dataQualityAlertTotal / 5))
     - Math.min(20, orphanedInstitutionCount * 3));
   const healthState = healthScore >= 85 ? "green" : healthScore >= 60 ? "amber" : "red";
-  const healthLabel = healthState === "green" ? "Healthy" : healthState === "amber" ? "Needs Attention" : "Critical";
+  const healthLabel = healthState === "green" ? "Low operational risk" : healthState === "amber" ? "Needs Attention" : "Critical";
   const healthTone = healthState === "green"
     ? {
         icon: "bg-emerald-100 text-emerald-700",
@@ -683,8 +583,8 @@ export default function SuperAdminDashboard() {
             <Shield className="h-8 w-8 text-purple-500" />
           </div>
           <div>
-            <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">System Overview</h2>
-            <p className="text-muted-foreground">System health and institution governance · {scopeLabel}</p>
+            <h2 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">HQ Action Centre</h2>
+            <p className="text-muted-foreground">Operational oversight and institution governance · {scopeLabel}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -713,125 +613,17 @@ export default function SuperAdminDashboard() {
           <Button
             variant="outline"
             className="rounded-xl border-gray-200 font-bold"
+            disabled={refreshing}
             onClick={() => setRefreshKey((prev) => prev + 1)}
           >
             <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh
+            {refreshing ? 'Refreshing…' : 'Refresh'}
           </Button>
         </div>
       </div>
 
-      <Card className="overflow-hidden rounded-[2rem] border-indigo-100 bg-white shadow-xl" data-help-id="hq-action-centre">
-        <CardHeader className="border-b border-indigo-100 bg-gradient-to-r from-indigo-50 via-white to-amber-50 p-5 md:p-8">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-            <div>
-              <div className="flex items-center gap-3">
-                <div className="rounded-2xl bg-indigo-600 p-3 text-white shadow-lg shadow-indigo-600/20">
-                  <CheckCircle2 className="h-6 w-6" />
-                </div>
-                <div>
-                  <CardTitle className="text-2xl font-black text-gray-950">HQ Action Centre</CardTitle>
-                  <CardDescription className="mt-1 font-semibold text-gray-600">
-                    {user?.role === 'HQStaff'
-                      ? 'Priority-ordered operational work visible within your assigned scope.'
-                      : 'Priority-ordered work requiring headquarters review, ownership, or intervention.'}
-                  </CardDescription>
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-2 sm:min-w-[390px]">
-              <div className="rounded-2xl border border-white bg-white/90 p-3 text-center shadow-sm">
-                <p className="text-2xl font-black text-gray-950">{hqActionItems.length}</p>
-                <p className="text-[10px] font-black uppercase tracking-wider text-gray-500">Open actions</p>
-              </div>
-              <div className="rounded-2xl border border-red-100 bg-red-50 p-3 text-center">
-                <p className="text-2xl font-black text-red-700">{criticalActionCount}</p>
-                <p className="text-[10px] font-black uppercase tracking-wider text-red-500">Critical</p>
-              </div>
-              <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-center">
-                <p className="text-2xl font-black text-amber-700">{unassignedActionCount}</p>
-                <p className="text-[10px] font-black uppercase tracking-wider text-amber-600">Unassigned</p>
-              </div>
-            </div>
-          </div>
-          <div className="mt-5 flex gap-2 overflow-x-auto pb-1" aria-label="Filter HQ actions">
-            {actionCategories.map((category) => {
-              const count = category === "All" ? hqActionItems.length : hqActionItems.filter((item) => item.category === category).length;
-              return (
-                <button
-                  key={category}
-                  type="button"
-                  onClick={() => setActionFilter(category)}
-                  aria-pressed={actionFilter === category}
-                  className={`min-h-10 shrink-0 rounded-xl px-4 text-sm font-black transition-colors ${actionFilter === category ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20' : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
-                >
-                  {category} <span className="ml-1 opacity-75">{count}</span>
-                </button>
-              );
-            })}
-          </div>
-        </CardHeader>
-        <CardContent className="p-4 md:p-6">
-          {filteredActionItems.length ? (
-            <div className="space-y-3">
-              {filteredActionItems.map((item) => {
-                const priorityTone = item.priority === "Critical"
-                  ? "border-red-200 bg-red-50 text-red-700"
-                  : item.priority === "High"
-                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                    : "border-blue-200 bg-blue-50 text-blue-700";
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => navigate(item.target)}
-                    className="group w-full rounded-2xl border border-gray-100 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-lg md:p-5"
-                    aria-label={`${item.nextAction}: ${item.title}`}
-                  >
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge className={`${priorityTone} border font-black`}>{item.priority}</Badge>
-                          <Badge className="border-gray-200 bg-gray-50 text-gray-600">{item.category}</Badge>
-                          <span className="text-xs font-bold text-gray-400">{item.institution}</span>
-                        </div>
-                        <p className="mt-2 text-base font-black text-gray-950">{item.title}</p>
-                      </div>
-                      <div className="grid min-w-0 flex-[1.3] gap-3 text-xs sm:grid-cols-3">
-                        <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="flex items-center gap-1.5 font-black uppercase tracking-wider text-gray-400"><UserRoundCheck className="h-3.5 w-3.5" /> Responsible</p>
-                          <p className={`mt-1 truncate font-bold ${item.owner === 'Unassigned' ? 'text-red-600' : 'text-gray-800'}`}>{item.owner}</p>
-                        </div>
-                        <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="flex items-center gap-1.5 font-black uppercase tracking-wider text-gray-400"><Clock3 className="h-3.5 w-3.5" /> Timing</p>
-                          <p className="mt-1 font-bold text-gray-800">{item.timing}</p>
-                        </div>
-                        <div className="rounded-xl bg-indigo-50 p-3 text-indigo-700">
-                          <p className="font-black uppercase tracking-wider text-indigo-400">Next action</p>
-                          <p className="mt-1 flex items-center justify-between gap-2 font-black">{item.nextAction}<ArrowRight className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-1" /></p>
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-              {(actionFilter === "All" ? hqActionItems.length : hqActionItems.filter((item) => item.category === actionFilter).length) > filteredActionItems.length ? (
-                <p className="pt-1 text-center text-xs font-bold text-gray-500">
-                  Showing the 10 highest-priority actions. Use a category filter to narrow the queue.
-                </p>
-              ) : null}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 p-8 text-center">
-              <CheckCircle2 className="mx-auto h-9 w-9 text-emerald-600" />
-              <p className="mt-3 font-black text-gray-950">No open {actionFilter === "All" ? "HQ" : actionFilter.toLowerCase()} actions</p>
-              <p className="mt-1 text-sm font-medium text-gray-600">This workflow is currently up to date.</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      <div className="rounded-2xl border border-gray-200 bg-white p-2 shadow-sm" aria-label="HQ dashboard workspace">
+      <div className="hq-workspaces rounded-2xl border border-gray-200 bg-white p-2 shadow-sm" role="group" aria-label="HQ dashboard workspace">
         <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
           {([
             { value: "operations", label: "Operational Queues", description: "Approvals and escalations" },
@@ -858,6 +650,9 @@ export default function SuperAdminDashboard() {
         </div>
       </div>
 
+      {loadError ? <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><span>Refresh failed. Showing the last successful snapshot. {loadError}</span><Button variant="outline" size="sm" onClick={() => setRefreshKey(value => value + 1)}>Retry refresh</Button></div> : null}
+      {dashboardView === 'operations' ? <HQActionQueue queue={data.actionCentre} category={actionFilter} busy={refreshing} onFilter={(category: HqActionCategory) => changeActionPage(1, category)} onPage={page => changeActionPage(page)} onOpen={openHqAction} /> : null}
+
       {/* System Health Summary */}
       {dashboardView === "learners" ? <LearnerOversight
         adminData={data}
@@ -878,8 +673,8 @@ export default function SuperAdminDashboard() {
             </div>
             <div className="space-y-3">
               <div>
-                <h3 className={`text-2xl md:text-3xl font-black ${healthTone.score}`}>{healthScore}%</h3>
-                <p className="text-sm font-bold text-gray-400">Composite system health</p>
+                <h3 className={`text-2xl md:text-3xl font-black ${healthTone.score}`}>{healthScore}/100</h3>
+                <p className="text-sm font-bold text-gray-600">Operational risk score</p><p className="mt-1 text-xs text-gray-600">Based on urgent tickets, overdue reviews, data exceptions and administrator coverage.</p>
               </div>
               <div className="h-2 w-full rounded-full bg-gray-100">
                 <div className={`h-2 rounded-full ${healthTone.bar}`} style={{ width: `${healthScore}%` }} />
@@ -1023,17 +818,17 @@ export default function SuperAdminDashboard() {
       <div className={`${dashboardView === "operations" ? "grid" : "hidden"} gap-6 grid-cols-1 xl:grid-cols-2`}>
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
           <CardHeader className="p-8 pb-4">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <CardTitle className="text-2xl font-black flex items-center gap-3">
-                  <CheckCircle2 className="h-6 w-6 text-green-600" />
+                  <CheckCircle2 className="h-6 w-6 shrink-0 text-green-600" />
                   Approval Inbox
                 </CardTitle>
-                <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                <CardDescription className="text-base font-bold text-gray-600 mt-2">
                   HQ actions waiting on review and recently rejected submissions.
                 </CardDescription>
               </div>
-              <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/semester-reports?from=hq-action-centre')}>
+              <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => openHqAction('/semester-reports')}>
                 Open Reports
               </Button>
             </div>
@@ -1041,15 +836,15 @@ export default function SuperAdminDashboard() {
           <CardContent className="p-8 pt-2 space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="rounded-2xl bg-green-50 p-4">
-                <p className="text-xs font-black uppercase tracking-wider text-green-500">Pending</p>
+                <p className="text-xs font-black uppercase tracking-wider text-green-700">Pending</p>
                 <p className="text-3xl font-black text-green-700 mt-2">{data.approvalInbox?.pendingCount || 0}</p>
               </div>
               <div className="rounded-2xl bg-amber-50 p-4">
-                <p className="text-xs font-black uppercase tracking-wider text-amber-500">Over 7 Days</p>
+                <p className="text-xs font-black uppercase tracking-wider text-amber-700">Over 7 Days</p>
                 <p className="text-3xl font-black text-amber-700 mt-2">{data.approvalInbox?.overdueCount || 0}</p>
               </div>
               <div className="rounded-2xl bg-red-50 p-4">
-                <p className="text-xs font-black uppercase tracking-wider text-red-500">Recent Rejections</p>
+                <p className="text-xs font-black uppercase tracking-wider text-red-700">Recent Rejections</p>
                 <p className="text-3xl font-black text-red-700 mt-2">{data.approvalInbox?.recentRejectedCount || 0}</p>
               </div>
             </div>
@@ -1057,16 +852,16 @@ export default function SuperAdminDashboard() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-black text-gray-900">Waiting for HQ</p>
-                <button onClick={() => navigate('/semester-reports?from=hq-action-centre')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
+                <button onClick={() => openHqAction('/semester-reports')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
                   Review Queue
                 </button>
               </div>
               {data.approvalInbox?.queue?.length ? (
-                data.approvalInbox.queue.map((item) => (
+                data.approvalInbox.queue.slice(0, 6).map((item) => (
                   <button
                     key={item._id}
                     type="button"
-                    onClick={() => navigate(`/semester-reports/${item._id}?from=hq-action-centre`)}
+                    onClick={() => openHqAction(`/semester-reports/${item._id}`)}
                     className="group w-full rounded-2xl border border-gray-100 bg-gray-50 p-4 text-left transition hover:border-indigo-200 hover:bg-indigo-50/50"
                     aria-label={`Review ${item.title} report from ${item.institution}`}
                   >
@@ -1075,11 +870,11 @@ export default function SuperAdminDashboard() {
                         <p className="font-black text-gray-900">{item.institution}</p>
                         <p className="text-sm font-medium text-gray-500">{item.title}</p>
                       </div>
-                      <Badge className="bg-amber-100 text-amber-700 border-0">{item.ageDays}d waiting</Badge>
+                      <Badge className="bg-amber-100 text-amber-700 border-0">{item.ageDays === null ? "Entry time unknown" : `${item.ageDays}d in review`}</Badge>
                     </div>
-                    <p className="mt-2 flex items-center justify-between text-xs font-bold text-gray-400">
-                      <span>Submitted {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}</span>
-                      <span className="flex items-center gap-1 text-indigo-600">Review report <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" /></span>
+                    <p className="mt-2 flex items-center justify-between text-xs font-bold text-gray-600">
+                      <span>Review entry: {item.reviewStartedAt ? formatDistanceToNow(new Date(item.reviewStartedAt), { addSuffix: true }) : "not recorded"}</span>
+                      <span className="flex items-center gap-1 text-indigo-600">Review report <ArrowRight className="h-3.5 w-3.5 " /></span>
                     </p>
                   </button>
                 ))
@@ -1092,26 +887,26 @@ export default function SuperAdminDashboard() {
 
         <Card className="bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden">
           <CardHeader className="p-8 pb-4">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <CardTitle className="text-2xl font-black flex items-center gap-3">
-                  <LifeBuoy className="h-6 w-6 text-[#FFB800]" />
+                  <LifeBuoy className="h-6 w-6 shrink-0 text-[#FFB800]" />
                   Support Escalation Queue
                 </CardTitle>
-                <CardDescription className="text-base font-bold text-gray-400 mt-2">
+                <CardDescription className="text-base font-bold text-gray-600 mt-2">
                   Unresolved tickets that need HQ attention or follow-up.
                 </CardDescription>
               </div>
-              <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/support-center?from=hq-action-centre')}>
+              <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => openHqAction('/support-center')}>
                 Open Support
               </Button>
             </div>
           </CardHeader>
           <CardContent className="p-8 pt-2 space-y-5">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="rounded-2xl bg-amber-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-amber-500">Open</p><p className="text-3xl font-black text-amber-700 mt-2">{data.supportSummary?.open || 0}</p></div>
-              <div className="rounded-2xl bg-blue-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-blue-500">In Progress</p><p className="text-3xl font-black text-blue-700 mt-2">{data.supportSummary?.inProgress || 0}</p></div>
-              <div className="rounded-2xl bg-red-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-red-500">Urgent</p><p className="text-3xl font-black text-red-700 mt-2">{data.supportSummary?.urgentOpen || 0}</p></div>
+              <div className="rounded-2xl bg-amber-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-amber-700">Open</p><p className="text-3xl font-black text-amber-700 mt-2">{data.supportSummary?.open || 0}</p></div>
+              <div className="rounded-2xl bg-blue-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-blue-700">In Progress</p><p className="text-3xl font-black text-blue-700 mt-2">{data.supportSummary?.inProgress || 0}</p></div>
+              <div className="rounded-2xl bg-red-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-red-700">Urgent</p><p className="text-3xl font-black text-red-700 mt-2">{data.supportSummary?.urgentOpen || 0}</p></div>
               <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-black uppercase tracking-wider text-slate-500">Oldest Age</p><p className="text-3xl font-black text-slate-700 mt-2">{data.supportSummary?.oldestOpenAgeDays || 0}d</p></div>
             </div>
 
@@ -1145,7 +940,7 @@ export default function SuperAdminDashboard() {
                 <button
                   key={ticket._id}
                   type="button"
-                  onClick={() => navigate(`/support-center?ticket=${ticket._id}&from=hq-action-centre`)}
+                  onClick={() => openHqAction(`/support-center?ticket=${ticket._id}`)}
                   className="group w-full rounded-2xl border border-gray-100 bg-gray-50 p-4 text-left transition hover:border-indigo-200 hover:bg-indigo-50/50"
                   aria-label={`Open support ticket ${ticket.subject}`}
                 >
@@ -1158,9 +953,9 @@ export default function SuperAdminDashboard() {
                       {ticket.priority}
                     </Badge>
                   </div>
-                  <p className="mt-2 flex items-center justify-between gap-3 text-xs font-bold text-gray-400">
+                  <p className="mt-2 flex items-center justify-between gap-3 text-xs font-bold text-gray-600">
                     <span>Updated {formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })} · {ticket.replyCount} repl{ticket.replyCount === 1 ? 'y' : 'ies'}</span>
-                    <span className="flex items-center gap-1 text-indigo-600">Open ticket <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" /></span>
+                    <span className="flex items-center gap-1 text-indigo-600">Open ticket <ArrowRight className="h-3.5 w-3.5 " /></span>
                   </p>
                 </button>
               )) : <p className="text-sm font-medium text-gray-500">No open support escalations.</p>}
@@ -1181,6 +976,7 @@ export default function SuperAdminDashboard() {
             <Button
               variant="outline"
               size="sm"
+              aria-label="Export regional performance to CSV"
               onClick={() => downloadCSV(sortedRegionalStats, 'regional-performance-league')}
               className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
             >
@@ -1391,7 +1187,7 @@ export default function SuperAdminDashboard() {
               <p className="text-3xl font-black text-red-700 mt-2">{data.deadlineRisk?.overdueInstitutionSubmissions?.length || 0}</p>
             </div>
             <div className="rounded-2xl bg-amber-50 p-4">
-              <p className="text-xs font-black uppercase tracking-wider text-amber-500">At Risk This Cycle</p>
+              <p className="text-xs font-black uppercase tracking-wider text-amber-500">Upcoming at Risk</p>
               <p className="text-3xl font-black text-amber-700 mt-2">{data.deadlineRisk?.atRiskInstitutions?.length || 0}</p>
             </div>
             <div className="rounded-2xl bg-purple-50 p-4">
@@ -1451,7 +1247,7 @@ export default function SuperAdminDashboard() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-bold text-gray-900 text-sm">{item.institution}</p>
-                        <p className="text-xs font-medium text-gray-500 mt-1">{item.region} · {item.code}</p>
+                        <p className="text-xs font-medium text-gray-500 mt-1">{item.region} · {item.code} · {item.semester} {item.academicYear} · {item.yearGroup}</p>
                       </div>
                       <Badge className="bg-red-100 text-red-700 border-0">{item.status}</Badge>
                     </div>
@@ -1460,7 +1256,7 @@ export default function SuperAdminDashboard() {
                         size="sm"
                         variant="outline"
                         className="h-8 rounded-lg border-gray-200 text-xs font-bold"
-                        onClick={() => navigate(`/semester-reports?deadlineView=overdue&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(data.deadlineRisk.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(data.deadlineRisk.currentCycle?.academicYear || '')}`)}
+                        onClick={() => openHqAction(`/semester-reports?deadlineView=overdue&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(item.semester)}&academicYear=${encodeURIComponent(item.academicYear)}&yearGroup=${encodeURIComponent(item.yearGroup)}&deadlineId=${encodeURIComponent(item.deadlineId)}`)}
                       >
                         Open
                       </Button>
@@ -1479,7 +1275,7 @@ export default function SuperAdminDashboard() {
             </div>
 
             <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
-              <p className="text-sm font-black text-gray-900 mb-4">At Risk of Missing Current Cycle</p>
+              <p className="text-sm font-black text-gray-900 mb-4">Upcoming Submissions at Risk</p>
               <div className="space-y-3">
                 {data.deadlineRisk?.atRiskInstitutions?.length ? data.deadlineRisk.atRiskInstitutions.map((item) => (
                   <div
@@ -1489,7 +1285,7 @@ export default function SuperAdminDashboard() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-bold text-gray-900 text-sm">{item.institution}</p>
-                        <p className="text-xs font-medium text-gray-500 mt-1">{item.region} · {item.code}</p>
+                        <p className="text-xs font-medium text-gray-500 mt-1">{item.region} · {item.code} · {item.semester} {item.academicYear} · {item.yearGroup}</p>
                       </div>
                       <Badge className="bg-amber-100 text-amber-700 border-0">{item.daysRemaining}d left</Badge>
                     </div>
@@ -1499,7 +1295,7 @@ export default function SuperAdminDashboard() {
                         size="sm"
                         variant="outline"
                         className="h-8 rounded-lg border-gray-200 text-xs font-bold"
-                        onClick={() => navigate(`/semester-reports?deadlineView=at-risk&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(data.deadlineRisk.currentCycle?.semester || '')}&academicYear=${encodeURIComponent(data.deadlineRisk.currentCycle?.academicYear || '')}`)}
+                        onClick={() => openHqAction(`/semester-reports?deadlineView=at-risk&institution=${encodeURIComponent(item.institution)}&semester=${encodeURIComponent(item.semester)}&academicYear=${encodeURIComponent(item.academicYear)}&yearGroup=${encodeURIComponent(item.yearGroup)}&deadlineId=${encodeURIComponent(item.deadlineId)}`)}
                       >
                         Open
                       </Button>
@@ -2024,6 +1820,7 @@ export default function SuperAdminDashboard() {
               <Button 
                 variant="outline" 
                 size="sm"
+                aria-label="Export institution breakdown to CSV"
                 onClick={() => downloadCSV(data.institutionStats, 'institutional-breakdown')}
                 className="rounded-xl border-gray-200 hover:bg-gray-50 font-bold"
               >

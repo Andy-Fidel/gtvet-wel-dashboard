@@ -37,6 +37,8 @@ const semesterReportSchema = new mongoose.Schema({
     enum: ['Generated', 'Draft', 'Certified', 'Submitted', 'Regional_Approved', 'HQ_Approved', 'Rejected'],
     default: 'Draft'
   },
+  submittedAt: Date,
+  hqReviewStartedAt: Date,
   reviewedByRegional: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   reviewedByHQ: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   regionalComment: String,

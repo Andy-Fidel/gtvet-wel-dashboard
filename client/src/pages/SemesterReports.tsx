@@ -157,6 +157,12 @@ export default function SemesterReports() {
   const statusFilter = searchParams.get("status") || "";
   const institutionFilter = searchParams.get("institution") || "";
   const academicYearFilter = searchParams.get("academicYear") || "";
+  const semesterFilter = searchParams.get('semester') || '';
+  const yearGroupFilter = searchParams.get('yearGroup') || '';
+  const deadlineView = searchParams.get('deadlineView') || '';
+  const deadlineId = searchParams.get('deadlineId') || '';
+  const [cycleReportCount, setCycleReportCount] = useState<number | null>(null);
+  const [deadlineRiskActive, setDeadlineRiskActive] = useState(false);
 
   const fetchReports = async () => {
     try {
@@ -164,6 +170,10 @@ export default function SemesterReports() {
       if (statusFilter) params.set("status", statusFilter);
       if (institutionFilter) params.set("institution", institutionFilter);
       if (academicYearFilter) params.set("academicYear", academicYearFilter);
+      if (semesterFilter) params.set('semester', semesterFilter);
+      if (yearGroupFilter) params.set('yearGroup', yearGroupFilter);
+      if (deadlineView) params.set('deadlineView', deadlineView);
+      if (deadlineId) params.set('deadlineId', deadlineId);
       params.set("page", String(page));
       params.set("pageSize", String(pageSize));
 
@@ -172,6 +182,8 @@ export default function SemesterReports() {
       if (!res.ok) {
         throw new Error((payload as { message?: string } | null)?.message || "Failed to load reports");
       }
+      setDeadlineRiskActive(Boolean((payload as SemesterReportsResponse & { deadlineRiskActive?: boolean })?.deadlineRiskActive));
+      setCycleReportCount((payload as SemesterReportsResponse & { cycleReportCount?: number })?.cycleReportCount ?? null);
       setReports(Array.isArray(payload?.items) ? payload.items : []);
       setTotalReports(typeof payload?.total === "number" ? payload.total : 0);
       setTotalPages(typeof payload?.totalPages === "number" ? payload.totalPages : 0);
@@ -213,16 +225,19 @@ export default function SemesterReports() {
     fetchReports();
     fetchTerms();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authFetch, page, pageSize, statusFilter, institutionFilter, academicYearFilter]);
+  }, [authFetch, page, pageSize, statusFilter, institutionFilter, academicYearFilter, semesterFilter, yearGroupFilter, deadlineView, deadlineId]);
 
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, institutionFilter, academicYearFilter]);
+  }, [statusFilter, institutionFilter, academicYearFilter, semesterFilter, yearGroupFilter, deadlineView, deadlineId]);
 
   const activeFilters = [
     statusFilter ? `Status: ${statusLabels[statusFilter] || statusFilter}` : "",
     institutionFilter ? `Institution: ${institutionFilter}` : "",
     academicYearFilter ? `Academic Year: ${academicYearFilter}` : "",
+    semesterFilter ? `Semester: ${semesterFilter}` : '',
+    yearGroupFilter ? `Year group: ${yearGroupFilter}` : '',
+    deadlineView ? `Submission follow-up: ${deadlineView}` : '',
   ].filter(Boolean);
 
   const usedClosureKeys = new Set(existingClosureKeys);
@@ -450,8 +465,8 @@ export default function SemesterReports() {
               <Button
                 variant="outline"
                 className="w-full rounded-xl border-gray-200"
-                onClick={() => setSearchParams({})}
-                disabled={!statusFilter && !institutionFilter && !academicYearFilter}
+                onClick={() => { const next = new URLSearchParams(searchParams); ['status', 'institution', 'academicYear', 'semester', 'yearGroup', 'deadlineView', 'deadlineId'].forEach(key => next.delete(key)); setSearchParams(next) }}
+                disabled={!statusFilter && !institutionFilter && !academicYearFilter && !semesterFilter && !yearGroupFilter && !deadlineView}
               >
                 <Filter className="mr-2 h-4 w-4" />
                 Clear Report Filters
@@ -470,12 +485,14 @@ export default function SemesterReports() {
               </span>
             ))}
           </div>
-          <Button variant="ghost" onClick={() => setSearchParams({})} className="h-9 rounded-xl text-amber-700 hover:text-amber-800 hover:bg-amber-100">
+          <Button variant="ghost" onClick={() => { const next = new URLSearchParams(searchParams); ['status', 'institution', 'academicYear', 'semester', 'yearGroup', 'deadlineView', 'deadlineId'].forEach(key => next.delete(key)); setSearchParams(next) }} className="h-9 rounded-xl text-amber-700 hover:text-amber-800 hover:bg-amber-100">
             <X className="h-4 w-4 mr-2" />
             Clear Filters
           </Button>
         </div>
       )}
+
+      {deadlineView ? <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><strong>Submission follow-up · {institutionFilter || 'Authorized institutions'}</strong><p className="mt-1">{semesterFilter} {academicYearFilter} · {yearGroupFilter || 'All year groups'}. Showing reports that have not reached submission.</p>{!loading && !totalReports ? <p className="mt-2">{cycleReportCount === 0 ? 'No report has been created for this reporting cohort. Contact the institution reporting team to initiate and submit its report.' : deadlineRiskActive ? 'Reporting gaps remain for this deadline. Contact the institution to check missing year-group reports and complete submission.' : 'No unsubmitted reports match. Check the submitted reports before following up with the institution.'}</p> : null}</div> : null}
 
       <Card data-help-id="semester-reports-table" className="bg-white border-none sm:border sm:border-gray-100 rounded-2xl sm:rounded-[2rem] shadow-sm sm:shadow-xl overflow-hidden">
         <CardHeader className="p-4 sm:p-6 pb-0">

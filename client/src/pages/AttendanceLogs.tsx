@@ -1,3 +1,4 @@
+import { ExceptionFilterNotice } from '@/components/ExceptionFilterNotice'
 import { isHQRole } from '@/lib/rbac'
 import { useEffect, useMemo, useState } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
@@ -80,7 +81,8 @@ export default function AttendanceLogs() {
   const [editingLog, setEditingLog] = useState<AttendanceLog | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
-  const [statusFilter, setStatusFilter] = useState("")
+  const [statusFilter, setStatusFilter] = useState(searchParams.get("status") || "")
+  const exceptionFilter = searchParams.get("exception") || ""
   const [typeFilter, setTypeFilter] = useState("")
   const [selectedLogIds, setSelectedLogIds] = useState<string[]>([])
   const [attendanceAction, setAttendanceAction] = useState<{
@@ -104,6 +106,7 @@ export default function AttendanceLogs() {
         if (learnerId) params.set("learnerId", learnerId)
         if (statusFilter) params.set("status", statusFilter)
         if (typeFilter) params.set("entryType", typeFilter)
+        if (exceptionFilter) params.set("exception", exceptionFilter)
 
         const res = await authFetch(`/api/attendance-logs?${params.toString()}`)
         if (!res.ok) throw new Error("Failed to fetch attendance logs")
@@ -118,7 +121,7 @@ export default function AttendanceLogs() {
     }
 
     fetchLogs()
-  }, [authFetch, learnerId, refreshKey, statusFilter, typeFilter])
+  }, [authFetch, learnerId, refreshKey, statusFilter, typeFilter, exceptionFilter])
 
   useEffect(() => {
     if (isOversightReadOnly) return
@@ -321,6 +324,7 @@ export default function AttendanceLogs() {
 
   return (
     <div className="flex-1 space-y-4 p-3 sm:p-6 lg:space-y-8 xl:p-8 max-w-7xl mx-auto w-full">
+      <ExceptionFilterNotice />
       <Dialog open={open && !isOversightReadOnly} onOpenChange={(next) => {
         setOpen(next)
         if (!next && searchParams.get("offlineReview")) {

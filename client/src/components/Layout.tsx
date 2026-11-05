@@ -1,3 +1,4 @@
+import { safeActionCentreReturn } from '@/lib/hqActionNavigation';
 import { isHQRole, canAccessHQPage, getHQScopeLabel } from '@/lib/rbac';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Navbar } from '@/components/Navbar';
@@ -785,7 +786,7 @@ export default function Layout() {
               </div>
               <button
                 type="button"
-                onClick={() => navigate('/system-overview?view=operations')}
+                onClick={() => navigate(safeActionCentreReturn(new URLSearchParams(location.search).get('returnTo')))}
                 className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-black text-white hover:bg-indigo-700"
               >
                 <ArrowLeft className="h-4 w-4" /> Return to Action Centre

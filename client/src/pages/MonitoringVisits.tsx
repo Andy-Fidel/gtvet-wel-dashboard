@@ -1,3 +1,4 @@
+import { ExceptionFilterNotice } from '@/components/ExceptionFilterNotice'
 import { ScopedRegisterExportDialog } from '@/components/LearnerRegisterExportDialog'
 import type { ScopedExportRequest } from '@/lib/learnerRegisterExport'
 import { isHQRole } from '@/lib/rbac'
@@ -353,6 +354,7 @@ export default function MonitoringVisits() {
     // Search & filters
     const [searchInput, setSearchInput] = useState(searchParams.get('search') || '')
     const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const exceptionFilter = searchParams.get('exception') || ''
     const filterVisitType = searchParams.get('visitType') || ''
     const filterAttendance = searchParams.get('attendanceStatus') || ''
     const filterGpsReview = searchParams.get('gpsReviewStatus') || ''
@@ -377,7 +379,9 @@ export default function MonitoringVisits() {
 
     const clearAllFilters = () => {
         setSearchInput('')
-        setSearchParams(isOversightPortal ? { view: hqSection } : {}, { replace: true })
+        const next = new URLSearchParams(isOversightPortal ? { view: hqSection } : {})
+        for (const key of ['from', 'returnTo']) { const value = searchParams.get(key); if (value) next.set(key, value) }
+        setSearchParams(next, { replace: true })
         setPage(1)
     }
 
@@ -447,7 +451,7 @@ export default function MonitoringVisits() {
     useEffect(() => {
         if (viewMode !== 'due' && !(isOversightPortal && hqSection === 'exceptions')) return
         setDueLoading(true)
-        authFetch('/api/monitoring-visits/due')
+        authFetch(`/api/monitoring-visits/due${exceptionFilter ? `?exception=${encodeURIComponent(exceptionFilter)}` : ''}`)
             .then(async (res) => {
                 const payload = await res.json().catch(() => null)
                 if (!res.ok) throw new Error(payload?.message || 'Failed to load due visits')
@@ -459,7 +463,7 @@ export default function MonitoringVisits() {
                 setDueVisits([])
             })
             .finally(() => setDueLoading(false))
-    }, [authFetch, hqSection, isOversightPortal, refreshKey, viewMode])
+    }, [authFetch, hqSection, isOversightPortal, refreshKey, viewMode, exceptionFilter])
 
     // Fetch anomalies separately for admins
     useEffect(() => {
@@ -977,17 +981,17 @@ export default function MonitoringVisits() {
                     ) : dueVisits.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-16 gap-3">
                             <ShieldCheck className="h-12 w-12 text-emerald-200" />
-                            <p className="text-sm font-bold text-gray-500">No overdue monitoring visits</p>
+                            <p className="text-sm font-bold text-gray-500">{exceptionFilter === 'unvisited-placement' ? 'No matching unvisited placements' : 'No overdue monitoring visits'}</p>
                         </div>
                     ) : (
                         <div className="space-y-3">
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <h3 className="text-lg font-black text-gray-900">Overdue Monitoring Cadence</h3>
-                                    <p className="text-sm font-medium text-gray-500">Active placements whose next visit is past the configured cadence.</p>
+                                    <h3 className="text-lg font-black text-gray-900">{exceptionFilter === 'unvisited-placement' ? 'Unvisited active placements' : 'Overdue Monitoring Cadence'}</h3>
+                                    <p className="text-sm font-medium text-gray-500">{exceptionFilter === 'unvisited-placement' ? 'Placements started at least 14 days ago with no visit recorded for this placement.' : 'Active placements whose next visit is past the configured cadence.'}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <Badge className="bg-amber-100 text-amber-700 border-amber-200">{dueVisits.length} due</Badge>
+                                    <Badge className="bg-amber-100 text-amber-700 border-amber-200">{dueVisits.length} {exceptionFilter === 'unvisited-placement' ? 'unvisited' : 'due'}</Badge>
                                     {isOversightPortal && dueVisits.length > 5 ? (
                                         <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setShowAllMonitoringExceptions((current) => !current)}>
                                             {showAllMonitoringExceptions ? 'Show top 5' : `View all ${dueVisits.length}`}
@@ -1001,7 +1005,7 @@ export default function MonitoringVisits() {
                                         <div className="flex flex-wrap items-center gap-2">
                                             <p className="font-black text-gray-900">{item.learner?.name || 'Learner'}</p>
                                             <Badge variant="outline" className="bg-white font-bold">{item.learner?.trackingId || 'No tracking ID'}</Badge>
-                                            <Badge className="bg-rose-100 text-rose-700 border-rose-200">{item.overdueDays} day{item.overdueDays === 1 ? '' : 's'} overdue</Badge>
+                                            <Badge className="bg-rose-100 text-rose-700 border-rose-200">{item.overdueDays > 0 ? `${item.overdueDays} days overdue` : 'First visit not recorded'}</Badge>
                                         </div>
                                         <p className="mt-1 text-sm font-medium text-gray-600">{item.companyName || 'No company'}{item.location ? ` · ${item.location}` : ''}</p>
                                         <p className="mt-1 text-xs font-bold text-amber-700">
@@ -1261,6 +1265,7 @@ export default function MonitoringVisits() {
             </Sheet>
 
             {/* Dialogs */}
+            <ExceptionFilterNotice />
             <Dialog open={open} onOpenChange={(next) => {
                 setOpen(next)
                 if (!next && searchParams.get("offlineReview")) {
