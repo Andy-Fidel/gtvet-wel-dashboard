@@ -1,5 +1,28 @@
 [
   {
+    "id": "2026-11-05-hq-partner-tab-indicators",
+    "date": "2026-11-05",
+    "title": "See which Partner Registry section is open",
+    "summary": "Selected and unselected sections are easier to distinguish in the HQ Industry Partner Registry.",
+    "changes": [
+      {
+        "kind": "Fixed",
+        "title": "Clear selected-tab indicators",
+        "body": "The selected section now has a dark background, white text and a yellow underline. Other tabs remain neutral, with a visible focus outline for keyboard navigation. Tabs wrap on smaller screens.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open Partner Registry",
+          "path": "/hq-industry-partners"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-11-05-hq-governance-cards",
     "date": "2026-11-05",
     "title": "Clearer HQ user governance",

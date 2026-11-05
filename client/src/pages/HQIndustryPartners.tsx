@@ -1,3 +1,4 @@
+import './hq-partner-tabs.css'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
@@ -218,7 +219,7 @@ export default function HQIndustryPartners() {
       {user?.role === 'SuperAdmin' && <div className="flex flex-wrap gap-2"><PartnerBulkRegistration onImported={refreshPartners} /><Button onClick={() => { setEditingPartner(null); setRegistrationOpen(true) }} className="rounded-xl bg-[#FFB800] text-gray-900 hover:bg-[#e5a600]"><Plus aria-hidden="true" className="mr-2 h-4 w-4" />Register Partner</Button></div>}
     </header>
     <Tabs value={activeTab} onValueChange={value => setSearchParams(previous => { const next = new URLSearchParams(previous); if (value === 'registry') next.delete('tab'); else next.set('tab', value); return next })}>
-      <TabsList aria-label="Partner Registry sections" className="mb-4 h-auto flex-wrap justify-start gap-1"><TabsTrigger value="registry">Partner Registry</TabsTrigger><TabsTrigger value="insights">Partner & industry insights</TabsTrigger><TabsTrigger value="changes">Change requests</TabsTrigger>{user?.role === 'SuperAdmin' && <TabsTrigger value="slot-approvals">Pending Slot Approvals</TabsTrigger>}</TabsList>
+      <TabsList aria-label="Partner Registry sections" className="hq-partner-section-tabs mb-4"><TabsTrigger value="registry">Partner Registry</TabsTrigger><TabsTrigger value="insights">Partner & industry insights</TabsTrigger><TabsTrigger value="changes">Change requests</TabsTrigger>{user?.role === 'SuperAdmin' && <TabsTrigger value="slot-approvals">Pending Slot Approvals</TabsTrigger>}</TabsList>
       <TabsContent value="registry" className="space-y-4">
         <section ref={directoryRef} tabIndex={-1} aria-label="Partner registry" aria-busy={loading} className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold text-gray-900">Partners</h2><p className="mt-1 text-sm text-gray-500">Approval, operational status and placement availability are separate checks.</p></div><Button variant="outline" disabled={loading} onClick={refreshPartners}><RefreshCw aria-hidden="true" className="mr-2 h-4 w-4" />Refresh registry</Button></div>
