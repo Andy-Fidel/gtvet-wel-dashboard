@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
+import type { UserGovernanceData } from '../../src/components/dashboard/UserGovernanceCards'
 import releases from '../../src/data/releases.json' with { type: 'json' }
 import { buildHqActions, actionCentreResponse } from '../../../server/utils/hqActionCentre.js'
 const overview = {
@@ -23,7 +24,7 @@ const reports = Array.from({ length: 16 }, (_, i) => ({ _id: `507f1f77bcf86cd799
 const tickets = Array.from({ length: 27 }, (_, i) => ({ _id: `507f1f77bcf86cd7994390${40+i}`, subject: `Support request ${i}`, status: 'Open', priority: 'Urgent', institution: `School ${i}`, requesterName: 'Officer', createdAt: '2026-10-01', updatedAt: '2026-10-01', firstResponseDueAt: '2026-10-01T01:00:00Z', resolutionDueAt: '2026-10-01T08:00:00Z', replyCount: 0, awaitingParty: 'Support' }))
 const obligations = Array.from({ length: 12 }, (_, i) => ({ _id: `deadline-${i}`, deadlineId: '507f1f77bcf86cd799439099', institution: `School ${i}`, region: 'Ashanti', status: 'Missing', code: 'QA', title: 'Year 1 deadline', semester: 'Semester 1', academicYear: '2025/2026', yearGroup: 'Year 1', endDate: '2026-10-01', daysRemaining: 0 }))
 const populated = { ...overview, generatedAt: '2026-11-05T12:00:00Z', approvalInbox: { ...overview.approvalInbox, pendingCount: 16, queue: reports }, supportSummary: { ...overview.supportSummary, open: 27, urgentOpen: 27, queue: tickets }, dataQualityAlerts: { stalePendingLearners: 4, placementsMissingSupervisor: 200, pendingAttendanceSignOff: 3, activePlacementsWithoutVisits: 6 }, deadlineRisk: { ...overview.deadlineRisk, overdueInstitutionSubmissions: obligations }, userGovernance: { ...overview.userGovernance, institutionsWithoutActiveAdmins: Array.from({ length: 12 }, (_, i) => ({ _id: String(i), name: `Governance school ${i}`, region: 'Ashanti', code: `QA${i}` })) } }
-async function setup(page: Page, role = 'SuperAdmin', data = populated) {
+async function setup(page: Page, role = 'SuperAdmin', data: Omit<typeof populated, 'userGovernance'> & { userGovernance: UserGovernanceData } = populated) {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.addInitScript(latest => {
@@ -36,6 +37,7 @@ async function setup(page: Page, role = 'SuperAdmin', data = populated) {
     if (url.pathname === '/api/auth/me') return route.fulfill({ json: { _id: 'hq-fix-qa', name: 'QA HQ Officer', role, status: 'Active', hqScopeType: 'National' } })
     if (url.pathname === '/api/auth/csrf') return route.fulfill({ json: { csrfToken: 'qa' } })
     if (url.pathname === '/api/admin/overview') return route.fulfill({ json: actionCentreResponse({ ...data, actionCentre: { items: buildHqActions(data, role, new Date('2026-11-05T12:00:00Z')) } }, Object.fromEntries(url.searchParams)) })
+    if (url.pathname === '/api/users/governance/overview') return route.fulfill({ json: { totalUsers: 0, roleCounts: {}, regionStats: [], riskyAccounts: { items: [], total: 0, page: 1, totalPages: 1 }, dormantPrivilegedAccounts: { items: [], total: 0, page: 1, totalPages: 1 } } })
     if (url.pathname === '/api/notifications') return route.fulfill({ json: { items: [], total: 0, unreadCount: 0 } })
     if (url.pathname === '/api/semester-reports') return route.fulfill({ json: { items: [], total: 0, totalPages: 1, cycleReportCount: 0 } })
     if (url.pathname === '/api/placements' || url.pathname === '/api/learners') return route.fulfill({ json: { items: [], total: 0, totalPages: 1 } })
@@ -167,4 +169,77 @@ test('institution CSV uses safe quoted cells and readable columns', async ({ pag
   expect(csv).toContain('"Institution","Learners"')
   expect(csv).toContain('"\'=1+1"')
   expect(csv).toContain('"A""B\nC"')
+})
+
+const governanceFixture: UserGovernanceData = {
+  inactiveUsers: 18, pendingPasswordResets: 4,
+  roleBreakdown: [{ role: 'HQStaff', count: 12 }, { role: 'Staff', count: 214 }, { role: 'Admin', count: 86 }, { role: 'Manager', count: 62 }, { role: 'RegionalAdmin', count: 18 }, { role: 'HQManager', count: 6 }, { role: 'SuperAdmin', count: 2 }, { role: 'IndustryPartner', count: 24 }, { role: 'Guardian', count: 4 }],
+  institutionsWithoutActiveAdmins: Array.from({ length: 8 }, (_, i) => ({ _id: `coverage-${i}`, name: `Coverage school ${i + 1}`, region: 'Ashanti', code: `COV-${i + 1}` })),
+  privilegedUserAnomalies: Array.from({ length: 5 }, (_, i) => ({ institution: `Flagged school ${i + 1}`, adminCount: 3, managerCount: 3, privilegedCount: 6, activePrivilegedCount: 4, reasons: ['Multiple admins assigned', 'High privileged-user count'] })),
+}
+test('governance cards show truthful role shares and page every exception', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors = await setup(page, 'SuperAdmin', { ...populated, userGovernance: governanceFixture })
+  await page.goto('/system-overview?view=governance')
+  const roles = page.getByRole('region', { name: 'Users by Role' })
+  await expect(roles.locator('.governance-role-total')).toContainText('428')
+  await expect(roles.locator('.governance-role-list > li').first()).toContainText('Staff21450%')
+  await expect(roles.locator('.governance-role-list > li').last()).toContainText('Super Admin2<1%')
+  const coverage = page.getByRole('region', { name: 'Institutions Without Active Admins' })
+  await expect(coverage).toContainText('Showing 1–3 of 8 institutions')
+  await page.locator('.governance-cards').screenshot({ path: info.outputPath('governance-desktop.png'), style: '.sticky { opacity: 0 !important; }' })
+  await coverage.getByRole('button', { name: 'Next administrator coverage page' }).click()
+  await coverage.getByRole('button', { name: 'Next administrator coverage page' }).click()
+  await expect(coverage).toContainText('Showing 7–8 of 8 institutions')
+  await expect(coverage.getByRole('button', { name: 'Next administrator coverage page' })).toBeDisabled()
+  const anomalies = page.getByRole('region', { name: 'Privileged Access Anomalies' })
+  await anomalies.getByRole('button', { name: 'Next access anomalies page' }).click()
+  await anomalies.getByRole('button', { name: 'Next access anomalies page' }).click()
+  await expect(anomalies).toContainText('Showing 5–5 of 5 institutions')
+  await expect(anomalies).toContainText('Flags are signals, not confirmed issues')
+  await coverage.getByRole('button', { name: 'Review administrator coverage for Coverage school 7', exact: true }).click()
+  const url = new URL(page.url())
+  expect(url.searchParams.get('institution')).toBe('Coverage school 7')
+  expect(url.searchParams.get('governance')).toBe('orphaned-institutions')
+  await page.getByRole('button', { name: 'Return to Action Centre' }).click()
+  await expect(page).toHaveURL(/view=governance/)
+  await page.getByRole('button', { name: 'Review privileged access for Flagged school 1', exact: true }).click()
+  expect(new URL(page.url()).searchParams.get('governance')).toBe('privileged-anomalies')
+  expect(new URL(page.url()).searchParams.get('institution')).toBe('Flagged school 1')
+  expect(errors).toEqual([])
+})
+for (const role of ['HQStaff', 'HQManager']) test(`${role} can inspect governance without management controls`, async ({ page }) => {
+  const errors = await setup(page, role, { ...populated, userGovernance: governanceFixture })
+  await page.goto('/system-overview?view=governance')
+  const cards = page.locator('.governance-cards')
+  await expect(cards.getByText('Contact your user governance administrator')).toHaveCount(2)
+  await expect(cards.getByRole('button', { name: /Review|Manage|Open user management/ })).toHaveCount(0)
+  await cards.getByRole('button', { name: 'Next access anomalies page' }).click()
+  await expect(cards).toContainText('Flagged school 3')
+  expect(errors).toEqual([])
+})
+test('governance empty states and refreshed smaller lists stay usable', async ({ page }) => {
+  await setup(page, 'SuperAdmin', { ...populated, userGovernance: governanceFixture })
+  await page.goto('/system-overview?view=governance')
+  await page.getByRole('button', { name: 'Next administrator coverage page' }).click()
+  await page.getByRole('button', { name: 'Next administrator coverage page' }).click()
+  await page.route('**/api/admin/overview?**', route => route.fulfill({ json: { ...populated, userGovernance: { ...governanceFixture, institutionsWithoutActiveAdmins: [governanceFixture.institutionsWithoutActiveAdmins[0]], privilegedUserAnomalies: [], roleBreakdown: [] } } }))
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(page.locator('.governance-cards')).toContainText('Showing 1–1 of 1 institutions')
+  await expect(page.locator('.governance-cards')).toContainText('No user data available.')
+  await expect(page.locator('.governance-cards')).toContainText('No privileged-access anomalies detected.')
+})
+test('governance phone cards fit long content and pass accessibility checks', async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const data = { ...governanceFixture, institutionsWithoutActiveAdmins: [{ ...governanceFixture.institutionsWithoutActiveAdmins[0], name: 'A very long institution name for administrator coverage verification with additional departments', code: 'LONG-INSTITUTION-CODE-2026' }, ...governanceFixture.institutionsWithoutActiveAdmins.slice(1)] }
+  const errors = await setup(page, 'SuperAdmin', { ...populated, userGovernance: data })
+  await page.goto('/system-overview?view=governance')
+  await expect(page.getByRole('region', { name: 'Users by Role' })).toBeVisible()
+  expect(await page.locator('.governance-cards').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  const axe = await new AxeBuilder({ page }).include('.governance-cards').analyze()
+  expect(axe.violations).toEqual([])
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await page.locator('.governance-cards button').first().evaluate(element => getComputedStyle(element).transitionDuration)).toBe('0s')
+  await page.locator('.governance-cards').screenshot({ path: info.outputPath('governance-phone.png'), style: '.sticky { opacity: 0 !important; }' })
+  expect(errors).toEqual([])
 })

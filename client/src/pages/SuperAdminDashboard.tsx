@@ -1,3 +1,4 @@
+import { UserGovernanceCards, type UserGovernanceData } from '@/components/dashboard/UserGovernanceCards';
 import { HQActionQueue, type ActionCentrePage, type HqActionCategory } from '@/components/dashboard/HQActionQueue';
 import { withActionReturn } from '@/lib/hqActionNavigation';
 import { encodeCsv } from '@/lib/csv';
@@ -171,20 +172,7 @@ interface OverviewData extends LearnerOversightData {
     pendingAttendanceSignOff: number;
     activePlacementsWithoutVisits: number;
   };
-  userGovernance: {
-    inactiveUsers: number;
-    pendingPasswordResets: number;
-    institutionsWithoutActiveAdmins: { _id: string; name: string; region: string; code: string }[];
-    privilegedUserAnomalies: {
-      institution: string;
-      adminCount: number;
-      managerCount: number;
-      privilegedCount: number;
-      activePrivilegedCount: number;
-      reasons: string[];
-    }[];
-    roleBreakdown: { role: string; count: number }[];
-  };
+  userGovernance: UserGovernanceData;
   deadlineRisk: {
     upcomingDeadlines: {
       _id: string;
@@ -1317,12 +1305,12 @@ export default function SuperAdminDashboard() {
       </Card>
 
       <Card className={`${dashboardView === "governance" ? "block" : "hidden"} bg-white border-gray-100 rounded-[2rem] shadow-xl overflow-hidden`}>
-        <CardHeader className="p-8 pb-4">
-          <div className="flex items-center justify-between gap-4">
+        <CardHeader className="p-4 pb-4 sm:p-8 sm:pb-4">
+          <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-2xl font-black">{user?.role === 'SuperAdmin' ? 'Global User Governance' : 'User Governance Snapshot'}</CardTitle>
-              <CardDescription className="text-base font-bold text-gray-400 mt-2">
-                Role distribution, inactive accounts, orphaned institutions, and privileged-access anomalies.
+              <CardDescription className="text-sm font-medium text-slate-600 mt-2">
+                Understand account access. Close coverage gaps. Review exceptions.
               </CardDescription>
             </div>
             {canManageUsers ? <Button variant="outline" className="rounded-xl border-gray-200 font-bold" onClick={() => navigate('/users')}>
@@ -1330,7 +1318,7 @@ export default function SuperAdminDashboard() {
             </Button> : <Badge className="border border-slate-200 bg-slate-50 text-slate-600">View only</Badge>}
           </div>
         </CardHeader>
-        <CardContent className="p-8 pt-2 space-y-5">
+        <CardContent className="p-4 pt-2 sm:p-8 sm:pt-2 space-y-5">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <button disabled={!canManageUsers} onClick={() => navigate('/users')} className="rounded-2xl bg-blue-50 p-4 text-left transition-colors enabled:hover:bg-blue-100 disabled:cursor-default">
               <p className="text-xs font-black uppercase tracking-wider text-blue-500">Roles Tracked</p>
@@ -1350,72 +1338,7 @@ export default function SuperAdminDashboard() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <p className="text-sm font-black text-gray-900">Users by Role</p>
-                {canManageUsers ? <button onClick={() => navigate('/users')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
-                  Manage
-                </button> : null}
-              </div>
-              <div className="space-y-3">
-                {data.userGovernance?.roleBreakdown?.length ? data.userGovernance.roleBreakdown.map((item) => (
-                  <div key={item.role} className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-600">{item.role}</span>
-                    <Badge className="bg-white text-gray-900 border border-gray-200">{item.count}</Badge>
-                  </div>
-                )) : <p className="text-sm text-gray-500">No user data available.</p>}
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <p className="text-sm font-black text-gray-900">Institutions Without Active Admins</p>
-                {canManageUsers ? <button onClick={() => navigate('/users?governance=orphaned-institutions&role=Admin&status=Active')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
-                  Assign Admins
-                </button> : null}
-              </div>
-              <div className="space-y-3">
-                {data.userGovernance?.institutionsWithoutActiveAdmins?.length ? data.userGovernance.institutionsWithoutActiveAdmins.map((institution) => (
-                  <div key={institution._id} className="rounded-xl bg-white border border-gray-100 p-3">
-                    <p className="font-bold text-gray-900 text-sm">{institution.name}</p>
-                    <p className="text-xs font-medium text-gray-500 mt-1">{institution.region} · {institution.code}</p>
-                  </div>
-                )) : <p className="text-sm text-gray-500">Every institution currently has an active admin.</p>}
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-gray-50 border border-gray-100 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <p className="text-sm font-black text-gray-900">Privileged Access Anomalies</p>
-                {canManageUsers ? <button onClick={() => navigate('/users?governance=privileged-anomalies')} className="text-xs font-black text-indigo-600 hover:text-indigo-700">
-                  Review Access
-                </button> : null}
-              </div>
-              <div className="space-y-3">
-                {data.userGovernance?.privilegedUserAnomalies?.length ? data.userGovernance.privilegedUserAnomalies.map((entry) => (
-                  <div key={entry.institution} className="rounded-xl bg-white border border-gray-100 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-bold text-gray-900 text-sm">{entry.institution}</p>
-                        <p className="text-xs font-medium text-gray-500 mt-1">
-                          {entry.activePrivilegedCount} active privileged users · {entry.adminCount} admins · {entry.managerCount} managers
-                        </p>
-                      </div>
-                      <Badge className="bg-red-100 text-red-700 border-0">Flagged</Badge>
-                    </div>
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      {entry.reasons.map((reason) => (
-                        <Badge key={`${entry.institution}-${reason}`} className="bg-white text-red-700 border border-red-200">
-                          {reason}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                )) : <p className="text-sm text-gray-500">No privileged-access anomalies detected.</p>}
-              </div>
-            </div>
-          </div>
+          <UserGovernanceCards governance={data.userGovernance} canManageUsers={canManageUsers} onOpen={openHqAction} />
         </CardContent>
       </Card>
 

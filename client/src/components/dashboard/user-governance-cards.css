@@ -1,0 +1,63 @@
+.governance-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; color: #172033; }
+.governance-cards .governance-detail-card { display: flex; flex-direction: column; min-width: 0; border: 1px solid #e1e6ee; border-radius: 16px; background: #fff; box-shadow: 0 2px 3px #17203303; }
+.governance-cards header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 20px 20px 0; min-height: 70px; }
+.governance-cards h3 { display: flex; align-items: flex-start; gap: 10px; margin: 0; font-size: 14px; line-height: 1.5; font-weight: 650; letter-spacing: -.15px; }
+.governance-cards h3 svg { flex-shrink: 0; margin-top: 2px; color: #64748b; }
+.governance-cards button { transition: color 150ms ease-out, background-color 150ms ease-out; }
+.governance-cards button:focus-visible { outline: 2px solid #4338ca; outline-offset: 4px; border-radius: 4px; }
+.governance-cards .governance-icon-action { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; margin-top: -5px; color: #64748b; border-radius: 8px; }
+.governance-cards .governance-icon-action:hover { color: #4338ca; background: #f5f6fa; }
+.governance-cards .governance-role-total { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 20px 22px; }
+.governance-cards .governance-role-total strong { font-size: 40px; line-height: 1.15; letter-spacing: -1.5px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.governance-cards .governance-role-total p { color: #475569; font-size: 12px; line-height: 1.6; }
+.governance-cards .governance-role-total p span { display: block; color: #64748b; font-size: 10px; }
+.governance-cards .governance-role-list { display: flex; flex-direction: column; gap: 14px; padding: 0 20px 24px; list-style: none; }
+.governance-cards .governance-role-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12px; line-height: 1.5; }
+.governance-cards .governance-role-count { display: flex; gap: 12px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.governance-cards .governance-role-count span { width: 30px; text-align: right; font-size: 11px; font-weight: 400; color: #64748b; }
+.governance-cards .governance-role-track { height: 4px; margin-top: 6px; background: #f0f2f6; border-radius: 4px; overflow: hidden; }
+.governance-cards .governance-role-track > div { height: 100%; border-radius: 4px; background: #9ba9c3; }
+.governance-cards .governance-role-list > li:first-child .governance-role-track > div { background: #647895; }
+.governance-cards .governance-count { flex-shrink: 0; display: grid; place-items: center; min-width: 30px; min-height: 30px; padding: 3px 8px; border-radius: 8px; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.governance-cards .governance-coverage h3 svg { color: #a76b16; }
+.governance-cards .governance-coverage .governance-count, .governance-cards .governance-coverage .governance-signal { background: #fffaeb; color: #875411; }
+.governance-cards .governance-anomalies h3 svg { color: #b34a55; }
+.governance-cards .governance-anomalies .governance-count, .governance-cards .governance-anomalies .governance-signal { background: #fff1f2; color: #a52b3b; }
+.governance-cards .governance-description { margin: 10px 20px 17px; color: #64748b; font-size: 12px; line-height: 1.65; }
+.governance-cards .governance-signal { display: flex; flex-direction: column; gap: 4px; margin: 0 20px 3px; padding: 10px 12px; border-radius: 8px; font-size: 11px; line-height: 1.5; }
+.governance-cards .governance-signal strong { font-weight: 650; }
+.governance-cards .governance-exception-list { margin: 0 20px; list-style: none; }
+.governance-cards .governance-exception-list > li { padding: 16px 0; border-bottom: 1px solid #edf0f4; }
+.governance-cards .governance-exception-list > li:last-child { border-bottom: 0; }
+.governance-cards h4 { font-size: 12px; line-height: 1.6; font-weight: 600; overflow-wrap: anywhere; }
+.governance-cards .governance-record-meta { margin-top: 4px; color: #64748b; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.governance-cards .governance-record-meta > span { color: #475569; }
+.governance-cards .governance-record-action { display: flex; align-items: center; gap: 6px; min-height: 32px; margin-top: 3px; font-size: 11px; font-weight: 600; color: #4338ca; text-align: left; }
+.governance-cards .governance-record-action svg { flex-shrink: 0; }
+.governance-cards .governance-link:hover, .governance-cards .governance-record-action:hover { color: #312e81; text-decoration: underline; text-underline-offset: 3px; }
+.governance-cards .governance-reasons { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; list-style: none; }
+.governance-cards .governance-reasons li { padding: 3px 7px; border-radius: 5px; background: #fff5f5; color: #a13c48; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.governance-cards .governance-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding: 13px 20px; color: #64748b; font-size: 11px; line-height: 1.5; }
+.governance-cards .governance-pager > div { display: flex; gap: 6px; flex-shrink: 0; }
+.governance-cards .governance-pager button { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #dce2eb; border-radius: 6px; color: #475569; }
+.governance-cards .governance-pager button:enabled:hover { background: #f1f5f9; }
+.governance-cards .governance-pager button:disabled { color: #94a3b8; background: #fafbfc; cursor: default; }
+.governance-cards footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; min-height: 53px; padding: 16px 20px; border-top: 1px solid #e8ecf2; border-radius: 0 0 16px 16px; background: #fcfdff; color: #64748b; font-size: 10px; line-height: 1.5; }
+.governance-cards .governance-coverage:has(.governance-pager) footer, .governance-cards .governance-anomalies:has(.governance-pager) footer { margin-top: 0; }
+.governance-cards .governance-link { display: flex; align-items: center; gap: 9px; color: #4338ca; font-size: 11px; font-weight: 650; text-align: left; }
+.governance-cards .governance-link svg { flex-shrink: 0; }
+.governance-cards .governance-empty { padding: 12px 20px 28px; color: #64748b; font-size: 12px; line-height: 1.7; }
+@media (min-width: 1280px) { .governance-cards { grid-template-columns: minmax(0, .85fr) repeat(2, minmax(0, 1.08fr)); } }
+@media (max-width: 639px) {
+  .governance-cards header { min-height: 0; padding: 18px 16px 12px; }
+  .governance-cards .governance-role-total { margin-left: 16px; margin-right: 16px; }
+  .governance-cards .governance-role-list { padding-left: 16px; padding-right: 16px; }
+  .governance-cards .governance-description { margin: 0 16px 15px; }
+  .governance-cards .governance-signal { margin-left: 16px; margin-right: 16px; }
+  .governance-cards .governance-exception-list { margin-left: 16px; margin-right: 16px; }
+  .governance-cards .governance-pager { padding-left: 16px; padding-right: 16px; }
+  .governance-cards .governance-pager button { width: 40px; height: 40px; }
+  .governance-cards .governance-record-action, .governance-cards .governance-link { min-height: 40px; }
+  .governance-cards footer { padding: 10px 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .governance-cards button { transition: none; } }

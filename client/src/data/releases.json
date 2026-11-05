@@ -1,5 +1,28 @@
 [
   {
+    "id": "2026-11-05-hq-governance-cards",
+    "date": "2026-11-05",
+    "title": "Clearer HQ user governance",
+    "summary": "See account distribution and review administrator coverage and access flags in focused cards.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Scan roles and review governance exceptions",
+        "body": "Users by Role shows account totals and percentage shares. Administrator coverage and privileged-access cards show full totals, page through all flagged institutions and explain what needs review. Authorized administrators can open the matching institution records and return to the governance workspace; HQ Manager and HQ Staff retain read-only oversight. The cards stack on smaller screens.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open User Governance",
+          "path": "/system-overview"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-11-05-hq-action-centre",
     "date": "2026-11-05",
     "title": "A more reliable HQ Action Centre",
