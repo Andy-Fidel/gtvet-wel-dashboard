@@ -1,5 +1,62 @@
 [
   {
+    "id": "2026-11-05-help-support-workflows",
+    "date": "2026-11-05",
+    "title": "Follow support requests more easily",
+    "summary": "A clearer Help & Support page brings conversations, ownership, deadlines and focused queues together.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "See who is handling a request and what happens next",
+        "body": "Ticket summaries show the next action, responsible person and response deadline. Conversations appear before attachments and management controls. New ownership, escalation and status changes appear in ticket activity. Advanced filters start collapsed on smaller screens.",
+        "audience": "Institution and HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Help & Support",
+          "path": "/support-center"
+        }
+      },
+      {
+        "kind": "Improved",
+        "title": "Find the right support requests",
+        "body": "Filter by institution, region and ticket type where your access allows, and sort by priority, age or resolution deadline. Queue filters stay selected after a reload. FAQs are searchable, and ticket links can be copied for follow-up.",
+        "audience": "Institution and HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ]
+      },
+      {
+        "kind": "Improved",
+        "title": "Include learner context and follow up reliably",
+        "body": "Institution teams and authorized administrators can link a learner and placement when opening a ticket, then attach screenshots or documents after submission. Sending and saving controls show progress, and retrying the same reply avoids duplicates. HQ Manager and HQ Staff retain read-only oversight and can mark tickets as seen.",
+        "audience": "Institution and HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ]
+      }
+    ]
+  },
+  {
     "id": "2026-10-31-placement-initiation-dates",
     "date": "2026-10-31",
     "title": "See when a placement was initiated",
@@ -8,7 +65,7 @@
       {
         "kind": "Improved",
         "title": "Find the placement creation date and time",
-        "body": "Learner profiles show Placement initiated beside the active placement\u2019s start and end dates, in placement history and on the timeline. The placements list and batch details also show the recorded creation timestamp in UTC. Missing timestamps display Not recorded; planned placements display Not initiated.",
+        "body": "Learner profiles show Placement initiated beside the active placement’s start and end dates, in placement history and on the timeline. The placements list and batch details also show the recorded creation timestamp in UTC. Missing timestamps display Not recorded; planned placements display Not initiated.",
         "audience": "Institution and HQ teams",
         "roles": [
           "SuperAdmin",
@@ -169,27 +226,41 @@
     "date": "2026-10-20",
     "title": "Connect learner records from IDMS",
     "summary": "Preview learner changes from IDMS for institutions configured for synchronization.",
-    "changes": [{
-      "kind": "Fixed",
-      "title": "Preview learners from IDMS",
-      "body": "Institution administrators and managers can preview learner records for a selected academic year once a Super Admin has linked their institution to IDMS and enabled synchronization. Review new records, changes and conflicts before applying an import. Existing WEL placement information is preserved.",
-      "audience": "Institution teams",
-      "roles": ["Admin", "Manager"]
-    }]
+    "changes": [
+      {
+        "kind": "Fixed",
+        "title": "Preview learners from IDMS",
+        "body": "Institution administrators and managers can preview learner records for a selected academic year once a Super Admin has linked their institution to IDMS and enabled synchronization. Review new records, changes and conflicts before applying an import. Existing WEL placement information is preserved.",
+        "audience": "Institution teams",
+        "roles": [
+          "Admin",
+          "Manager"
+        ]
+      }
+    ]
   },
   {
     "id": "2026-10-16-partner-registry-exports",
     "date": "2026-10-16",
     "title": "Download the HQ partner registry",
     "summary": "Export industry partners to CSV or PDF using your current registry filters.",
-    "changes": [{
-      "kind": "New",
-      "title": "Export your partner list",
-      "body": "Open the HQ Partner Registry and choose Export CSV or Export PDF to download every partner matching your search and approval filter, across all pages. Exports include partners within your assigned access scope. CSV includes registry and contact details; PDF provides a printable table with page numbers.",
-      "audience": "HQ teams",
-      "roles": ["SuperAdmin", "HQManager", "HQStaff"],
-      "action": { "label": "Open Partner Registry", "path": "/hq-industry-partners" }
-    }]
+    "changes": [
+      {
+        "kind": "New",
+        "title": "Export your partner list",
+        "body": "Open the HQ Partner Registry and choose Export CSV or Export PDF to download every partner matching your search and approval filter, across all pages. Exports include partners within your assigned access scope. CSV includes registry and contact details; PDF provides a printable table with page numbers.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open Partner Registry",
+          "path": "/hq-industry-partners"
+        }
+      }
+    ]
   },
   {
     "id": "2026-10-15-session-security-and-password-recovery",
@@ -226,7 +297,7 @@
       {
         "kind": "Improved",
         "title": "Browse partners with clearer cards and summaries",
-        "body": "The institution partner directory now follows the portal\u2019s System Health design, with a compact header, a region summary, clear approval badges and two-column partner cards. Counts distinguish all search results from availability on the current page. Region switching, search, submissions, corrections and placement actions remain available.",
+        "body": "The institution partner directory now follows the portal’s System Health design, with a compact header, a region summary, clear approval badges and two-column partner cards. Counts distinguish all search results from availability on the current page. Region switching, search, submissions, corrections and placement actions remain available.",
         "audience": "Institution placement teams",
         "roles": [
           "Admin",
@@ -268,42 +339,69 @@
     "date": "2026-10-09",
     "title": "Clearer monitoring visits",
     "summary": "Choose placed learners, check the visit location and record attendance more clearly.",
-    "changes": [{
-      "kind": "Improved",
-      "title": "Check the right learner and workplace",
-      "body": "The learner list now includes only active placements, including your active delegations. Selecting a learner captures your GPS and checks it against that learner’s saved workplace or approximate town location. Outside-area visits need an explanation for review. Attendance is now Present or Absent: Present asks Late or On-time, and Absent asks whether the absence was excused. Saving checks the placement and location again.",
-      "audience": "Institution monitoring teams",
-      "roles": ["Admin", "Manager", "Staff"],
-      "action": { "label": "Open Monitoring Visits", "path": "/monitoring-visits" }
-    }]
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Check the right learner and workplace",
+        "body": "The learner list now includes only active placements, including your active delegations. Selecting a learner captures your GPS and checks it against that learner’s saved workplace or approximate town location. Outside-area visits need an explanation for review. Attendance is now Present or Absent: Present asks Late or On-time, and Absent asks whether the absence was excused. Saving checks the placement and location again.",
+        "audience": "Institution monitoring teams",
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Monitoring Visits",
+          "path": "/monitoring-visits"
+        }
+      }
+    ]
   },
   {
     "id": "2026-10-09-edit-pending-placement-requests",
     "date": "2026-10-09",
     "title": "Correct a placement request before activation",
     "summary": "Save request corrections separately from activating placements.",
-    "changes": [{
-      "kind": "Improved",
-      "title": "Edit a pending placement request",
-      "body": "Open Placement Batches / History and choose Edit request to correct the partner, learners, dates, region, workplace or supervisor details. Admins and Managers can edit their institution’s pending requests; Staff can edit their own submitted requests. Save changes keeps the request pending. Changes to learner-found leads require verification again. Management activates placements separately. If another person has changed the request, reload before saving or activating.",
-      "audience": "Institution placement teams",
-      "roles": ["Admin", "Manager", "Staff"],
-      "action": { "label": "Open Placements", "path": "/placements" }
-    }]
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Edit a pending placement request",
+        "body": "Open Placement Batches / History and choose Edit request to correct the partner, learners, dates, region, workplace or supervisor details. Admins and Managers can edit their institution’s pending requests; Staff can edit their own submitted requests. Save changes keeps the request pending. Changes to learner-found leads require verification again. Management activates placements separately. If another person has changed the request, reload before saving or activating.",
+        "audience": "Institution placement teams",
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Placements",
+          "path": "/placements"
+        }
+      }
+    ]
   },
   {
     "id": "2026-10-09-national-partner-directory",
     "date": "2026-10-09",
     "title": "Find placement partners across Ghana",
     "summary": "Browse approved industry partners in any region from your institution portal.",
-    "changes": [{
-      "kind": "Improved",
-      "title": "Switch regions and start a placement",
-      "body": "Industry Partners opens in your institution’s region. Switch to any of Ghana’s 16 regions or browse all regions, search by partner name or town, and filter by sector or available slots. Cards show the slots available to your institution. Use for placement opens the placement form with the partner and region selected. Staff submit requests; management approval and capacity checks still apply. Your submissions and change requests are available in their own tab.",
-      "audience": "Institution teams",
-      "roles": ["Admin", "Manager", "Staff"],
-      "action": { "label": "Browse Industry Partners", "path": "/industry-partners" }
-    }]
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Switch regions and start a placement",
+        "body": "Industry Partners opens in your institution’s region. Switch to any of Ghana’s 16 regions or browse all regions, search by partner name or town, and filter by sector or available slots. Cards show the slots available to your institution. Use for placement opens the placement form with the partner and region selected. Staff submit requests; management approval and capacity checks still apply. Your submissions and change requests are available in their own tab.",
+        "audience": "Institution teams",
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Browse Industry Partners",
+          "path": "/industry-partners"
+        }
+      }
+    ]
   },
   {
     "id": "2026-10-08-flexible-location-monitoring",
@@ -333,13 +431,22 @@
     "date": "2026-10-08",
     "title": "Find workplace areas more easily",
     "summary": "Search and save an approximate Ghana town location without needing a paid maps service.",
-    "changes": [{
-      "kind": "New",
-      "title": "Search an area or town in Ghana",
-      "body": "Search a public town or area name using OpenStreetMap, then choose Use this town when registering or correcting an industry partner. Town locations are labelled approximate and saved separately from workplace GPS. Exact coordinates can be captured later at the site; monitoring visits continue to use exact GPS or the existing review process.",
-      "audience": "Teams recording workplace locations",
-      "roles": ["SuperAdmin", "RegionalAdmin", "Admin", "Manager", "Staff", "IndustryPartner"]
-    }]
+    "changes": [
+      {
+        "kind": "New",
+        "title": "Search an area or town in Ghana",
+        "body": "Search a public town or area name using OpenStreetMap, then choose Use this town when registering or correcting an industry partner. Town locations are labelled approximate and saved separately from workplace GPS. Exact coordinates can be captured later at the site; monitoring visits continue to use exact GPS or the existing review process.",
+        "audience": "Teams recording workplace locations",
+        "roles": [
+          "SuperAdmin",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff",
+          "IndustryPartner"
+        ]
+      }
+    ]
   },
   {
     "id": "2026-10-07-hq-system-health",
@@ -352,8 +459,15 @@
         "title": "Check the portal after a deployment",
         "body": "Open System Health to review the API, database, background notification queue, file storage, push, email, backups and running app version. Each check explains its result and next step. Refresh the checks or download a report. Offline or outdated results are clearly marked; diagnostics do not send test messages.",
         "audience": "HQ teams",
-        "roles": ["SuperAdmin", "HQManager", "HQStaff"],
-        "action": { "label": "Open System Health", "path": "/system-health" }
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open System Health",
+          "path": "/system-health"
+        }
       }
     ]
   },
@@ -368,22 +482,40 @@
         "title": "More reliable offline sync",
         "body": "New actions stay saved when sync is running. Drafts are shown only for your account. Failed security checks allow another sync attempt, and actions needing review wait for your correction. Reviewing an edit keeps its original record; saving the correction replaces the old queued action. Repeat attempts use a saved acknowledgement to prevent duplicate writes. If a result is uncertain, check the server record before submitting again.",
         "audience": "Institution teams and industry partners",
-        "roles": ["Admin", "Manager", "Staff", "IndustryPartner"],
-        "action": { "label": "Open Offline Sync", "path": "/offline-sync" }
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff",
+          "IndustryPartner"
+        ],
+        "action": {
+          "label": "Open Offline Sync",
+          "path": "/offline-sync"
+        }
       },
       {
         "kind": "Improved",
         "title": "Resume recent field work offline",
         "body": "Institution officers and partner users can reopen a recent session offline for up to 24 hours and use learner choices loaded previously on the same browser. Saved work is checked against your current access when it reaches the server. Older queued actions require review before they can be submitted safely.",
         "audience": "Institution teams and industry partners",
-        "roles": ["Admin", "Manager", "Staff", "IndustryPartner"]
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff",
+          "IndustryPartner"
+        ]
       },
       {
         "kind": "New",
         "title": "Industry partner search and learner upload template",
         "body": "Search partners by name, region or location in the placement form and the industry partner user form. On the learner registry, Download CSV Template provides the accepted columns for bulk uploads. Upload guidance explains dates, required values and preserving leading zeros.",
         "audience": "Administrators and institution teams",
-        "roles": ["SuperAdmin", "Admin", "Manager", "Staff"]
+        "roles": [
+          "SuperAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ]
       }
     ]
   },
@@ -398,15 +530,30 @@
         "title": "Simple intake-year comparison",
         "body": "Cohort Comparison now shows learners, currently enrolled, graduated and need attention in a compact table, with matching cards on phones. View learners opens the selected intake. The attention count opens the exact learners counted, with readable follow-up reasons. One Export button downloads the displayed comparison.",
         "audience": "National, Regional and institution administrators",
-        "roles": ["SuperAdmin", "RegionalAdmin", "HQManager", "HQStaff", "Admin"],
-        "action": { "label": "Open Learner Progress", "path": "/learner-progress" }
+        "roles": [
+          "SuperAdmin",
+          "RegionalAdmin",
+          "HQManager",
+          "HQStaff",
+          "Admin"
+        ],
+        "action": {
+          "label": "Open Learner Progress",
+          "path": "/learner-progress"
+        }
       },
       {
         "kind": "Fixed",
         "title": "Reliable intake groups and follow-up counts",
         "body": "Records without an intake year now appear together under Intake year missing. Cohort totals stay visible when opening a follow-up list. New placements are no longer flagged simply because they have just started; monitoring follows the configured visit interval, and assessment follow-up uses the percentage score scale.",
         "audience": "National, Regional and institution administrators",
-        "roles": ["SuperAdmin", "RegionalAdmin", "HQManager", "HQStaff", "Admin"]
+        "roles": [
+          "SuperAdmin",
+          "RegionalAdmin",
+          "HQManager",
+          "HQStaff",
+          "Admin"
+        ]
       }
     ]
   },
@@ -489,14 +636,24 @@
     "date": "2026-10-05",
     "title": "Learner deletion is easier to find",
     "summary": "Delete selected is now beside the Learner Register heading and available to SuperAdmins.",
-    "changes": [{
-      "kind": "Fixed",
-      "title": "Find Delete selected at the top of the registry",
-      "body": "SuperAdmins and institution teams can now find Delete selected beside the Learner Register heading. Select learners to enable it. SuperAdmins can clean up selected records across institutions; linked placement and learning records remain protected.",
-      "audience": "SuperAdmins and institution teams",
-      "roles": ["SuperAdmin", "Admin", "Manager", "Staff"],
-      "action": { "label": "Open Learner Registry", "path": "/learners" }
-    }]
+    "changes": [
+      {
+        "kind": "Fixed",
+        "title": "Find Delete selected at the top of the registry",
+        "body": "SuperAdmins and institution teams can now find Delete selected beside the Learner Register heading. Select learners to enable it. SuperAdmins can clean up selected records across institutions; linked placement and learning records remain protected.",
+        "audience": "SuperAdmins and institution teams",
+        "roles": [
+          "SuperAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Learner Registry",
+          "path": "/learners"
+        }
+      }
+    ]
   },
   {
     "id": "2026-10-05-learner-bulk-delete",
@@ -509,8 +666,15 @@
         "title": "Bulk delete from the learner registry",
         "body": "Institution teams can select individual learners or the current page, choose Delete selected, and review the names before confirming. Learners with linked placement, learning, support, or guardian records are kept. The result shows how many records were deleted and why others were kept. Bulk deletion requires an online connection.",
         "audience": "Institution teams",
-        "roles": ["Admin", "Manager", "Staff"],
-        "action": { "label": "Open Learner Registry", "path": "/learners" }
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Learner Registry",
+          "path": "/learners"
+        }
       }
     ]
   },
@@ -525,15 +689,26 @@
         "title": "Review assigned work before changing access",
         "body": "Before suspending, deleting, or changing an account’s role or scope, administrators must resolve its assigned learners, active placements, and open support work. Monitoring delegations now appear in the workload review. Release a delegation so the originating institution can assign a replacement, then retry suspension or deletion.",
         "audience": "Administrators",
-        "roles": ["SuperAdmin", "RegionalAdmin", "Admin"],
-        "action": { "label": "Open User Management", "path": "/users" }
+        "roles": [
+          "SuperAdmin",
+          "RegionalAdmin",
+          "Admin"
+        ],
+        "action": {
+          "label": "Open User Management",
+          "path": "/users"
+        }
       },
       {
         "kind": "Fixed",
         "title": "Account changes preserve administrator access",
         "body": "An administrator cannot delete, suspend, or change the role of their own account. At least one active SuperAdmin must remain. HQ can mark an approved access request as implemented only when the selected account matches the approved role and scope.",
         "audience": "Administrators",
-        "roles": ["SuperAdmin", "RegionalAdmin", "Admin"]
+        "roles": [
+          "SuperAdmin",
+          "RegionalAdmin",
+          "Admin"
+        ]
       },
       {
         "kind": "Improved",
@@ -554,8 +729,13 @@
         "title": "Stay informed about your ward’s progress",
         "body": "Guardians linked to a learner now receive an alert when a workplace placement is activated, a monitoring visit is logged, or a competency assessment is recorded. Each alert names the learner and opens your family overview. Alerts follow your notification preferences in Settings.",
         "audience": "Guardians",
-        "roles": ["Guardian"],
-        "action": { "label": "Open Family Overview", "path": "/guardian-dashboard" }
+        "roles": [
+          "Guardian"
+        ],
+        "action": {
+          "label": "Open Family Overview",
+          "path": "/guardian-dashboard"
+        }
       },
       {
         "kind": "New",
@@ -582,31 +762,58 @@
         "title": "Correct a rejected partner submission",
         "body": "The submitting institution’s Admin or Manager can read the HQ rejection reason, choose Correct and resubmit, update the partner details, and send the submission back for HQ approval. Staff can ask their institution’s Admin or Manager to make the correction.",
         "audience": "Institution teams",
-        "roles": ["Admin", "Manager", "Staff"],
-        "action": { "label": "Open Industry Partners", "path": "/industry-partners" }
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ],
+        "action": {
+          "label": "Open Industry Partners",
+          "path": "/industry-partners"
+        }
       },
       {
         "kind": "Improved",
         "title": "Explain why a submission was rejected",
         "body": "HQ reviewers must provide a rejection reason so the submitting team knows what to correct. If another reviewer has already decided or the submission has changed, refresh and review the latest details before continuing.",
         "audience": "HQ teams",
-        "roles": ["SuperAdmin", "HQManager", "HQStaff"],
-        "action": { "label": "Open Partner Registry", "path": "/hq-industry-partners" }
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open Partner Registry",
+          "path": "/hq-industry-partners"
+        }
       },
       {
         "kind": "Improved",
         "title": "Send regional corrections to HQ",
         "body": "For an approved partner, choose Request changes instead of editing the shared record directly. Current approved details remain available until HQ accepts the correction. Regional submitters can also correct and resubmit their own rejected registrations.",
         "audience": "Regional administrators",
-        "roles": ["RegionalAdmin"],
-        "action": { "label": "Open Industry Partners", "path": "/industry-partners" }
+        "roles": [
+          "RegionalAdmin"
+        ],
+        "action": {
+          "label": "Open Industry Partners",
+          "path": "/industry-partners"
+        }
       },
       {
         "kind": "Fixed",
         "title": "Approval decisions stay consistent",
         "body": "Competing or repeated HQ decisions can no longer overwrite each other. Earlier decisions remain in the audit history when a rejected submission is corrected and reviewed again.",
         "audience": "Partner registration and review teams",
-        "roles": ["SuperAdmin", "HQManager", "HQStaff", "RegionalAdmin", "Admin", "Manager", "Staff"]
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff",
+          "RegionalAdmin",
+          "Admin",
+          "Manager",
+          "Staff"
+        ]
       }
     ]
   }
