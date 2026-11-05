@@ -839,10 +839,10 @@ export default function SupportCenter() {
       </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="bg-gray-100/70 p-1 rounded-2xl inline-flex h-auto">
-          <TabsTrigger data-help-id="support-guides-tab" value="guides" className="rounded-xl px-5 py-2.5 font-bold data-[state=active]:bg-white">{isHQ ? "HQ Playbook" : "Role Guides"}</TabsTrigger>
-          <TabsTrigger value="faq" className="rounded-xl px-5 py-2.5 font-bold data-[state=active]:bg-white">FAQ</TabsTrigger>
-          <TabsTrigger value="tickets" className="rounded-xl px-5 py-2.5 font-bold data-[state=active]:bg-white">{isHQ ? "Admin Queue" : "Support Tickets"}</TabsTrigger>
+        <TabsList className="bg-gray-100/70 dark:bg-slate-800 p-1 rounded-2xl inline-flex h-auto">
+          <TabsTrigger data-help-id="support-guides-tab" value="guides" className="rounded-xl px-5 py-2.5 font-bold">{isHQ ? "HQ Playbook" : "Role Guides"}</TabsTrigger>
+          <TabsTrigger value="faq" className="rounded-xl px-5 py-2.5 font-bold">FAQ</TabsTrigger>
+          <TabsTrigger value="tickets" className="rounded-xl px-5 py-2.5 font-bold">{isHQ ? "Admin Queue" : "Support Tickets"}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="guides" className="mt-6">

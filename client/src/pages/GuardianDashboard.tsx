@@ -627,7 +627,7 @@ export default function GuardianDashboard() {
       ) : null}
 
       {!dashboardUnavailable ? <Tabs value={activeSection} onValueChange={(value) => updateSection(value as GuardianSection)} className="space-y-6">
-        <TabsList className="grid min-h-14 w-full grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1 sm:max-w-3xl sm:grid-cols-4">
+        <TabsList className="grid min-h-14 w-full grid-cols-2 gap-1 rounded-2xl bg-slate-100 dark:bg-slate-800 p-1 sm:max-w-3xl sm:grid-cols-4">
           <TabsTrigger data-help-id="guardian-dashboard-tab-learners" value="overview" className="min-h-11 rounded-xl font-bold">Overview</TabsTrigger>
           <TabsTrigger value="history" className="min-h-11 rounded-xl font-bold">History{totalPlacementRecords > 0 ? <Badge className="ml-2 border-slate-200 bg-white text-slate-700">{totalPlacementRecords}</Badge> : null}</TabsTrigger>
           <TabsTrigger data-help-id="guardian-dashboard-tab-alerts" value="alerts" className="min-h-11 rounded-xl font-bold">Alerts{(data?.unreadNotificationCount || 0) > 0 ? <Badge className="ml-2 border-0 bg-rose-500 text-white">{data?.unreadNotificationCount}</Badge> : null}</TabsTrigger>
@@ -1030,7 +1030,7 @@ export default function GuardianDashboard() {
               </div>
 
               <Tabs value={consentMethod} onValueChange={(value) => setConsentMethod(value as "electronic" | "upload")} className="space-y-5">
-                <TabsList className="grid min-h-12 w-full grid-cols-2 rounded-xl bg-slate-100 p-1">
+                <TabsList className="grid min-h-12 w-full grid-cols-2 rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
                   <TabsTrigger value="electronic" className="min-h-10 rounded-lg font-bold">Sign online</TabsTrigger>
                   <TabsTrigger value="upload" className="min-h-10 rounded-lg font-bold">Download & upload</TabsTrigger>
                 </TabsList>

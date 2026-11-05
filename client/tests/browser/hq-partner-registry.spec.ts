@@ -241,3 +241,19 @@ for (const width of [1440, 390]) test(`partner section tabs clearly indicate sel
   await tabs.screenshot({ path: info.outputPath('partner-section-tabs.png') })
   expect(state.errors).toEqual([])
 })
+
+
+test('summary filters visibly track the selected approval state after reload', async ({ page }) => {
+  await setup(page)
+  await ready(page)
+  const all = registry(page).getByRole('button', { name: /^All partners/ })
+  const pending = registry(page).getByRole('button', { name: /^Pending HQ/ })
+  await expect(all).toHaveAttribute('aria-pressed', 'true')
+  expect(await all.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(await pending.evaluate(element => getComputedStyle(element).backgroundColor))
+  await pending.click()
+  await expect(pending).toHaveAttribute('aria-pressed', 'true')
+  await expect(all).toHaveAttribute('aria-pressed', 'false')
+  await page.reload()
+  await expect(pending).toHaveAttribute('aria-pressed', 'true')
+  expect(await pending.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(await all.evaluate(element => getComputedStyle(element).backgroundColor))
+})

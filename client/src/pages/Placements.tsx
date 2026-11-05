@@ -747,14 +747,14 @@ export default function Placements() {
 
             <div className="flex-1 w-full relative z-0 px-4 md:px-8 max-w-full">
                 <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-                    <TabsList className="bg-gray-100/50 p-1 rounded-2xl mb-6 inline-flex max-w-full overflow-x-auto">
-                        <TabsTrigger value="all" className="rounded-xl px-6 py-2.5 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-indigo-900 text-gray-500 transition-all shrink-0">
+                    <TabsList className="bg-gray-100/50 dark:bg-slate-800 p-1 rounded-2xl mb-6 inline-flex max-w-full overflow-x-auto">
+                        <TabsTrigger value="all" className="rounded-xl px-6 py-2.5 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-indigo-900 text-gray-500 dark:data-[state=inactive]:text-slate-300 transition-colors motion-reduce:transition-none shrink-0">
                             All Placements
                         </TabsTrigger>
-                        <TabsTrigger value="delegated" className="rounded-xl px-6 py-2.5 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-indigo-900 text-gray-500 transition-all shrink-0">
+                        <TabsTrigger value="delegated" className="rounded-xl px-6 py-2.5 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-indigo-900 text-gray-500 dark:data-[state=inactive]:text-slate-300 transition-colors motion-reduce:transition-none shrink-0">
                             Delegated to Me
                         </TabsTrigger>
-                        <TabsTrigger value="batches" className="rounded-xl px-6 py-2.5 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-indigo-900 text-gray-500 transition-all shrink-0">
+                        <TabsTrigger value="batches" className="rounded-xl px-6 py-2.5 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-indigo-900 text-gray-500 dark:data-[state=inactive]:text-slate-300 transition-colors motion-reduce:transition-none shrink-0">
                             Placement Batches / History
                         </TabsTrigger>
                     </TabsList>
@@ -778,7 +778,7 @@ export default function Placements() {
                                 )}
                             </div>
                             <div className="flex items-center gap-1.5 flex-wrap">
-                                <Button variant={missingCoordinates ? 'default' : 'outline'} onClick={() => setMissingCoordinates(value => !value)}>Missing workplace GPS</Button>
+                                <Button aria-pressed={missingCoordinates} variant={missingCoordinates ? 'default' : 'outline'} onClick={() => setMissingCoordinates(value => !value)}>Missing workplace GPS</Button>
                                 {([
                                     { value: '' as const, label: 'All' },
                                     { value: 'Active' as const, label: 'Active' },

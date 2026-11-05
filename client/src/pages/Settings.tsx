@@ -498,7 +498,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="notifications" className="space-y-6">
-        <TabsList className="h-auto flex-wrap justify-start rounded-2xl bg-white p-2 shadow-sm border border-gray-100">
+        <TabsList className="h-auto flex-wrap justify-start rounded-2xl bg-white dark:bg-slate-800 p-2 shadow-sm border border-gray-100 dark:border-slate-700">
           <TabsTrigger value="security" className="rounded-xl px-4 py-2.5 font-bold">Security</TabsTrigger>
           <TabsTrigger data-help-id="settings-tab-notifications" value="notifications" className="rounded-xl px-4 py-2.5 font-bold">
             <BellRing className="mr-2 h-4 w-4" />

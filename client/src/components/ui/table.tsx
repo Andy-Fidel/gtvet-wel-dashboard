@@ -51,6 +51,7 @@ const TableFooter = React.forwardRef<
 ))
 TableFooter.displayName = "TableFooter"
 
+// Cell renderers often use explicit dark text, so selection keeps a light surface in both themes.
 const TableRow = React.forwardRef<
   HTMLTableRowElement,
   React.HTMLAttributes<HTMLTableRowElement>
@@ -58,7 +59,7 @@ const TableRow = React.forwardRef<
   <tr
     ref={ref}
     className={cn(
-      "border-b border-gray-100 transition-colors duration-150 hover:bg-gray-50 data-[state=selected]:bg-muted rounded-xl bg-transparent",
+      "border-b border-gray-100 transition-colors duration-150 hover:bg-gray-50 data-[state=selected]:bg-indigo-50 data-[state=selected]:hover:bg-indigo-100 rounded-xl bg-transparent",
       className
     )}
     {...props}

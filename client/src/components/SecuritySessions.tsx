@@ -74,8 +74,8 @@ export function SecuritySessions() {
     <CardContent className="space-y-4">
       <MfaSettings />
       <div className="flex flex-wrap gap-2 items-center">
-        <Button variant={scope === 'mine' ? 'default' : 'outline'} onClick={() => { setScope('mine'); setPage(1) }}>My sessions</Button>
-        {user?.role === 'SuperAdmin' && <Button variant={scope === 'all' ? 'default' : 'outline'} onClick={() => { setScope('all'); setPage(1) }}>All users</Button>}
+        <Button aria-pressed={scope === 'mine'} variant={scope === 'mine' ? 'default' : 'outline'} onClick={() => { setScope('mine'); setPage(1) }}>My sessions</Button>
+        {user?.role === 'SuperAdmin' && <Button aria-pressed={scope === 'all'} variant={scope === 'all' ? 'default' : 'outline'} onClick={() => { setScope('all'); setPage(1) }}>All users</Button>}
         <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Refresh</Button>
         <Button variant="destructive" disabled={busy} onClick={() => { setPassword(''); setTarget({ path: `users/${user?._id}/revoke-all`, label: 'Sign out all my sessions, including this one' }) }}>Sign out everywhere</Button>
       </div>

@@ -1060,7 +1060,7 @@ export default function LearnerProfile() {
           <h3 className="font-bold text-lg text-gray-900">Learner Progress Tracker</h3>
         </div>
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid grid-cols-3 bg-gray-100 rounded-xl p-1">
+          <TabsList className="grid grid-cols-3 bg-gray-100 dark:bg-slate-800 rounded-xl p-1">
             <TabsTrigger value="overview" className="data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm rounded-lg text-sm font-bold">Overview</TabsTrigger>
             <TabsTrigger value="timeline" className="data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm rounded-lg text-sm font-bold">Timeline</TabsTrigger>
             <TabsTrigger value="placement" className="data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm rounded-lg text-sm font-bold">Placement</TabsTrigger>

@@ -1,5 +1,25 @@
 [
   {
+    "id": "2026-11-05-app-selection-indicators",
+    "date": "2026-11-05",
+    "title": "Clearer selection across the portal",
+    "summary": "See which section, filter, date or learner is selected with consistent visual indicators.",
+    "changes": [
+      {
+        "kind": "Fixed",
+        "title": "Recognize selected tabs and filters",
+        "body": "Settings, the institution Partner Directory and the Guardian portal now show clear active tabs. Session scope, portal-update audience and missing-GPS filters retain visible selection. HQ partner summary filters and the institution All regions button now show when they are active.",
+        "audience": "Portal users"
+      },
+      {
+        "kind": "Fixed",
+        "title": "See selected dates and learners",
+        "body": "Calendar pickers distinguish selected dates from today and ordinary dates. Selected learner rows remain highlighted during bulk selection, and checkbox and keyboard-focus styling is restored. The affected shared controls support light and dark themes and smaller screens.",
+        "audience": "Institution, partner and HQ teams"
+      }
+    ]
+  },
+  {
     "id": "2026-11-05-hq-partner-tab-indicators",
     "date": "2026-11-05",
     "title": "See which Partner Registry section is open",

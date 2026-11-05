@@ -49,3 +49,17 @@ These observations concern this selected-state issue; they are not a general acc
 4. Keep working local indicators and the Partner & industry insights stat-card design intact. Test desktop, phone, keyboard focus, reduced motion and persisted/deep-linked selection.
 
 No additional fixes or deployment were performed as part of this scan.
+
+
+## Implementation follow-up — 5 November 2026
+
+Implemented the eight affected groups. The theme now has one Tailwind 3-compatible HSL token definition per mode; obsolete duplicate Tailwind 4 theme declarations were removed, while the existing 1.5rem radius was retained. Shared tabs now have a contrasting selected surface, text and yellow underline, with keyboard focus and wrapping. The Support Center's old white-only active override was removed so it inherits the shared treatment. Affected list backgrounds have dark-theme counterparts.
+
+Calendar selection, date ranges, primary/outline controls and checkbox fills now resolve to valid colors. Calendar ordinary dates and labels use readable theme colors. Selected learner rows keep an indigo tint at rest and on hover. Session scope and Missing workplace GPS expose pressed state. The HQ summary-filter cards and institution All regions button have explicit selected styles; the HQ filter labels were darkened to retain sufficient contrast on the selected surface. Partner & industry insights card markup/design was not changed.
+
+Added shared-component browser coverage for light/dark themes at 1440px and 390px, including keyboard switching, calendar single/range selection, checked controls, selected rows and valid opacity tokens. Added real-page assertions for HQ summary filter persistence, All regions selection, Settings/security session scope and the portal-update audience. Existing partner, learner bulk-selection and Support Center workflows were also exercised.
+
+Validation and limits: production compilation and release validation pass. Targeted client ESLint has no errors; the existing Settings fetchArchiveSummary hook-dependency warning remains. Browser accessibility scans cover the affected shared controls and the existing partner/support mobile regions. These checks do not certify every app page's full dark theme. No backend behavior or database schema changed. Deployment remains a separate step.
+
+
+Final verification: 24 partner-directory, HQ registry, Support Center and shared-control browser checks passed, followed by 14 release-history/selection checks including real Settings scope switching. Learner bulk-selection workflow checks also passed in the initial regression run. The final production build, TypeScript compilation, release validation and targeted lint checks have no errors. Light/dark desktop and phone controls were visually reviewed; row selection retains a light tint so existing dark cell labels remain readable. Existing Placements and Learner Profile tab backgrounds were also adjusted for dark-mode contrast without changing their light-mode design.

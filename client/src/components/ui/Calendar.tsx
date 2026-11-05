@@ -86,20 +86,20 @@ function Calendar({
         table: "w-full border-collapse",
         weekdays: cn("flex", defaultClassNames.weekdays),
         weekday: cn(
-          "text-gray-400 flex-1 select-none rounded-md text-[0.8rem] font-medium",
+          "text-muted-foreground flex-1 select-none rounded-md text-[0.8rem] font-medium",
           defaultClassNames.weekday
         ),
         week: cn("mt-2 flex w-full", defaultClassNames.week),
         week_number_header: cn(
-          "w-[--cell-size] select-none text-gray-300",
+          "w-[--cell-size] select-none text-muted-foreground",
           defaultClassNames.week_number_header
         ),
         week_number: cn(
-          "text-gray-400 select-none text-[0.8rem]",
+          "text-muted-foreground select-none text-[0.8rem]",
           defaultClassNames.week_number
         ),
         day: cn(
-          "group/day relative aspect-square h-full w-full select-none p-0 text-center text-gray-900 [&:first-child[data-selected=true]_button]:rounded-l-md [&:last-child[data-selected=true]_button]:rounded-r-md",
+          "group/day relative aspect-square h-full w-full select-none p-0 text-center text-foreground [&:first-child[data-selected=true]_button]:rounded-l-md [&:last-child[data-selected=true]_button]:rounded-r-md",
           defaultClassNames.day
         ),
         range_start: cn(
@@ -109,11 +109,11 @@ function Calendar({
         range_middle: cn("rounded-none", defaultClassNames.range_middle),
         range_end: cn("bg-indigo-50 rounded-r-md", defaultClassNames.range_end),
         today: cn(
-          "bg-indigo-50 text-indigo-700 rounded-md data-[selected=true]:rounded-none",
+          "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-200 rounded-md data-[selected=true]:rounded-none",
           defaultClassNames.today
         ),
         outside: cn(
-          "text-gray-300 aria-selected:text-gray-400",
+          "text-muted-foreground aria-selected:text-muted-foreground",
           defaultClassNames.outside
         ),
         disabled: cn(

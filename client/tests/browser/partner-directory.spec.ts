@@ -82,3 +82,16 @@ test('region controls work on mobile and empty filters explain recovery', async 
   await page.getByRole('combobox', { name: 'Browse by region' }).selectOption('all')
   await expect(page.getByText('Away workplace', { exact: true })).toBeVisible()
 })
+
+
+test('All regions retains a visible selected state when the regional restriction is cleared', async ({ page }) => {
+  await setup(page)
+  await page.goto('/industry-partners')
+  const all = page.getByRole('button', { name: 'All regions', exact: true })
+  await expect(all).toHaveAttribute('aria-pressed', 'false')
+  const inactive = await all.evaluate(element => getComputedStyle(element).backgroundColor)
+  await all.click()
+  await expect(all).toHaveAttribute('aria-pressed', 'true')
+  expect(await all.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(inactive)
+  await expect(page.getByRole('combobox', { name: 'Browse by region' })).toHaveValue('all')
+})
