@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { csrfProtection, inspectionReadOnlyGuard } from './middleware/auth.js';
 import { createSensitiveAuthLimiter } from './middleware/authRateLimit.js';
 import { logSecurityEvent } from './utils/securityEvents.js';
-import { isBackupHealthy } from './utils/backupHealth.js';
+import { backupHealthHandler } from './utils/backupHealth.js';
 
 dotenv.config();
 
@@ -181,11 +181,7 @@ const createApp = () => {
     res.json({ status: 'ok' });
   });
 
-  app.get('/backup-health', async (_req, res) => {
-    const healthy = await isBackupHealthy();
-    res.set('Cache-Control', 'no-store');
-    res.status(healthy ? 200 : 503).json({ status: healthy ? 'ok' : 'unavailable' });
-  });
+  app.get('/backup-health', backupHealthHandler);
 
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(clientDistPath));

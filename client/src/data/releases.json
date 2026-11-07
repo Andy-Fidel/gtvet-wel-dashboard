@@ -1,5 +1,28 @@
 [
   {
+    "id": "2026-11-07-backup-protection-diagnostics",
+    "date": "2026-11-07",
+    "title": "Clearer backup protection checks",
+    "summary": "HQ teams can see which backup protection check needs attention in System Health.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Identify backup protection issues",
+        "body": "System Health and its downloaded report now distinguish backup verification, storage capacity and application health failures, and explain when monitoring results are missing or out of date. Diagnostics keep backup locations, names and credentials private.",
+        "audience": "HQ teams",
+        "roles": [
+          "SuperAdmin",
+          "HQManager",
+          "HQStaff"
+        ],
+        "action": {
+          "label": "Open System Health",
+          "path": "/system-health"
+        }
+      }
+    ]
+  },
+  {
     "id": "2026-11-05-app-selection-indicators",
     "date": "2026-11-05",
     "title": "Clearer selection across the portal",

@@ -8,7 +8,7 @@ import { NotificationSchedule } from '../models/NotificationSchedule.js';
 import { PushSubscription } from '../models/PushSubscription.js';
 import { isMailerConfigured, verifyMailerDiagnostics } from './mailer.js';
 import { isWebPushConfigured } from './webPush.js';
-import { isBackupHealthy } from './backupHealth.js';
+import { readBackupHealth, BACKUP_CHECK_LABELS } from './backupHealth.js';
 import { NOTIFICATION_MAX_ATTEMPTS } from './notifications.js';
 
 const packageVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -77,6 +77,16 @@ async function pushCheck() {
     action: failures ? 'Review failed push deliveries. Device permission and subscriptions affect delivery.' : null };
 }
 
+export async function checkBackupProtection(options) {
+  const { healthy, code, checks } = await readBackupHealth(options);
+  return { status: healthy ? 'healthy' : 'warning',
+    summary: healthy ? 'The server backup monitor reports healthy, recent checks.' : 'Recent healthy backup checks could not be confirmed.',
+    details: [detail('Backup diagnostic code', code),
+      ...checks.map(check => detail(BACKUP_CHECK_LABELS[check.id], check.healthy ? 'Passed' : 'Failed')),
+      ...(checks.length ? [] : [detail('Individual checks', 'Unavailable')])],
+    action: healthy ? null : 'Ask your server administrator to review the failed backup check and recovery monitor logs; check the GTVET WEL backup monitor in UptimeRobot.' };
+}
+
 export const healthProbes = [
   { id: 'api', label: 'API', description: 'Authenticated application response', probe: async () => ({ status: 'healthy', summary: 'The API is responding to this authenticated request.', details: [detail('Process uptime', `${Math.floor(process.uptime() / 60)} minutes`)] }) },
   { id: 'database', label: 'Database', description: 'MongoDB connectivity', probe: async () => { connected(); await mongoose.connection.db.admin().command({ ping: 1 }, { maxTimeMS: 2000 }); return { status: 'healthy', summary: 'MongoDB responded to a live ping.' }; } },
@@ -90,10 +100,7 @@ export const healthProbes = [
     if (await verifyMailerDiagnostics() !== true) throw new Error('SMTP verification failed');
     return { status: 'healthy', summary: 'SMTP connection and authentication verified.', details: [detail('Verification', 'No email sent; inbox delivery is not tested')] };
   } },
-  { id: 'backups', label: 'Backups', description: 'Verified backup and monitor freshness', probe: async () => {
-    const healthy = await isBackupHealthy();
-    return { status: healthy ? 'healthy' : 'warning', summary: healthy ? 'The server backup monitor reports healthy, recent checks.' : 'Recent healthy backup checks could not be confirmed.', action: healthy ? null : 'For backup incidents, review the GTVET WEL backup monitor in UptimeRobot.' };
-  } },
+  { id: 'backups', label: 'Backups', description: 'Verified backup and monitor freshness', probe: () => checkBackupProtection() },
   { id: 'version', label: 'App version', description: 'Running build identity', probe: async () => {
     const info = deploymentInfo();
     return { status: info.commit && info.builtAt ? 'healthy' : 'warning', summary: info.commit && info.builtAt ? 'This instance has recorded deployment metadata.' : 'The build commit or build time was not recorded.',

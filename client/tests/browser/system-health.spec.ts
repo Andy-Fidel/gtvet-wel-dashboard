@@ -68,3 +68,32 @@ test('mobile health checks fit the viewport and meet accessibility checks', asyn
   expect(result.violations).toEqual([])
   await page.screenshot({ path: info.outputPath('health-mobile.png'), fullPage: true })
 })
+
+
+test('backup failures show safe check details in the HQ page and downloaded report', async ({ page }) => {
+  await setup(page, 'HQStaff')
+  const diagnostics = report()
+  const backup = diagnostics.checks.find(check => check.label === 'Backups')!
+  Object.assign(backup, { status: 'warning', summary: 'Recent healthy backup checks could not be confirmed.',
+    details: [
+      { label: 'Backup diagnostic code', value: 'MONITOR_FAILED' },
+      { label: 'Recently verified external backup', value: 'Failed' },
+      { label: 'Backup filesystem capacity', value: 'Passed' },
+      { label: 'Application health', value: 'Passed' },
+    ], action: 'Ask your server administrator to review the failed backup check and recovery monitor logs.' })
+  await page.route('**/api/system-health', route => route.fulfill({ json: diagnostics }))
+  await page.goto('/system-health')
+  const card = page.locator('[aria-labelledby="health-service-7"]')
+  await expect(card.getByText('Needs attention', { exact: true })).toBeVisible()
+  await expect(card.getByText('MONITOR_FAILED', { exact: true })).toBeVisible()
+  await expect(card.locator('dl > div').filter({ hasText: 'Recently verified external backup' })).toHaveText('Recently verified external backupFailed')
+  await expect(card.locator('dl > div').filter({ hasText: 'Backup filesystem capacity' })).toHaveText('Backup filesystem capacityPassed')
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download report' }).click()
+  const download = await downloadPromise
+  const stream = await download.createReadStream()
+  const chunks = []
+  for await (const chunk of stream!) chunks.push(chunk)
+  const saved = JSON.parse(Buffer.concat(chunks).toString())
+  expect(saved.checks.find((check: { label: string }) => check.label === 'Backups').details).toEqual(backup.details)
+})

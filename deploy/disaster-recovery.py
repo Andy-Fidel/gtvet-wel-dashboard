@@ -254,13 +254,20 @@ def resume(cfg):
 
 def monitor(cfg):
     failures = []
+    checks = {'external_backup': True, 'disk_space': True, 'application': True}
     try:
         check(cfg)
     except Exception:
+        checks['external_backup'] = False
         failures.append('No recently verified external recovery backup')
-    usage = shutil.disk_usage(cfg['backup_directory'])
-    if usage.used / usage.total > 0.85:
-        failures.append('Backup filesystem is over 85% full')
+    try:
+        usage = shutil.disk_usage(cfg['backup_directory'])
+        if usage.used / usage.total > 0.85:
+            checks['disk_space'] = False
+            failures.append('Backup filesystem is over 85% full')
+    except Exception:
+        checks['disk_space'] = False
+        failures.append('Backup filesystem capacity check failed')
     try:
         # UptimeRobot checks public reachability; this host cannot reliably loop
         # through its public IP, so monitor the local application listener here.
@@ -268,6 +275,7 @@ def monitor(cfg):
             if json.load(response).get('status') != 'ok':
                 raise ValueError('Unhealthy application')
     except Exception:
+        checks['application'] = False
         failures.append('Application health check failed')
     public_status = cfg.get('public_status_file')
     if public_status:
@@ -276,6 +284,7 @@ def monitor(cfg):
         path.parent.chmod(0o755)
         write_json(path, {
             'healthy': not failures,
+            'checks': checks,
             'checked_at': dt.datetime.now(dt.timezone.utc).isoformat(),
         }, mode=0o644)
     if failures:

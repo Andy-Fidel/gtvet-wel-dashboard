@@ -36,3 +36,28 @@ values in the image; missing values remain explicitly unknown. Rebuild the app
 container to install the page and worker heartbeat instrumentation. The worker
 records a successful heartbeat after its scheduled work and delivery pass finish;
 errors record a failure timestamp. Existing schedule documents need no migration.
+
+## Backup protection diagnostics
+
+The host recovery monitor checks external backup verification (within 90 minutes),
+backup filesystem capacity (at most 85% used), and the local application `/health`.
+It atomically publishes `healthy`, `checked_at`, and three boolean `checks`
+(`external_backup`, `disk_space`, `application`) to the status file mounted
+read-only in the app. An inspection error counts as a failed check. Failed checks
+suppress the UptimeRobot heartbeat. Heartbeat delivery is separate from these
+protection checks; its delivery failure is reported by the monitor service.
+
+The shared server reader requires a timestamp no more than twelve minutes old
+and not in the future. Missing/unreadable files, malformed reports, and inconsistent
+aggregate/check results fail closed. `/backup-health` returns only `ok` (200) or
+`unavailable` (503), always with `Cache-Control: no-store`.
+
+The HQ-only System Health backup card and downloaded report include fixed check
+labels with Passed/Failed and a fixed diagnostic code: `OK`, `MONITOR_FAILED`,
+`STATUS_MISSING`, `STATUS_UNREADABLE`, `STATUS_INVALID`, `TIMESTAMP_INVALID`,
+`TIMESTAMP_FUTURE`, `STATUS_STALE`, or `STATUS_INCONSISTENT`. Stale/invalid evidence
+has no individual results presented as current. Unknown fields, check identifiers,
+and exception text are never forwarded. Aggregate-only reports from older monitors
+remain supported, with individual checks explicitly unavailable; deploy the updated
+monitor to see check-level diagnostics. No backup paths, archive names, or
+credentials are included in this contract.
