@@ -44,6 +44,11 @@ const formSchema = z.object({
 
 type LearnerFormValues = z.infer<typeof formSchema>
 
+const intakeAcademicYears = [
+  "2024/2025", "2025/2026", "2026/2027", "2027/2028",
+  "2028/2029", "2029/2030", "2030/2031", "2031/2032",
+]
+
 const emptyValues: LearnerFormValues = {
   lastName: "",
   firstName: "",
@@ -270,7 +275,18 @@ export function LearnerForm({ onSuccess, initialData, mode = "register" }: Learn
             <FormField control={form.control} name="intakeAcademicYear" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-sm font-semibold text-gray-900">Intake Academic Year</FormLabel>
-                  <FormControl><Input placeholder="2026/2027" {...field} /></FormControl>
+                  {initialData?._id ? (
+                    <FormControl><Input placeholder="2026/2027" {...field} /></FormControl>
+                  ) : (
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger onBlur={field.onBlur} ref={field.ref}><SelectValue placeholder="Select intake academic year" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {intakeAcademicYears.map((year) => (
+                          <SelectItem key={year} value={year}>{year}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                   <FormMessage />
                 </FormItem>
             )} />

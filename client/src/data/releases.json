@@ -1,5 +1,24 @@
 [
   {
+    "id": "2026-11-08-learner-intake-year-dropdown",
+    "date": "2026-11-08",
+    "title": "Choose learner intake academic years",
+    "summary": "Select a consistent intake academic year when adding a learner.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Select an intake year from a list",
+        "body": "The Add learner form now offers academic years from 2024/2025 through 2031/2032 in a dropdown.",
+        "audience": "Institution teams",
+        "roles": [
+          "Admin",
+          "Manager",
+          "Staff"
+        ]
+      }
+    ]
+  },
+  {
     "id": "2026-11-07-backup-protection-diagnostics",
     "date": "2026-11-07",
     "title": "Clearer backup protection checks",
