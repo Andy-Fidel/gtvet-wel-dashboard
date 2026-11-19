@@ -1,5 +1,19 @@
 [
   {
+    "id": "2026-11-19-release-history-pagination",
+    "date": "2026-11-19",
+    "title": "Browse portal updates in smaller pages",
+    "summary": "What’s New now shows five releases at a time.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Page through release history",
+        "body": "Use Previous and Next to browse five releases per page. Search and audience filters cover the full history and return you to the first page of matching results.",
+        "audience": "Everyone"
+      }
+    ]
+  },
+  {
     "id": "2026-11-19-session-lock-redesign",
     "date": "2026-11-19",
     "title": "A clearer return to your workspace",
