@@ -1,5 +1,19 @@
 [
   {
+    "id": "2026-11-19-session-lock-redesign",
+    "date": "2026-11-19",
+    "title": "A clearer return to your workspace",
+    "summary": "The locked-session screen now matches the portal’s design.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Sign back in with confidence",
+        "body": "A redesigned session lock shows your account, a password visibility control and a clear reminder to keep the tab open for unsaved entries. The layout adapts to smaller screens and supports authenticator and recovery codes.",
+        "audience": "Everyone"
+      }
+    ]
+  },
+  {
     "id": "2026-11-08-learner-intake-year-dropdown",
     "date": "2026-11-08",
     "title": "Choose learner intake academic years",

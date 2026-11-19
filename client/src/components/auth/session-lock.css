@@ -1,0 +1,66 @@
+.session-lock-dialog{position:fixed;left:50%;top:50%;z-index:301;width:calc(100% - 3rem);max-width:866px;max-height:calc(100dvh - 11rem);transform:translate(-50%,-50%);overflow-y:auto;border-radius:24px;background:#fff;box-shadow:0 24px 80px #02061755;color:#0f172a;color-scheme:light}
+.session-lock-brand{position:absolute;top:38px;left:48px;display:flex;align-items:center;gap:11px;color:#fff;pointer-events:none}
+.session-lock-brand img{width:46px;height:46px;object-fit:contain;background:#fff;border-radius:50%;padding:5px}
+.session-lock-brand strong{display:block;font-size:17px;font-weight:850;letter-spacing:-.4px;line-height:1.3}
+.session-lock-brand span{display:block;font-size:10px;letter-spacing:2.2px;color:#ffb800;font-weight:750;margin-top:2px}
+.session-lock-footer{position:absolute;bottom:30px;left:16px;right:16px;text-align:center;color:#94a3b8;font-size:11px;pointer-events:none}
+.session-lock-footer span{margin:0 8px}
+.session-lock{display:grid;grid-template-columns:370px minmax(0,1fr)}
+.session-lock .session-lock-art{background:#14243c;padding:36px 34px;color:#fff;overflow:hidden}
+.session-lock .session-lock-tag{display:flex;align-items:center;gap:9px;font-size:12px;color:#cbd5e1}
+.session-lock .session-lock-tag svg{color:#ffb800;flex:none}
+.session-lock .session-lock-vector{position:relative;width:322px;height:237px;margin:8px -10px 0}
+.session-lock .session-lock-vector>svg:first-child{width:100%;height:100%}
+.session-lock .session-lock-vector-lock{position:absolute;left:69.5%;top:61%;width:10.5%;height:14%;color:#14243c}
+.session-lock .session-lock-art-title{font-size:29px;line-height:1.22;letter-spacing:-.8px;font-weight:750;margin-top:12px}
+.session-lock .session-lock-art>p{font-size:13px;color:#b9c8da;line-height:1.65;margin:14px 0 22px}
+.session-lock .session-lock-art-rule{height:3px;width:35px;background:#ffb800;border-radius:3px}
+.session-lock .session-lock-body{padding:37px 40px 25px;min-width:0}
+.session-lock .session-lock-eyebrow{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;font-weight:800;color:#64748b;display:flex;align-items:center;gap:7px}
+.session-lock .session-lock-title{font-size:29px;font-weight:800;letter-spacing:-1px;line-height:1.22;margin:13px 0 0}
+.session-lock .session-lock-intro{font-size:14px;line-height:1.6;color:#64748b;margin:10px 0 23px}
+.session-lock .session-lock-account{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;display:flex;align-items:center;gap:12px;padding:13px 14px;margin-bottom:22px}
+.session-lock .session-lock-user{height:36px;width:36px;display:grid;place-items:center;background:#e9eef5;border-radius:50%;color:#475569;flex:none}
+.session-lock .session-lock-identity{min-width:0;flex:1}
+.session-lock .session-lock-account span{font-size:11px;color:#64748b;display:block;margin-bottom:4px}
+.session-lock .session-lock-account strong{font-size:13px;color:#334155;font-weight:650;overflow-wrap:anywhere;display:block}
+.session-lock .session-lock-account>svg{flex:none;color:#94a3b8}
+.session-lock .session-lock-label{display:block;font-size:13px;font-weight:650;margin-bottom:8px;color:#334155}
+.session-lock .session-lock-password{border:1px solid #cbd5e1;min-height:49px;border-radius:11px;display:flex;align-items:center;gap:10px;padding-left:14px;color:#64748b}
+.session-lock .session-lock-password>svg{flex:none}
+.session-lock .session-lock-password input{min-width:0;flex:1;width:100%;height:47px;background:transparent;border:0;outline:none;color:#0f172a;font-size:14px}
+.session-lock input::placeholder{color:#64748b;opacity:1}
+.session-lock .session-lock-password:focus-within{outline:2px solid #b77900;outline-offset:2px}
+.session-lock .session-lock-password button{height:44px;width:44px;flex:none;display:grid;place-items:center;border-radius:9px;color:#64748b;background:transparent}
+.session-lock button:focus-visible{outline:2px solid #b77900;outline-offset:3px}
+.session-lock button:disabled,.session-lock input:disabled{opacity:.6;cursor:wait}
+.session-lock .session-lock-submit{min-height:49px;width:100%;background:#ffb800;display:flex;align-items:center;justify-content:center;gap:12px;font-size:14px;font-weight:750;border-radius:11px;margin-top:18px;padding:12px 16px;color:#142139;transition:background-color 150ms ease-out,transform 150ms ease-out}
+.session-lock .session-lock-submit:active:not(:disabled){transform:scale(.98)}
+.session-lock .session-lock-notice{margin-top:19px;display:flex;align-items:flex-start;gap:9px;background:#fffbeb;border:1px solid #f6e6ba;padding:12px;border-radius:11px;color:#80551d}
+.session-lock .session-lock-notice svg{flex:none;margin-top:1px}
+.session-lock .session-lock-notice p{font-size:12px;line-height:1.5;margin:0}
+.session-lock .session-lock-signout{display:flex;width:100%;min-height:44px;gap:8px;justify-content:center;align-items:center;margin-top:10px;padding:8px;font-size:13px;font-weight:600;color:#64748b;border-radius:10px;background:transparent}
+.session-lock .session-lock-error{margin:0 0 18px;padding:12px;border-radius:10px;color:#b91c1c;background:#fef2f2;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.session-lock .session-lock-mfa{margin-top:18px}
+.session-lock .session-lock-mfa input{height:49px;width:100%;border:1px solid #cbd5e1;border-radius:11px;padding:0 14px;color:#0f172a;background:#fff;font-size:16px}
+.session-lock .session-lock-mfa input:focus-visible{outline:2px solid #b77900;outline-offset:2px}
+.session-lock .session-lock-mfa p{font-size:12px;line-height:1.5;margin:8px 0 0;color:#64748b}
+@media(hover:hover) and (pointer:fine){.session-lock .session-lock-submit:hover:not(:disabled){background:#e5a600}.session-lock .session-lock-signout:hover:not(:disabled){color:#0f172a;background:#f8fafc}.session-lock .session-lock-password button:hover:not(:disabled){color:#0f172a;background:#f8fafc}}
+@media(max-width:767px){
+ .session-lock-dialog{width:calc(100% - 2.5rem);max-width:430px;max-height:calc(100dvh - 10rem);border-radius:20px}
+ .session-lock-brand{top:25px;left:25px}
+ .session-lock-footer{bottom:20px;font-size:10px}
+ .session-lock{display:block}
+ .session-lock .session-lock-art{position:relative;height:146px;padding:23px}
+ .session-lock .session-lock-tag{font-size:11px}
+ .session-lock .session-lock-art-title{font-size:19px;line-height:1.25;margin-top:18px}
+ .session-lock .session-lock-art>p,.session-lock .session-lock-art-rule,.session-lock .session-lock-eyebrow{display:none}
+ .session-lock .session-lock-vector{position:absolute;right:0;top:0;width:187px;height:151px;margin:0}
+ .session-lock .session-lock-body{padding:25px 24px 19px}
+ .session-lock .session-lock-title{font-size:25px;margin-top:0}
+ .session-lock .session-lock-intro{font-size:13px;margin:10px 0 19px}
+ .session-lock .session-lock-password input{font-size:16px}
+}
+@media(max-width:359px){.session-lock-dialog{width:calc(100% - 2rem)}.session-lock .session-lock-art{height:126px;padding:18px}.session-lock .session-lock-art-title{font-size:17px}.session-lock .session-lock-vector{width:140px;height:126px;right:-6px}.session-lock .session-lock-body{padding:24px 20px 16px}}
+@media(max-height:650px){.session-lock-brand,.session-lock-footer{display:none}.session-lock-dialog{max-height:calc(100dvh - 2rem)}}
+@media(prefers-reduced-motion:reduce){.session-lock .session-lock-submit{transition:none}.session-lock .session-lock-submit:active:not(:disabled){transform:none}}

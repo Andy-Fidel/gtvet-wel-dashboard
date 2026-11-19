@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 
 const MINUTE = 60000
 const account = { _id: 'session-qa', name: 'Session QA', email: 'session@example.test', role: 'Admin', status: 'Active', institution: 'QA Institute', passwordChangeRequired: false }
@@ -83,6 +84,7 @@ test('absolute limit requires sign in and cannot be extended by activity', async
   await expect(page.getByRole('button', { name: 'Stay signed in' })).toHaveCount(0)
   await page.clock.fastForward(2 * MINUTE)
   await expect(page.getByRole('dialog', { name: 'Sign in to continue' })).toBeVisible()
+  await expect(page.getByLabel('Password', { exact: true })).toBeFocused()
 })
 
 test('resume supports MFA without removing the locked screen', async ({ page }) => {
@@ -141,4 +143,48 @@ test('staying signed in updates the inactivity warning in other tabs', async ({ 
   await expect(page.getByRole('dialog')).not.toBeVisible()
   await expect(other.getByRole('dialog')).not.toBeVisible()
   expect(state.activityCount()).toBe(1)
+})
+
+
+test('locked design supports password visibility, focus containment and accessible mobile controls', async ({ page }, testInfo) => {
+  await setup(page)
+  await page.clock.fastForward(30 * MINUTE + 1000)
+  const dialog = page.getByRole('dialog', { name: 'Sign in to continue' })
+  const password = dialog.getByLabel('Password', { exact: true })
+  await expect(password).toBeFocused()
+  await password.fill('private-value')
+  await dialog.getByRole('button', { name: 'Show password' }).click()
+  await expect(password).toHaveAttribute('type', 'text')
+  await expect(password).toHaveValue('private-value')
+  await dialog.getByRole('button', { name: 'Hide password' }).click()
+  await expect(password).toHaveAttribute('type', 'password')
+  await dialog.getByRole('button', { name: 'Sign out', exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await expect(password).toBeFocused()
+  await expect(dialog.getByText(account.email, { exact: true })).toBeVisible()
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 568 }]) {
+    await page.setViewportSize(viewport)
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await dialog.getByRole('button', { name: 'Sign out', exact: true }).scrollIntoViewIfNeeded()
+    await expect(dialog.getByRole('button', { name: 'Sign out', exact: true })).toBeInViewport()
+    await password.scrollIntoViewIfNeeded()
+    const results = await new AxeBuilder({ page }).include('.session-lock-dialog').analyze()
+    expect(results.violations).toEqual([])
+    await page.screenshot({ path: testInfo.outputPath(`locked-${viewport.width}.png`) })
+  }
+})
+
+test('MFA remains usable on a short mobile screen', async ({ page }, testInfo) => {
+  await setup(page, { mfa: true })
+  await page.setViewportSize({ width: 390, height: 568 })
+  await page.clock.fastForward(30 * MINUTE + 1000)
+  await page.getByLabel('Password', { exact: true }).fill('correct-password')
+  await page.getByRole('button', { name: 'Sign in and resume' }).click()
+  const code = page.getByLabel('Authenticator or recovery code')
+  await expect(code).toBeFocused()
+  await expect(code).toBeInViewport()
+  await page.screenshot({ path: testInfo.outputPath('locked-mfa-mobile.png') })
+  await code.fill('123456')
+  await page.getByRole('button', { name: 'Sign in and resume' }).click()
+  await expect(page.getByRole('dialog')).not.toBeVisible()
 })

@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Loader2, LockKeyhole, Timer } from 'lucide-react';
 import { API_BASE } from '@/config';
 import { ensureCsrfToken } from '@/lib/csrf';
+import { LockedSessionContent, SessionLockBrand } from './LockedSessionContent';
 
 export const SESSION_TIMING_KEY = 'gtvets-session-deadlines';
 export interface SessionTiming {
@@ -24,7 +25,6 @@ interface Props {
 }
 
 const buttonClass = 'flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#FFB800] px-5 py-3 font-bold text-slate-900 hover:bg-[#FFD700] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 disabled:opacity-50';
-const inputClass = 'mt-2 h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500';
 const validTiming = (value: SessionTiming | null | undefined, userId: string): value is SessionTiming => Boolean(
   value && value.userId === userId && typeof value.id === 'string'
   && Number.isFinite(value.expiresAt) && Number.isFinite(value.idleExpiresAt) && Number.isFinite(value.serverNow),
@@ -162,16 +162,25 @@ export function SessionManager({ user, locked, onLock, onResume, onLogout }: Pro
     finally { setBusy(false); }
   };
 
+  const showLockDesign = locked && !user.inspection;
+
   return (
     <Dialog.Root open={locked || warning}>
       <Dialog.Portal>
-        <Dialog.Overlay className={`fixed inset-0 z-[300] ${locked ? 'bg-slate-950' : 'bg-slate-950/70 backdrop-blur-sm'}`} />
+        <Dialog.Overlay className={`fixed inset-0 z-[300] ${locked ? 'bg-[#0f172a]' : 'bg-slate-950/70 backdrop-blur-sm'}`}>
+          {showLockDesign && <SessionLockBrand />}
+        </Dialog.Overlay>
         <Dialog.Content
           onEscapeKeyDown={event => event.preventDefault()}
           onPointerDownOutside={event => event.preventDefault()}
           onInteractOutside={event => event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-[301] max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-8"
+          className={showLockDesign ? "session-lock-dialog" : "fixed left-1/2 top-1/2 z-[301] max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-8"}
         >
+          {showLockDesign ? <LockedSessionContent
+            email={user.email} password={password} onPasswordChange={setPassword}
+            mfaCode={mfaCode} onMfaCodeChange={setMfaCode} needsMfa={needsMfa}
+            busy={busy} error={error} onSubmit={resume} onSignOut={() => void signOut()}
+          /> : <>
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-amber-800">
             {locked ? <LockKeyhole aria-hidden="true" /> : <Timer aria-hidden="true" />}
           </div>
@@ -184,24 +193,14 @@ export function SessionManager({ user, locked, onLock, onResume, onLogout }: Pro
           </Dialog.Description>
           {!locked && <p role="timer" aria-label="Time until session locks" className="mt-4 font-bold tabular-nums text-slate-800">{Math.floor(secondsRemaining / 60)}:{String(secondsRemaining % 60).padStart(2, '0')} remaining</p>}
           {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-          {locked && !user.inspection ? (
-            <form onSubmit={resume} className="mt-6 space-y-4" aria-busy={busy}>
-              <p className="break-words text-sm font-medium text-slate-700">{user.email}</p>
-              <label className="block text-sm font-medium text-slate-700" htmlFor="resume-password">Password
-                <input id="resume-password" type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} disabled={busy} className={inputClass} />
-              </label>
-              {needsMfa && <label className="block text-sm font-medium text-slate-700" htmlFor="resume-mfa">Authenticator or recovery code
-                <input id="resume-mfa" autoComplete="one-time-code" required maxLength={64} value={mfaCode} onChange={event => setMfaCode(event.target.value)} disabled={busy} className={inputClass} />
-              </label>}
-              <button type="submit" disabled={busy} className={buttonClass}>{busy && <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />}Sign in and resume</button>
-            </form>
-          ) : !locked && !absoluteWarning && !user.inspection ? (
+          {!locked && !absoluteWarning && !user.inspection ? (
             <button type="button" onClick={() => void continueSession()} disabled={busy} className={`${buttonClass} mt-6`}>{busy && <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />}Stay signed in</button>
           ) : !locked ? <div className="mt-6 space-y-2">
             <button type="button" onClick={() => setDismissedAbsoluteDeadline(timing?.expiresAt || null)} className={buttonClass}>Return to work</button>
             <button type="button" onClick={onLock} className="min-h-11 w-full rounded-xl text-sm font-bold text-slate-700 focus-visible:ring-2 focus-visible:ring-amber-500">Sign in again</button>
           </div> : null}
           <button type="button" onClick={() => void signOut()} disabled={busy} className="mt-4 min-h-11 w-full rounded-xl text-sm font-medium text-slate-600 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500">{user.inspection ? 'Return to Super Admin' : 'Sign out'}</button>
+          </>}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
