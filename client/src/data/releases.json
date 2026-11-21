@@ -1,5 +1,21 @@
 [
   {
+    "id": "2026-11-21-hq-partner-trade-filter",
+    "date": "2026-11-21",
+    "title": "Filter partners by trade area or programme",
+    "summary": "HQ teams can narrow the Partner Registry to partners that list a specific trade area or programme.",
+    "changes": [
+      {
+        "kind": "Improved",
+        "title": "Find partners for a trade or programme",
+        "body": "Choose Trade Area/Programme in the Partner Registry. The selection works with other filters and applies to CSV and PDF exports.",
+        "audience": "HQ teams",
+        "roles": ["SuperAdmin", "HQManager", "HQStaff"],
+        "action": { "label": "Open Partner Registry", "path": "/hq-industry-partners" }
+      }
+    ]
+  },
+  {
     "id": "2026-11-19-release-history-pagination",
     "date": "2026-11-19",
     "title": "Browse portal updates in smaller pages",

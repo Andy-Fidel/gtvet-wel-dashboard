@@ -26,9 +26,9 @@ import { IndustryPartnerForm } from './IndustryPartnerForm'
 import { PartnerBulkRegistration } from './PartnerBulkRegistration'
 
 type HQIndustryPartner = HQPartnerRecord
-const FILTER_KEYS = ['q', 'approvalStatus', 'region', 'sector', 'partnerType', 'partnerStatus', 'attention', 'sort']
+const FILTER_KEYS = ['q', 'approvalStatus', 'region', 'tradeArea', 'sector', 'partnerType', 'partnerStatus', 'attention', 'sort']
 const PAGE_SIZE = 18
-const ALL_LABELS: Record<string, string> = { approvalStatus: 'All approval states', region: 'All regions', sector: 'All sectors', partnerType: 'All partner types', partnerStatus: 'All operational states', attention: 'All records', sort: 'Newest added' }
+const ALL_LABELS: Record<string, string> = { approvalStatus: 'All approval states', region: 'All regions', tradeArea: 'All trades & programmes', sector: 'All sectors', partnerType: 'All partner types', partnerStatus: 'All operational states', attention: 'All records', sort: 'Newest added' }
 
 export default function HQIndustryPartners() {
   const { authFetch, user } = useAuth()
@@ -54,6 +54,9 @@ export default function HQIndustryPartners() {
   const [totalPartners, setTotalPartners] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
   const [sectors, setSectors] = useState<string[]>([])
+  const [tradeAreas, setTradeAreas] = useState<string[]>([])
+  const selectedTradeArea = searchParams.get('tradeArea')
+  const tradeAreaOptions = [...new Set([...tradeAreas, ...(selectedTradeArea ? [selectedTradeArea] : [])])]
   const [summary, setSummary] = useState({ total: 0, pending: 0, approved: 0, rejected: 0 })
   const [exporting, setExporting] = useState<'csv' | 'pdf' | null>(null)
   const exportInProgress = useRef(false)
@@ -115,6 +118,7 @@ export default function HQIndustryPartners() {
         setTotalPartners(payload.total || 0); setTotalPages(payload.totalPages || 0)
         setSummary(payload.summary || { total: 0, pending: 0, approved: 0, rejected: 0 })
         setSectors(Array.isArray(payload.sectors) ? payload.sectors : [])
+        setTradeAreas(Array.isArray(payload.tradeAreas) ? payload.tradeAreas : [])
         setLoaded(true)
       } catch (failure) {
         if (!controller.signal.aborted) { console.error('Registry load failed:', failure); setError('Unable to load partners. Previous results may be out of date. Please retry.') }
@@ -223,9 +227,10 @@ export default function HQIndustryPartners() {
       <TabsContent value="registry" className="space-y-4">
         <section ref={directoryRef} tabIndex={-1} aria-label="Partner registry" aria-busy={loading} className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold text-gray-900">Partners</h2><p className="mt-1 text-sm text-gray-500">Approval, operational status and placement availability are separate checks.</p></div><Button variant="outline" disabled={loading} onClick={refreshPartners}><RefreshCw aria-hidden="true" className="mr-2 h-4 w-4" />Refresh registry</Button></div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><div className="space-y-2"><label htmlFor="registry-search" className="block text-sm font-medium text-gray-700">Search partners</label><Input id="registry-search" type="search" maxLength={200} value={queryInput} onChange={event => setQueryInput(event.target.value)} placeholder="Search company, sector, contact..." /></div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5"><div className="space-y-2"><label htmlFor="registry-search" className="block text-sm font-medium text-gray-700">Search partners</label><Input id="registry-search" type="search" maxLength={200} value={queryInput} onChange={event => setQueryInput(event.target.value)} placeholder="Search company, sector, contact..." /></div>
             {select('approvalStatus', 'Approval', approvalLabels)}
             {select('region', 'Region', Object.fromEntries(GHANA_REGIONS.map(region => [region, region])))}
+            {select('tradeArea', registryFilterLabels.tradeArea, Object.fromEntries(tradeAreaOptions.map(value => [value, value])))}
             {select('sort', 'Sort partners', Object.fromEntries(Object.entries(sortLabels).filter(([key]) => key !== 'newest')))}
           </div>
           <details className="rounded-xl border border-gray-200 p-3"><summary className="cursor-pointer text-sm font-medium text-gray-700 focus-visible:outline focus-visible:outline-2">More filters: sector, type, operational status, and attention</summary>

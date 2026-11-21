@@ -5,7 +5,7 @@ export const partnerTypeLabels: Record<string, string> = { RegisteredCompany: 'R
 export const attentionLabels: Record<string, string> = { missingPrograms: 'Programme eligibility missing', missingDistrict: 'District missing', missingEmail: 'Email missing', missingMou: 'MoU document missing' }
 export const portalLabels: Record<string, string> = { NotCreated: 'No coordinator account', SetupPending: 'Coordinator setup pending', Active: 'Coordinator access enabled', Suspended: 'Coordinator access suspended', DeliveryFailed: 'Coordinator setup email failed', EmailInUse: 'Contact email already has an account' }
 export const sortLabels: Record<string, string> = { newest: 'Newest added', oldest: 'Oldest added', 'name-asc': 'Name A–Z', 'name-desc': 'Name Z–A' }
-export const registryFilterLabels: Record<string, string> = { q: 'Search', approvalStatus: 'Approval', region: 'Region', sector: 'Sector', partnerType: 'Partner type', partnerStatus: 'Operational status', attention: 'Needs attention' }
+export const registryFilterLabels: Record<string, string> = { q: 'Search', approvalStatus: 'Approval', region: 'Region', tradeArea: 'Trade Area/Programme', sector: 'Sector', partnerType: 'Partner type', partnerStatus: 'Operational status', attention: 'Needs attention' }
 
 export function locationLabel(partner: HQPartnerRecord) {
   const status = partner.locationVerificationStatus

@@ -24,6 +24,11 @@ export function hqRegistryOptions(params) {
       ? { $or: [{ partnerType: 'RegisteredCompany' }, { partnerType: { $exists: false } }, { partnerType: null }, { partnerType: '' }] }
       : { partnerType: params.partnerType });
   }
+  if (params.tradeArea !== undefined) {
+    const { tradeArea } = params;
+    if (typeof tradeArea !== 'string' || !tradeArea.trim()) throw invalid('Select a valid trade area or programme.');
+    clauses.push({ $or: [{ tradeArea }, { programs: tradeArea }] });
+  }
   if (params.attention) {
     if (typeof params.attention !== 'string' || !Object.hasOwn(attention, params.attention)) throw invalid('Select a valid attention filter.');
     clauses.push(attention[params.attention]);

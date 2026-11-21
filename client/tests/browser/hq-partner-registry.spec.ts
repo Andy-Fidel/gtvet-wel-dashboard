@@ -8,7 +8,8 @@ async function setup(page: Page, role = 'SuperAdmin') {
     region: index === 5 ? 'Greater Accra' : 'Ashanti', district: index ? 'District' : '', status: index === 2 ? 'Inactive' : 'Active',
     partnerType: index === 4 ? 'Government' : 'RegisteredCompany', operatingModel: 'FixedSite', totalSlots: 20, usedSlots: 6,
     approvalStatus: index ? 'Approved' : 'PendingHQApproval', approvalVersion: 3,
-    programs: index ? ['Automotive'] : [], mouDocumentUrl: index ? '/api/documents/mou/file' : '',
+    tradeArea: index === 4 ? 'Metal Fabrication' : undefined,
+    programs: index === 20 ? ['Metal Fabrication'] : index ? ['Automotive'] : [], mouDocumentUrl: index ? '/api/documents/mou/file' : '',
     contactEmail: `partner${index}@example.test`, contactPerson: 'Ama Mensah', locationVerificationStatus: index ? 'TownSelected' : 'PendingGPS',
     portalAccount: { state: index === 2 ? 'Active' : 'NotCreated', count: index === 2 ? 1 : 0 },
     addedBy: { name: 'QA Manager', role: 'Manager', institution: 'QA College' },
@@ -38,11 +39,12 @@ async function setup(page: Page, role = 'SuperAdmin') {
       else requests.push(url)
       if (failList && p.has('page')) { failList = false; return route.fulfill({ status: 500, json: { message: 'Unavailable' } }) }
       const query = (p.get('q') || '').toLowerCase()
-      const filtered = partners.filter(partner => (!query || [partner.name, partner.contactEmail, partner.sector].some(value => value.toLowerCase().includes(query))) && ['region', 'sector', 'partnerType', 'approvalStatus'].every(key => !p.get(key) || partner[key as 'region' | 'sector' | 'partnerType' | 'approvalStatus'] === p.get(key)) && (!p.get('partnerStatus') || partner.status === p.get('partnerStatus')) && (p.get('attention') !== 'missingPrograms' || !partner.programs.length))
+      const trade = p.get('tradeArea')
+      const filtered = partners.filter(partner => (!query || [partner.name, partner.contactEmail, partner.sector].some(value => value.toLowerCase().includes(query))) && ['region', 'sector', 'partnerType', 'approvalStatus'].every(key => !p.get(key) || partner[key as 'region' | 'sector' | 'partnerType' | 'approvalStatus'] === p.get(key)) && (!p.get('partnerStatus') || partner.status === p.get('partnerStatus')) && (p.get('attention') !== 'missingPrograms' || !partner.programs.length) && (!trade || partner.tradeArea === trade || partner.programs.includes(trade)))
       if (p.get('sort')?.startsWith('name')) filtered.sort((a, b) => a.name.localeCompare(b.name) * (p.get('sort') === 'name-desc' ? -1 : 1))
       if (!p.has('page')) return route.fulfill({ json: filtered })
       const current = Number(p.get('page') || 1)
-      return route.fulfill({ json: { items: filtered.slice((current - 1) * 18, current * 18), total: filtered.length, totalPages: Math.ceil(filtered.length / 18), sectors: ['Automotive', 'Construction'], summary: { total: 21, approved: 20, pending: 1, rejected: 0 } } })
+      return route.fulfill({ json: { items: filtered.slice((current - 1) * 18, current * 18), total: filtered.length, totalPages: Math.ceil(filtered.length / 18), sectors: ['Automotive', 'Construction'], tradeAreas: ['Automotive', 'Metal Fabrication'], summary: { total: 21, approved: 20, pending: 1, rejected: 0 } } })
     }
     if (url.pathname === '/api/hq/partner-insights') return route.fulfill({ json: {
       scope: 'National', generatedAt: '2026-10-28T12:00:00Z', summary: { total: 21, pendingApproval: 1, missingPrograms: 1, missingEmail: 0, missingMou: 1, missingDistrict: 1 }, regions: [], sectors: [], placements: [], requests: [],
@@ -100,6 +102,25 @@ test('registry is primary and URL filters, global sorting and pages survive brow
   await expect(registry(page).getByText('Showing 1-18 of 21 partners')).toBeVisible()
   expect(state.errors).toEqual([])
   await page.screenshot({ path: test.info().outputPath('partner-registry-desktop.png'), fullPage: true })
+})
+
+test('trade area and programme filter finds partners across pages and applies to exports', async ({ page }) => {
+  const state = await setup(page)
+  await ready(page, '/hq-industry-partners?page=2')
+  await select(page, 'Trade Area/Programme', 'Metal Fabrication')
+  await expect(page).toHaveURL(/tradeArea=Metal\+Fabrication/)
+  await expect(page).not.toHaveURL(/page=2/)
+  await expect(registry(page).getByText('Showing 1-2 of 2 partners')).toBeVisible()
+  await expect(partnerRow(page, 'Partner 17')).toBeVisible()
+  await expect(partnerRow(page, 'Partner 01')).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export CSV', exact: true }).click()
+  await download
+  expect(state.exports.at(-1)?.searchParams.get('tradeArea')).toBe('Metal Fabrication')
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: 'Trade Area/Programme' })).toContainText('Metal Fabrication')
+  await page.getByRole('button', { name: 'Remove Trade Area/Programme filter' }).click()
+  await expect(registry(page).getByText('Showing 1-18 of 21 partners')).toBeVisible()
 })
 
 test('all-page exports retain structured filters and ordering', async ({ page }) => {

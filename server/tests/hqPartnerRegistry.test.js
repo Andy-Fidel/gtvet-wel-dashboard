@@ -12,7 +12,7 @@ test('HQ registry filters validate types and give stable global ordering', () =>
   assert.deepEqual(result.clauses[0], { status: 'Inactive' });
   assert.ok(result.clauses[1].$or.some(clause => clause.partnerType?.$exists === false));
   assert.deepEqual(result.clauses[2].$expr, { $eq: [{ $size: { $ifNull: ['$programs', []] } }, 0] });
-  for (const input of [{ sort: '__proto__' }, { partnerType: 'Invalid' }, { partnerStatus: { $ne: '' } }, { attention: ['missingEmail'] }, { attention: 'Invalid' }]) {
+  for (const input of [{ sort: '__proto__' }, { partnerType: 'Invalid' }, { partnerStatus: { $ne: '' } }, { attention: ['missingEmail'] }, { attention: 'Invalid' }, { tradeArea: { $ne: '' } }, { tradeArea: ['Automotive'] }, { tradeArea: ' ' }]) {
     assert.throws(() => hqRegistryOptions(input), error => error.status === 400);
   }
 });
@@ -48,9 +48,9 @@ test('registry and all-page export share scoped filters and sorting, with indepe
   });
   t.mock.method(IndustryPartner, 'countDocuments', async query => { counts.push(query); return 19; });
   t.mock.method(IndustryPartner, 'aggregate', async pipeline => { aggregations.push(pipeline); return [{ total: 25, pending: 4, approved: 21, rejected: 0 }]; });
-  t.mock.method(IndustryPartner, 'distinct', async (key, scope) => { facets.push(scope); return ['Automotive']; });
+  t.mock.method(IndustryPartner, 'distinct', async (key, scope) => { facets.push({ key, scope }); return key === 'tradeArea' ? ['Welding', ''] : ['Automotive', ...(key === 'programs' ? ['Welding', null] : [])]; });
   const handler = router.stack.find(layer => layer.route?.path === '/industry-partners' && layer.route.methods.get).route.stack.at(-1).handle;
-  const query = { registry: '1', includeAll: '1', region: 'Greater Accra', sector: 'Automotive', partnerType: 'Government', partnerStatus: 'Inactive', attention: 'missingEmail', sort: 'name-desc', q: 'A.*', approvalStatus: 'Approved' };
+  const query = { registry: '1', includeAll: '1', region: 'Greater Accra', sector: 'Automotive', tradeArea: 'Welding', partnerType: 'Government', partnerStatus: 'Inactive', attention: 'missingEmail', sort: 'name-desc', q: 'A.*', approvalStatus: 'Approved' };
   const user = { role: 'HQStaff', hqScopeType: 'Region', region: 'Ashanti' };
   const response = () => ({ code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
   const list = response();
@@ -62,7 +62,10 @@ test('registry and all-page export share scoped filters and sorting, with indepe
   assert.equal(finds[0].$and[1].region.test('Greater Accra'), true);
   assert.deepEqual(counts[0], finds[0]);
   assert.deepEqual(aggregations[0][0].$match, { $and: [finds[0].$and[0]] });
-  assert.deepEqual(facets[0], finds[0].$and[0]);
+  assert.deepEqual(list.body.tradeAreas, ['Automotive', 'Welding']);
+  assert.ok(finds[0].$and.some(clause => clause.$or?.some(entry => entry.tradeArea === 'Welding') &&
+    clause.$or.some(entry => entry.programs === 'Welding')));
+  assert.deepEqual(facets, ['sector', 'tradeArea', 'programs'].map(key => ({ key, scope: finds[0].$and[0] })));
   const exported = response();
   await handler({ user, query }, exported);
   assert.deepEqual(exported.body, []);

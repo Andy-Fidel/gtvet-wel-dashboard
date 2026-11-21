@@ -13369,7 +13369,7 @@ router.get('/industry-partners', async (req, res) => {
             partnersQuery.skip((page - 1) * pageSize).limit(pageSize);
         }
 
-        const [partners, total, summaryCounts, directorySectors] = await Promise.all([
+        const [partners, total, summaryCounts, directorySectors, registryTrades] = await Promise.all([
             partnersQuery.lean(),
             availablePage ? Promise.resolve(availablePage.total[0]?.count || 0) : usePagination ? IndustryPartner.countDocuments(filter) : Promise.resolve(null),
             usePagination && includeAll
@@ -13410,6 +13410,9 @@ router.get('/industry-partners', async (req, res) => {
             registry ? IndustryPartner.distinct('sector', scopeClauses[0]) : directory.directory && !directory.submissions
                 ? IndustryPartner.distinct('sector', { status: 'Active', $and: [scopeClauses[0], ...directory.clauses.filter(clause => !Object.hasOwn(clause, 'sector')), { $or: [{ approvalStatus: 'Approved' }, { approvalStatus: { $exists: false } }] }] })
                 : Promise.resolve(null),
+            registry && usePagination
+                ? Promise.all(['tradeArea', 'programs'].map(field => IndustryPartner.distinct(field, scopeClauses[0])))
+                : Promise.resolve(null),
         ]);
         const capacityAwarePartners = req.user.institution && ['Admin', 'Manager', 'Staff'].includes(req.user.role)
             ? await decoratePartnerCapacities(partners, req.user.institution, capacityDate)
@@ -13431,7 +13434,11 @@ router.get('/industry-partners', async (req, res) => {
                 pageSize,
                 totalPages: safeTotal > 0 ? Math.ceil(safeTotal / pageSize) : 0,
                 summary,
-                ...(registry ? { sectors: (directorySectors || []).filter(value => typeof value === "string" && value).sort() } : {}),
+                ...(registry ? {
+                    sectors: (directorySectors || []).filter(value => typeof value === 'string' && value).sort(),
+                    tradeAreas: [...new Set(registryTrades.flat().filter(value => typeof value === 'string' && value.trim()))]
+                        .sort((a, b) => a.localeCompare(b)),
+                } : {}),
                 ...(directory.directory ? { institutionRegion: directory.institutionRegion, selectedRegion: directory.selectedRegion, sectors: directorySectors?.filter(value => typeof value === 'string' && value).sort() || [] } : {}),
             });
         }
